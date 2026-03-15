@@ -69,7 +69,7 @@ def test_customer_portal_session_uses_canonical_site_url_for_return(client):
         ) as mock_portal_create:
             response = client.get(reverse("create_customer_portal_session"))
 
-    assert response.status_code == 303
+    assert response.status_code == 302
     assert response.url == fake_portal_session.url
 
     kwargs = mock_portal_create.call_args.kwargs
