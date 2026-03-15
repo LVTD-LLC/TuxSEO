@@ -43,6 +43,7 @@ from core.base_models import BaseModel
 from core.choices import (
     BlogPostStatus,
     Category,
+    CompetitorPostGenerationStatus,
     ContentType,
     EmailType,
     KeywordDataSource,
@@ -1603,6 +1604,14 @@ class Competitor(BaseModel):
 
     # VS comparison blog post content
     blog_post = models.TextField(blank=True, default="")
+    blog_post_generation_status = models.CharField(
+        max_length=20,
+        choices=CompetitorPostGenerationStatus.choices,
+        default=CompetitorPostGenerationStatus.IDLE,
+    )
+    blog_post_generation_started_at = models.DateTimeField(null=True, blank=True)
+    blog_post_generation_completed_at = models.DateTimeField(null=True, blank=True)
+    blog_post_generation_error = models.TextField(blank=True, default="")
 
     class Meta:
         indexes = [
@@ -1617,6 +1626,10 @@ class Competitor(BaseModel):
 
     def __str__(self):
         return f"{self.name}"
+
+    @property
+    def is_blog_post_generation_in_progress(self) -> bool:
+        return self.blog_post_generation_status == CompetitorPostGenerationStatus.PROCESSING
 
     @property
     def competitor_details(self):

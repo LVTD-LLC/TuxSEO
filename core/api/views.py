@@ -1,6 +1,7 @@
 import replicate
 import requests
 from django.conf import settings
+from django.db import transaction
 from django.http import HttpRequest
 from django.shortcuts import get_object_or_404
 from django.template.loader import render_to_string
@@ -22,6 +23,7 @@ from core.api.schemas import (
     BlogPostOut,
     BlogPostUpdateIn,
     CompetitorAnalysisOut,
+    CompetitorPostGenerationStatusOut,
     ConfirmProjectOnboardingIn,
     DeleteProjectKeywordIn,
     DeleteProjectKeywordOut,
@@ -60,7 +62,7 @@ from core.api.schemas import (
     ValidateUrlIn,
     ValidateUrlOut,
 )
-from core.choices import ContentType, ProjectPageType
+from core.choices import CompetitorPostGenerationStatus, ContentType, ProjectPageType
 from core.models import (
     BlogPost,
     BlogPostTitleSuggestion,
@@ -1015,20 +1017,27 @@ def add_competitor(request: HttpRequest, data: AddCompetitorIn):
     "/generate-competitor-vs-title", response=GenerateCompetitorVsTitleOut, auth=[session_auth]
 )
 def generate_competitor_vs_title(request: HttpRequest, data: GenerateCompetitorVsTitleIn):
-    """Generate a competitor comparison blog post using Perplexity Sonar."""
+    """Queue competitor comparison blog post generation and persist async status."""
     profile = request.auth
 
     gate_error = get_verified_email_gate_error(profile, "competitor comparison generation")
     if gate_error:
         return gate_error
 
-    competitor = get_object_or_404(Competitor, id=data.competitor_id)
+    competitor = get_object_or_404(Competitor.objects.select_related("project"), id=data.competitor_id)
     project = competitor.project
 
     if project.profile != profile:
         return {
             "status": "error",
             "message": "You do not have permission to access this competitor",
+        }
+
+    if competitor.blog_post:
+        return {
+            "status": "success",
+            "message": "VS blog post already generated.",
+            "competitor_id": competitor.id,
         }
 
     # Check if user has reached competitor posts generation limit
@@ -1045,34 +1054,59 @@ def generate_competitor_vs_title(request: HttpRequest, data: GenerateCompetitorV
         }
 
     try:
-        logger.info(
-            "Generating VS competitor blog post",
-            competitor_id=competitor.id,
-            competitor_name=competitor.name,
-            project_id=project.id,
-            profile_id=profile.id,
+        with transaction.atomic():
+            competitor = Competitor.objects.select_for_update().get(id=data.competitor_id)
+
+            if competitor.blog_post_generation_status == CompetitorPostGenerationStatus.PROCESSING:
+                return {
+                    "status": "processing",
+                    "message": "A competitor post is already being generated. Please wait a few minutes and refresh.",
+                    "competitor_id": competitor.id,
+                }
+
+            if competitor.blog_post:
+                return {
+                    "status": "success",
+                    "message": "VS blog post already generated.",
+                    "competitor_id": competitor.id,
+                }
+
+            competitor.blog_post_generation_status = CompetitorPostGenerationStatus.PROCESSING
+            competitor.blog_post_generation_started_at = timezone.now()
+            competitor.blog_post_generation_completed_at = None
+            competitor.blog_post_generation_error = ""
+            competitor.save(
+                update_fields=[
+                    "blog_post_generation_status",
+                    "blog_post_generation_started_at",
+                    "blog_post_generation_completed_at",
+                    "blog_post_generation_error",
+                ]
+            )
+
+        async_task(
+            "core.tasks.generate_competitor_vs_blog_post",
+            competitor.id,
+            group="Generate Competitor VS Blog Post",
         )
 
-        blog_post_content = competitor.generate_vs_blog_post()
-
         logger.info(
-            "VS competitor blog post generated successfully",
+            "Queued VS competitor blog post generation",
             competitor_id=competitor.id,
             competitor_name=competitor.name,
-            content_length=len(blog_post_content),
             project_id=project.id,
             profile_id=profile.id,
         )
 
         return {
-            "status": "success",
-            "message": "VS blog post generated successfully!",
+            "status": "processing",
+            "message": "Generation started. This can take a few minutes. You can keep this page open or refresh later to view the post.",
             "competitor_id": competitor.id,
         }
 
     except Exception as e:
         logger.error(
-            "Failed to generate competitor vs. blog post",
+            "Failed to queue competitor vs. blog post generation",
             error=str(e),
             exc_info=True,
             competitor_id=data.competitor_id,
@@ -1081,8 +1115,71 @@ def generate_competitor_vs_title(request: HttpRequest, data: GenerateCompetitorV
         )
         return {
             "status": "error",
-            "message": f"Failed to generate competitor comparison blog post: {str(e)}",
+            "message": "Failed to start competitor comparison blog post generation. Please try again.",
+            "competitor_id": competitor.id,
         }
+
+
+@api.get(
+    "/competitor-post-generation-status/{competitor_id}",
+    response=CompetitorPostGenerationStatusOut,
+    auth=[session_auth],
+)
+def competitor_post_generation_status(request: HttpRequest, competitor_id: int):
+    profile = request.auth
+
+    competitor = get_object_or_404(
+        Competitor.objects.select_related("project"),
+        id=competitor_id,
+        project__profile=profile,
+    )
+
+    if competitor.blog_post:
+        if competitor.blog_post_generation_status != CompetitorPostGenerationStatus.COMPLETED:
+            competitor.blog_post_generation_status = CompetitorPostGenerationStatus.COMPLETED
+            competitor.blog_post_generation_completed_at = competitor.blog_post_generation_completed_at or timezone.now()
+            competitor.blog_post_generation_error = ""
+            competitor.save(
+                update_fields=[
+                    "blog_post_generation_status",
+                    "blog_post_generation_completed_at",
+                    "blog_post_generation_error",
+                ]
+            )
+
+        return {
+            "status": "completed",
+            "message": "VS blog post is ready.",
+            "competitor_id": competitor.id,
+            "view_post_url": reverse(
+                "competitor_blog_post_detail",
+                kwargs={"project_pk": competitor.project_id, "pk": competitor.id},
+            ),
+        }
+
+    if competitor.blog_post_generation_status == CompetitorPostGenerationStatus.PROCESSING:
+        return {
+            "status": "processing",
+            "message": "Competitor comparison generation is still in progress.",
+            "competitor_id": competitor.id,
+            "view_post_url": None,
+        }
+
+    if competitor.blog_post_generation_status == CompetitorPostGenerationStatus.FAILED:
+        return {
+            "status": "failed",
+            "message": competitor.blog_post_generation_error
+            or "Competitor comparison generation failed. Please try again.",
+            "competitor_id": competitor.id,
+            "view_post_url": None,
+        }
+
+    return {
+        "status": "idle",
+        "message": "Ready to generate.",
+        "competitor_id": competitor.id,
+        "view_post_url": None,
+    }
 
 
 @api.post("/submit-feedback", auth=[session_auth])

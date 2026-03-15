@@ -161,6 +161,13 @@ class GenerateCompetitorVsTitleOut(Schema):
     competitor_id: int | None = None
 
 
+class CompetitorPostGenerationStatusOut(Schema):
+    status: str
+    message: str = ""
+    competitor_id: int
+    view_post_url: str | None = None
+
+
 class SubmitFeedbackIn(Schema):
     feedback: str
     page: str
