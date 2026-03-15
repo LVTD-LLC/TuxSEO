@@ -168,6 +168,49 @@ class PublicKeywordCreateOut(Schema):
     keyword: PublicKeywordOut | None = None
 
 
+class PublicCompetitorOut(Schema):
+    id: int
+    project_id: int
+    name: str
+    url: str
+    description: str
+    summary: str = ""
+    homepage_title: str = ""
+    homepage_description: str = ""
+    date_scraped: str | None = None
+    date_analyzed: str | None = None
+    blog_post_generation_status: str
+    blog_post_generation_started_at: str | None = None
+    blog_post_generation_completed_at: str | None = None
+    blog_post_generation_error: str = ""
+    created_at: str
+    updated_at: str
+
+
+class PublicCompetitorListOut(Schema):
+    status: str
+    competitors: list[PublicCompetitorOut] = []
+    pagination: PublicPaginationOut
+
+
+class PublicCompetitorGetOut(Schema):
+    status: str
+    competitor: PublicCompetitorOut | None = None
+
+
+class PublicCompetitorCreateIn(Schema):
+    url: str
+    name: str = ""
+    description: str = ""
+    analyze_now: bool = True
+
+
+class PublicCompetitorCreateOut(Schema):
+    status: str
+    message: str = ""
+    competitor: PublicCompetitorOut | None = None
+
+
 class PublicProjectPageOut(Schema):
     id: int
     project_id: int

@@ -8,6 +8,7 @@ from core.choices import ContentType
 from core.models import (
     AutoSubmissionSetting,
     BlogPostTitleSuggestion,
+    Competitor,
     GeneratedBlogPost,
     Keyword,
     Project,
@@ -25,6 +26,10 @@ from core.public_api.schemas import (
     PublicBlogPostPublishOut,
     PublicContentAutomationIn,
     PublicContentAutomationOut,
+    PublicCompetitorCreateIn,
+    PublicCompetitorCreateOut,
+    PublicCompetitorGetOut,
+    PublicCompetitorListOut,
     PublicKeywordCreateIn,
     PublicKeywordCreateOut,
     PublicKeywordGetOut,
@@ -118,6 +123,35 @@ def serialize_public_keyword(project_keyword: ProjectKeyword) -> dict:
         ],
         "project_keyword_id": project_keyword.id,
         "in_use": project_keyword.use,
+    }
+
+
+def serialize_public_competitor(competitor: Competitor) -> dict:
+    return {
+        "id": competitor.id,
+        "project_id": competitor.project_id,
+        "name": competitor.name,
+        "url": competitor.url,
+        "description": competitor.description,
+        "summary": competitor.summary or "",
+        "homepage_title": competitor.homepage_title or "",
+        "homepage_description": competitor.homepage_description or "",
+        "date_scraped": competitor.date_scraped.isoformat() if competitor.date_scraped else None,
+        "date_analyzed": competitor.date_analyzed.isoformat() if competitor.date_analyzed else None,
+        "blog_post_generation_status": competitor.blog_post_generation_status,
+        "blog_post_generation_started_at": (
+            competitor.blog_post_generation_started_at.isoformat()
+            if competitor.blog_post_generation_started_at
+            else None
+        ),
+        "blog_post_generation_completed_at": (
+            competitor.blog_post_generation_completed_at.isoformat()
+            if competitor.blog_post_generation_completed_at
+            else None
+        ),
+        "blog_post_generation_error": competitor.blog_post_generation_error or "",
+        "created_at": competitor.created_at.isoformat(),
+        "updated_at": competitor.updated_at.isoformat(),
     }
 
 
@@ -567,6 +601,135 @@ def create_public_keyword(request: HttpRequest, project_id: int, data: PublicKey
         "status": "success",
         "message": message,
         "keyword": serialize_public_keyword(project_keyword),
+    }
+
+
+@public_api.get(
+    "/projects/{project_id}/competitors",
+    response={200: PublicCompetitorListOut, 404: PublicAPIErrorOut},
+    auth=[public_api_key_auth],
+    tags=["Competitors"],
+)
+def list_public_competitors(
+    request: HttpRequest,
+    project_id: int,
+    page: int = 1,
+    page_size: int = 20,
+):
+    profile = request.auth
+    project = Project.objects.filter(id=project_id, profile=profile).first()
+    if project is None:
+        return 404, {"message": "Project not found"}
+
+    page = max(page, 1)
+    page_size = min(max(page_size, 1), 100)
+
+    competitors_query = Competitor.objects.filter(project=project).order_by("-updated_at", "-created_at")
+    total = competitors_query.count()
+    start_index = (page - 1) * page_size
+    end_index = start_index + page_size
+    competitors = list(competitors_query[start_index:end_index])
+
+    return {
+        "status": "success",
+        "competitors": [
+            serialize_public_competitor(competitor) for competitor in competitors
+        ],
+        "pagination": {"page": page, "page_size": page_size, "total": total},
+    }
+
+
+@public_api.get(
+    "/projects/{project_id}/competitors/{competitor_id}",
+    response={200: PublicCompetitorGetOut, 404: PublicAPIErrorOut},
+    auth=[public_api_key_auth],
+    tags=["Competitors"],
+)
+def get_public_competitor(request: HttpRequest, project_id: int, competitor_id: int):
+    profile = request.auth
+    project = Project.objects.filter(id=project_id, profile=profile).first()
+    if project is None:
+        return 404, {"message": "Project not found"}
+
+    competitor = Competitor.objects.filter(id=competitor_id, project=project).first()
+    if competitor is None:
+        return 404, {"message": "Competitor not found"}
+
+    return {"status": "success", "competitor": serialize_public_competitor(competitor)}
+
+
+@public_api.post(
+    "/projects/{project_id}/competitors",
+    response={200: PublicCompetitorCreateOut, 400: PublicAPIErrorOut, 404: PublicAPIErrorOut},
+    auth=[public_api_key_auth],
+    tags=["Competitors"],
+)
+def create_public_competitor(request: HttpRequest, project_id: int, data: PublicCompetitorCreateIn):
+    profile = request.auth
+
+    gate_error = get_verified_email_gate_error(profile, "competitor analysis")
+    if gate_error:
+        return 400, {"message": gate_error["message"]}
+
+    project = Project.objects.filter(id=project_id, profile=profile).first()
+    if project is None:
+        return 404, {"message": "Project not found"}
+
+    if not profile.can_add_competitors:
+        return 400, {
+            "message": (
+                f"You have reached the competitor limit for your {profile.product_name} "
+                "plan. Please upgrade to add more competitors."
+            )
+        }
+
+    competitor_url = data.url.strip()
+    if not competitor_url:
+        return 400, {"message": "Competitor URL cannot be empty"}
+
+    if not competitor_url.startswith(("http://", "https://")):
+        return 400, {"message": "Competitor URL must start with http:// or https://"}
+
+    existing_competitor = Competitor.objects.filter(project=project, url=competitor_url).first()
+    if existing_competitor is not None:
+        return {
+            "status": "success",
+            "message": "Competitor already exists",
+            "competitor": serialize_public_competitor(existing_competitor),
+        }
+
+    competitor_name = data.name.strip()
+    competitor_description = data.description.strip()
+    competitor = Competitor.objects.create(
+        project=project,
+        url=competitor_url,
+        name=competitor_name,
+        description=competitor_description,
+    )
+
+    message = "Competitor added"
+    if data.analyze_now:
+        try:
+            got_content = competitor.get_page_content()
+            if got_content:
+                competitor.populate_name_description()
+            else:
+                message = "Competitor added, but failed to get page content"
+        except Exception as error:
+            logger.warning(
+                "[Public API] Failed to analyze newly added competitor",
+                error=str(error),
+                exc_info=True,
+                project_id=project_id,
+                profile_id=profile.id,
+                competitor_id=competitor.id,
+            )
+            message = "Competitor added, but analysis failed"
+
+    return {
+        "status": "success",
+        "message": message,
+        "competitor": serialize_public_competitor(competitor),
     }
 
 

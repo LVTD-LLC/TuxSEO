@@ -58,6 +58,12 @@ Legacy paths (`/public-api/docs`, `/public-api/openapi.json`) redirect to these 
 - `GET /public-api/projects/{project_id}/keywords/{keyword_id}`
 - `POST /public-api/projects/{project_id}/keywords`
 
+### Competitors
+
+- `GET /public-api/projects/{project_id}/competitors`
+- `GET /public-api/projects/{project_id}/competitors/{competitor_id}`
+- `POST /public-api/projects/{project_id}/competitors`
+
 ### Project Pages
 
 - `GET /public-api/projects/{project_id}/pages`
@@ -90,6 +96,18 @@ curl -X POST "https://tuxseo.com/public-api/projects/123/title-suggestions" \
     "count": 5,
     "content_type": "SHARING",
     "seed_guidance": "focus on founder-led growth"
+  }'
+```
+
+### Add a competitor
+
+```bash
+curl -X POST "https://tuxseo.com/public-api/projects/123/competitors" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $TUXSEO_API_KEY" \
+  -d '{
+    "url": "https://competitor.com",
+    "analyze_now": true
   }'
 ```
 
