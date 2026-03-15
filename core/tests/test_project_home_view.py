@@ -176,7 +176,7 @@ def test_project_home_view_renders_how_to_use_block_with_expected_links(client):
     assert reverse("project_seo_posts", kwargs={"pk": project.id}) in content
     assert reverse("project_keywords", kwargs={"pk": project.id}) in content
     assert reverse("settings") in content
-    assert "/public-api/docs" in content
+    assert "/api/docs" in content
 
 
 @pytest.mark.django_db
