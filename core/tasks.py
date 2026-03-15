@@ -1,6 +1,7 @@
 import json
 import random
-from urllib.parse import unquote, urlencode
+import re
+from urllib.parse import unquote, urlencode, urljoin, urlparse
 
 import posthog
 import requests
@@ -28,6 +29,169 @@ from core.models import (
 from tuxseo.utils import get_tuxseo_logger
 
 logger = get_tuxseo_logger(__name__)
+
+SITEMAP_PATH_CANDIDATES = (
+    "/sitemap.xml",
+    "/sitemap_index.xml",
+    "/sitemap-index.xml",
+    "/sitemaps.xml",
+    "/wp-sitemap.xml",
+)
+
+
+def _extract_sitemap_urls_from_robots(robots_txt: str, base_url: str) -> list[str]:
+    sitemap_urls: list[str] = []
+
+    for line in robots_txt.splitlines():
+        match = re.match(r"^\s*Sitemap\s*:\s*(\S+)\s*$", line, flags=re.IGNORECASE)
+        if not match:
+            continue
+
+        sitemap_url = match.group(1).strip()
+        if not sitemap_url:
+            continue
+
+        if sitemap_url.startswith(("http://", "https://")):
+            sitemap_urls.append(sitemap_url)
+        else:
+            sitemap_urls.append(urljoin(base_url, sitemap_url))
+
+    return sitemap_urls
+
+
+def _looks_like_sitemap_xml(content: bytes) -> bool:
+    if not content:
+        return False
+
+    content_start = content[:5000].lstrip().lower()
+    return b"<urlset" in content_start or b"<sitemapindex" in content_start
+
+
+def discover_sitemap_url(project_url: str) -> tuple[str | None, str]:
+    parsed_url = urlparse(project_url)
+    if not parsed_url.scheme or not parsed_url.netloc:
+        return None, "invalid_project_url"
+
+    base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+
+    candidate_urls: list[str] = []
+
+    robots_url = urljoin(base_url, "/robots.txt")
+    try:
+        robots_response = requests.get(robots_url, timeout=15)
+        if robots_response.ok and robots_response.text:
+            candidate_urls.extend(
+                _extract_sitemap_urls_from_robots(robots_response.text, base_url)
+            )
+    except Exception as error:
+        logger.warning(
+            "[Sitemap Discovery] Failed to fetch robots.txt",
+            robots_url=robots_url,
+            error=str(error),
+        )
+
+    candidate_urls.extend(urljoin(base_url, path) for path in SITEMAP_PATH_CANDIDATES)
+
+    seen_candidates = set()
+    unique_candidates = []
+    for candidate in candidate_urls:
+        if candidate in seen_candidates:
+            continue
+        seen_candidates.add(candidate)
+        unique_candidates.append(candidate)
+
+    parse_failures = 0
+
+    for candidate_url in unique_candidates:
+        try:
+            response = requests.get(candidate_url, timeout=20)
+            if not response.ok:
+                logger.info(
+                    "[Sitemap Discovery] Candidate not accessible",
+                    candidate_url=candidate_url,
+                    status_code=response.status_code,
+                )
+                continue
+
+            if _looks_like_sitemap_xml(response.content):
+                logger.info(
+                    "[Sitemap Discovery] Candidate accepted",
+                    candidate_url=candidate_url,
+                )
+                return candidate_url, "found"
+
+            parse_failures += 1
+            logger.warning(
+                "[Sitemap Discovery] Candidate fetched but does not look like sitemap XML",
+                candidate_url=candidate_url,
+                status_code=response.status_code,
+            )
+        except Exception as error:
+            logger.warning(
+                "[Sitemap Discovery] Candidate fetch failed",
+                candidate_url=candidate_url,
+                error=str(error),
+            )
+
+    if parse_failures > 0:
+        return None, "parse_fail"
+
+    return None, "not_found"
+
+
+def auto_discover_and_ingest_sitemap(project_id: int):
+    try:
+        project = Project.objects.get(id=project_id)
+    except Project.DoesNotExist:
+        logger.error("[Sitemap Discovery] Project not found", project_id=project_id)
+        return f"Project {project_id} not found."
+
+    if not project.url:
+        logger.warning(
+            "[Sitemap Discovery] Project URL missing",
+            project_id=project_id,
+            project_name=project.name,
+        )
+        return f"Project URL missing for {project.name}."
+
+    if project.sitemap_url:
+        logger.info(
+            "[Sitemap Discovery] Project already has sitemap URL, skipping auto-discovery",
+            project_id=project_id,
+            project_name=project.name,
+            sitemap_url=project.sitemap_url,
+        )
+        return f"Project {project.name} already has sitemap URL."
+
+    logger.info(
+        "[Sitemap Discovery] Starting discovery",
+        project_id=project_id,
+        project_name=project.name,
+        project_url=project.url,
+    )
+
+    discovered_sitemap_url, discovery_status = discover_sitemap_url(project.url)
+
+    if not discovered_sitemap_url:
+        logger.info(
+            "[Sitemap Discovery] Discovery finished without sitemap",
+            project_id=project_id,
+            project_name=project.name,
+            discovery_status=discovery_status,
+        )
+        return f"No sitemap discovered for {project.name}. Status: {discovery_status}."
+
+    project.sitemap_url = discovered_sitemap_url
+    project.save(update_fields=["sitemap_url"])
+
+    logger.info(
+        "[Sitemap Discovery] Sitemap discovered and saved; sitemap parsing will be scheduled by signal",
+        project_id=project_id,
+        project_name=project.name,
+        sitemap_url=discovered_sitemap_url,
+    )
+
+    return f"Discovered sitemap for {project.name}: {discovered_sitemap_url}"
 
 
 def add_email_to_buttondown(email, tag):

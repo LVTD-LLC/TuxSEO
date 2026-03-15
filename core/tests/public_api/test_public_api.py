@@ -145,13 +145,19 @@ def test_create_public_project_returns_success():
             "core.public_api.views.Project.objects.filter",
             return_value=project_filter_mock,
         ):
-            response_data = create_public_project(
-                request,
-                PublicProjectIn(url="https://example.com", source="public_api"),
-            )
+            with patch("core.public_api.views.async_task") as mock_async_task:
+                response_data = create_public_project(
+                    request,
+                    PublicProjectIn(url="https://example.com", source="public_api"),
+                )
 
     assert response_data["status"] == "success"
     assert response_data["project"]["project_id"] == 10
+    mock_async_task.assert_called_once_with(
+        "core.tasks.auto_discover_and_ingest_sitemap",
+        project_mock.id,
+        group="Discover Sitemap",
+    )
 
 
 def test_get_public_project_returns_not_found_for_missing_project():

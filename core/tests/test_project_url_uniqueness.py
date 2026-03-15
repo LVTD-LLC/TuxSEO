@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import pytest
 from django.contrib.auth.models import User
 from django.db import IntegrityError
@@ -33,14 +35,22 @@ def test_create_project_allows_same_url_for_different_profiles(monkeypatch):
 
     project_url = "https://client-domain.com"
 
-    response_a = create_project(
-        request_a,
-        ProjectScanIn(url=project_url, source="onboarding_modal"),
-    )
-    response_b = create_project(
-        request_b,
-        ProjectScanIn(url=project_url, source="onboarding_modal"),
-    )
+    with patch("core.api.views.async_task") as mock_async_task:
+        response_a = create_project(
+            request_a,
+            ProjectScanIn(url=project_url, source="onboarding_modal"),
+        )
+        response_b = create_project(
+            request_b,
+            ProjectScanIn(url=project_url, source="onboarding_modal"),
+        )
+
+    sitemap_discovery_calls = [
+        call
+        for call in mock_async_task.call_args_list
+        if call.args
+        and call.args[0] == "core.tasks.auto_discover_and_ingest_sitemap"
+    ]
 
     assert response_a["status"] == "success"
     assert response_b["status"] == "success"
@@ -50,6 +60,7 @@ def test_create_project_allows_same_url_for_different_profiles(monkeypatch):
     assert Project.objects.filter(url=project_url).count() == 2
     assert Project.objects.filter(profile=user_a.profile, url=project_url).count() == 1
     assert Project.objects.filter(profile=user_b.profile, url=project_url).count() == 1
+    assert len(sitemap_discovery_calls) == 2
 
 
 @pytest.mark.django_db
