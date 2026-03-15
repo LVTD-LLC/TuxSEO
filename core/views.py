@@ -436,12 +436,12 @@ class TermsOfServiceView(TemplateView):
     template_name = "pages/terms_of_service.html"
 
 
-@login_required
 def _build_billing_home_url() -> str:
     """Return the canonical app home URL for Stripe return links."""
     return f"{settings.SITE_URL.rstrip('/')}{reverse('home')}"
 
 
+@login_required
 def create_checkout_session(request, product_name):
     """Create a new subscription checkout session for users without active subscriptions."""
     user = request.user

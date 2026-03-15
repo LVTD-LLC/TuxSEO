@@ -33,9 +33,10 @@ def test_checkout_session_uses_canonical_site_url_for_success_and_cancel(client)
                 "core.views.stripe.checkout.Session.create",
                 return_value=fake_checkout_session,
             ) as mock_checkout_create:
-                response = client.get(
-                    reverse("user_upgrade_checkout_session", kwargs={"product_name": "Pro"})
-                )
+                with patch("core.views.async_task"):
+                    response = client.get(
+                        reverse("user_upgrade_checkout_session", kwargs={"product_name": "Pro"})
+                    )
 
     assert response.status_code == 303
     assert response.url == fake_checkout_session.url
