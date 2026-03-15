@@ -71,10 +71,14 @@
         <div class="pt-5 mt-5 border-t border-gray-200">
           <h4 class="text-sm font-semibold tracking-wide text-gray-700 uppercase">API Quickstart</h4>
           <p class="mt-2 text-sm text-gray-600">
-            Find your API key in
-            <a href="{% url 'settings' %}" class="font-medium text-gray-800 underline">Settings</a>,
-            then test your account endpoint with this curl command. Full docs:
+            Your API key is pre-filled below from your account so you can run one command immediately.
+            You can manage or regenerate it in
+            <a href="{% url 'settings' %}" class="font-medium text-gray-800 underline">Settings</a>.
+            Full docs:
             <a href="/public-api/docs" class="font-medium text-gray-800 underline">Public API docs</a>.
+          </p>
+          <p class="mt-2 text-xs font-medium text-amber-700">
+            Security note: treat this key like a password. Never paste it in public chats, screenshots, or client-side code.
           </p>
 
           <div class="mt-4" data-controller="copy">
@@ -84,8 +88,8 @@
               rows="5"
               data-copy-target="source"
               class="block px-3 py-2 w-full text-xs font-mono text-gray-800 bg-gray-50 rounded-md border border-gray-300"
-            >curl -X GET "https://tuxseo.com/public-api/account" \
-  -H "X-API-Key: YOUR_API_KEY" \
+            >curl -X GET "{{ request.scheme }}://{{ request.get_host }}/public-api/account" \
+  -H "X-API-Key: {{ request.user.profile.key }}" \
   -H "Accept: application/json"</textarea>
             <button
               type="button"
