@@ -199,5 +199,8 @@ def test_project_home_view_renders_copyable_api_and_prompt_snippets(client):
     assert "TuxSEO API base URL: http://testserver/public-api" in content
     assert f"TuxSEO API key: {user.profile.key}" in content
     assert f"X-API-Key: {user.profile.key}" in content
-    assert content.count('data-controller="copy"') >= 2
-    assert content.count("click->copy#copy") >= 2
+    assert "Production rotation snippet" in content
+    assert 'export TUXSEO_API_KEY="' in content
+    assert "X-API-Key: $TUXSEO_API_KEY" in content
+    assert content.count('data-controller="copy"') >= 3
+    assert content.count("click->copy#copy") >= 3
