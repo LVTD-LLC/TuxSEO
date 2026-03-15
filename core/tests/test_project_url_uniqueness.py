@@ -44,6 +44,8 @@ def test_create_project_allows_same_url_for_different_profiles(monkeypatch):
 
     assert response_a["status"] == "success"
     assert response_b["status"] == "success"
+    assert "description" in response_a
+    assert "description" in response_b
 
     assert Project.objects.filter(url=project_url).count() == 2
     assert Project.objects.filter(profile=user_a.profile, url=project_url).count() == 1

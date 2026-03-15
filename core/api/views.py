@@ -22,6 +22,7 @@ from core.api.schemas import (
     BlogPostOut,
     BlogPostUpdateIn,
     CompetitorAnalysisOut,
+    ConfirmProjectOnboardingIn,
     DeleteProjectKeywordIn,
     DeleteProjectKeywordOut,
     FixGeneratedBlogPostIn,
@@ -260,6 +261,7 @@ def create_project(request: HttpRequest, data: ProjectScanIn):
                 "type": project.get_type_display(),
                 "url": project.url,
                 "summary": project.summary,
+                "description": project.description,
             }
         else:
             logger.error(
@@ -290,6 +292,25 @@ def create_project(request: HttpRequest, data: ProjectScanIn):
             "status": "error",
             "message": "An unexpected error occurred while creating the project",
         }
+
+
+@api.post("/projects/{project_id}/confirm-onboarding", response={200: dict}, auth=[session_auth])
+def confirm_project_onboarding(
+    request: HttpRequest, project_id: int, data: ConfirmProjectOnboardingIn
+):
+    profile = request.auth
+    project = get_object_or_404(Project, id=project_id, profile=profile)
+
+    name = data.name.strip() or project.name or project.url
+    summary = data.summary.strip()
+    description = data.description.strip()
+
+    project.name = name
+    project.summary = summary
+    project.description = description
+    project.save(update_fields=["name", "summary", "description"])
+
+    return {"status": "success"}
 
 
 @api.post("/generate-title-suggestions", response=GenerateTitleSuggestionsOut, auth=[session_auth])
