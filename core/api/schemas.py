@@ -50,6 +50,13 @@ class ProjectScanOut(Schema):
     type: str = ""
     url: str = ""
     summary: str = ""
+    description: str = ""
+
+
+class ConfirmProjectOnboardingIn(Schema):
+    name: str
+    summary: str = ""
+    description: str = ""
 
 
 class GenerateTitleSuggestionsIn(Schema):
