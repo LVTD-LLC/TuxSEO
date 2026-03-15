@@ -222,11 +222,14 @@ Useful content.
 
 
 class TestGenerateRandomKey:
-    def test_generates_ten_character_alphanumeric_key(self):
+    def test_generates_prefixed_high_entropy_hex_key(self):
         random_key = generate_random_key()
 
-        assert len(random_key) == 10
-        assert random_key.isalnum()
+        assert random_key.startswith("tuxseo_")
+        assert len(random_key) == 47
+        suffix = random_key.removeprefix("tuxseo_")
+        assert len(suffix) == 40
+        assert all(char in "0123456789abcdef" for char in suffix)
 
     def test_generates_different_values_across_calls(self):
         first_key = generate_random_key()

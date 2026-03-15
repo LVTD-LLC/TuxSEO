@@ -131,6 +131,32 @@ Workflow:
               Copy
             </button>
           </div>
+
+          <div class="mt-4" data-controller="copy">
+            <label class="block mb-2 text-xs font-semibold tracking-wide text-gray-600 uppercase">Production rotation snippet</label>
+            <textarea
+              readonly
+              rows="9"
+              data-copy-target="source"
+              class="block px-3 py-2 w-full text-xs font-mono text-gray-800 bg-gray-50 rounded-md border border-gray-300"
+            ># 1) Store the regenerated key in your production secrets
+export TUXSEO_API_KEY="{{ request.user.profile.key }}"
+
+# 2) Smoke test with the new key before restarting workers
+curl -X GET "{{ request.scheme }}://{{ request.get_host }}/public-api/account" \
+  -H "X-API-Key: $TUXSEO_API_KEY" \
+  -H "Accept: application/json"
+
+# 3) Restart/redeploy your app so all workers load the new secret</textarea>
+            <button
+              type="button"
+              data-copy-target="button"
+              data-action="click->copy#copy"
+              class="inline-flex items-center px-3 py-1.5 mt-2 text-xs font-medium text-white bg-pink-600 rounded-md hover:bg-pink-700"
+            >
+              Copy
+            </button>
+          </div>
         </div>
       </article>
 

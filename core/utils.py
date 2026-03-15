@@ -1,6 +1,5 @@
 import asyncio
-import random
-import string
+import secrets
 from urllib.request import urlopen
 
 import requests
@@ -188,8 +187,12 @@ def get_jina_embedding(text: str) -> list[float] | None:
 
 
 def generate_random_key():
-    characters = string.ascii_letters + string.digits
-    return "".join(random.choice(characters) for _ in range(10))
+    """Generate a high-entropy API key with an explicit product prefix.
+
+    Format: ``tuxseo_<40 lowercase hex chars>`` (160 bits entropy)
+    Example: ``tuxseo_a3f5...``
+    """
+    return f"tuxseo_{secrets.token_hex(20)}"
 
 
 def get_html_content(url):

@@ -12,3 +12,6 @@ def test_project_home_prompt_template_includes_api_key_usage_instructions():
     assert "TuxSEO API key:" in content
     assert "Use this key in every API request header:" in content
     assert "X-API-Key:" in content
+    assert "Production rotation snippet" in content
+    assert "export TUXSEO_API_KEY=" in content
+    assert "X-API-Key: $TUXSEO_API_KEY" in content
