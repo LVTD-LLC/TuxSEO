@@ -57,7 +57,7 @@
           <h3 class="text-sm font-medium text-yellow-800">Competitor Limit Reached</h3>
           <p class="mt-1 text-sm text-yellow-700">
             You have reached the maximum of {{ competitor_limit }} competitors for the free plan.
-            <a href="{% url 'pricing' %}" class="font-semibold underline hover:text-yellow-900">Upgrade to Pro</a> to add unlimited competitors.
+            <a href="{% url 'user_upgrade_checkout_session' product_name='Pro - Monthly' %}" class="font-semibold underline hover:text-yellow-900">Upgrade to Pro</a> to add unlimited competitors.
           </p>
         </div>
       </div>
@@ -75,7 +75,7 @@
           <h3 class="text-sm font-medium text-yellow-800">Competitor Post Generation Limit Reached</h3>
           <p class="mt-1 text-sm text-yellow-700">
             You have generated {{ number_of_competitor_posts_generated }}/{{ competitor_posts_limit }} competitor comparison posts for the free plan.
-            <a href="{% url 'pricing' %}" class="font-semibold underline hover:text-yellow-900">Upgrade to Pro</a> to generate unlimited competitor posts.
+            <a href="{% url 'user_upgrade_checkout_session' product_name='Pro - Monthly' %}" class="font-semibold underline hover:text-yellow-900">Upgrade to Pro</a> to generate unlimited competitor posts.
           </p>
         </div>
       </div>
