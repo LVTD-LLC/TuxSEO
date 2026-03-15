@@ -8,6 +8,7 @@ from core.api.views import api
 from core.public_api.auth import PublicAPIKeyAuth
 from core.public_api.schemas import (
     PublicBlogPostGenerateIn,
+    PublicCompetitorCreateIn,
     PublicContentAutomationIn,
     PublicKeywordCreateIn,
     PublicProjectIn,
@@ -17,6 +18,7 @@ from core.public_api.schemas import (
 )
 from core.public_api.views import (
     configure_content_automation,
+    create_public_competitor,
     create_public_keyword,
     create_public_project,
     create_public_project_page,
@@ -24,10 +26,12 @@ from core.public_api.views import (
     generate_public_blog_post,
     get_public_project_page,
     get_public_blog_post,
+    get_public_competitor,
     get_public_keyword,
     get_public_project,
     get_public_title_suggestion,
     list_public_blog_posts,
+    list_public_competitors,
     list_public_keywords,
     list_public_project_pages,
     list_public_title_suggestions,
@@ -659,6 +663,157 @@ def test_create_public_keyword_normalizes_keyword_text():
     keyword.fetch_and_update_metrics.assert_called_once()
 
 
+def _build_competitor(*, competitor_id: int, project_id: int, url: str = "https://competitor.com"):
+    competitor = Mock(
+        id=competitor_id,
+        project_id=project_id,
+        name="Competitor Inc",
+        url=url,
+        description="Competitor description",
+        summary="Competitor summary",
+        homepage_title="Competitor Homepage",
+        homepage_description="Homepage description",
+        date_scraped=None,
+        date_analyzed=None,
+        blog_post_generation_status="idle",
+        blog_post_generation_started_at=None,
+        blog_post_generation_completed_at=None,
+        blog_post_generation_error="",
+    )
+    competitor.created_at.isoformat.return_value = "2026-03-15T00:00:00+00:00"
+    competitor.updated_at.isoformat.return_value = "2026-03-15T00:00:00+00:00"
+    competitor.get_page_content.return_value = True
+    competitor.populate_name_description = Mock()
+    return competitor
+
+
+def test_list_public_competitors_supports_pagination():
+    request = SimpleNamespace(auth=build_profile())
+    project = Mock(id=10)
+    project_filter = Mock()
+    project_filter.first.return_value = project
+
+    competitors = [
+        _build_competitor(competitor_id=1, project_id=project.id),
+        _build_competitor(competitor_id=2, project_id=project.id, url="https://competitor-2.com"),
+    ]
+
+    competitors_query = MagicMock()
+    competitors_query.order_by.return_value = competitors_query
+    competitors_query.count.return_value = len(competitors)
+    competitors_query.__getitem__.return_value = competitors[:1]
+
+    with patch("core.public_api.views.Project.objects.filter", return_value=project_filter):
+        with patch("core.public_api.views.Competitor.objects.filter", return_value=competitors_query):
+            response_data = list_public_competitors(request, project_id=project.id, page=1, page_size=1)
+
+    assert response_data["status"] == "success"
+    assert response_data["pagination"]["total"] == 2
+    assert len(response_data["competitors"]) == 1
+    assert response_data["competitors"][0]["id"] == 1
+
+
+def test_get_public_competitor_returns_not_found_when_missing():
+    request = SimpleNamespace(auth=build_profile())
+    project = Mock(id=10)
+    project_filter = Mock()
+    project_filter.first.return_value = project
+
+    competitor_filter = Mock()
+    competitor_filter.first.return_value = None
+
+    with patch("core.public_api.views.Project.objects.filter", return_value=project_filter):
+        with patch("core.public_api.views.Competitor.objects.filter", return_value=competitor_filter):
+            response_status_code, response_data = get_public_competitor(
+                request,
+                project_id=project.id,
+                competitor_id=999,
+            )
+
+    assert response_status_code == 404
+    assert response_data["message"] == "Competitor not found"
+
+
+def test_create_public_competitor_returns_error_for_invalid_url_scheme():
+    request = SimpleNamespace(auth=build_profile(can_add_competitors=True))
+    project = Mock(id=10)
+    project_filter = Mock()
+    project_filter.first.return_value = project
+
+    with patch("core.public_api.views.get_verified_email_gate_error", return_value=None):
+        with patch("core.public_api.views.Project.objects.filter", return_value=project_filter):
+            response_status_code, response_data = create_public_competitor(
+                request,
+                project_id=project.id,
+                data=PublicCompetitorCreateIn(url="competitor.com", analyze_now=False),
+            )
+
+    assert response_status_code == 400
+    assert response_data["message"] == "Competitor URL must start with http:// or https://"
+
+
+def test_create_public_competitor_returns_existing_competitor_when_duplicate():
+    profile = build_profile(can_add_competitors=True)
+    request = SimpleNamespace(auth=profile)
+    project = Mock(id=10)
+    project_filter = Mock()
+    project_filter.first.return_value = project
+    existing_competitor = _build_competitor(competitor_id=42, project_id=project.id)
+
+    competitor_filter = Mock()
+    competitor_filter.first.return_value = existing_competitor
+
+    with patch("core.public_api.views.get_verified_email_gate_error", return_value=None):
+        with patch("core.public_api.views.Project.objects.filter", return_value=project_filter):
+            with patch("core.public_api.views.Competitor.objects.filter", return_value=competitor_filter):
+                response_data = create_public_competitor(
+                    request,
+                    project_id=project.id,
+                    data=PublicCompetitorCreateIn(url=existing_competitor.url, analyze_now=False),
+                )
+
+    assert response_data["status"] == "success"
+    assert response_data["message"] == "Competitor already exists"
+    assert response_data["competitor"]["id"] == existing_competitor.id
+
+
+def test_create_public_competitor_creates_and_analyzes_when_enabled():
+    profile = build_profile(can_add_competitors=True)
+    request = SimpleNamespace(auth=profile)
+    project = Mock(id=10)
+    project_filter = Mock()
+    project_filter.first.return_value = project
+
+    no_existing_competitor_filter = Mock()
+    no_existing_competitor_filter.first.return_value = None
+    created_competitor = _build_competitor(competitor_id=88, project_id=project.id)
+
+    with patch("core.public_api.views.get_verified_email_gate_error", return_value=None):
+        with patch("core.public_api.views.Project.objects.filter", return_value=project_filter):
+            with patch(
+                "core.public_api.views.Competitor.objects.filter",
+                return_value=no_existing_competitor_filter,
+            ):
+                with patch(
+                    "core.public_api.views.Competitor.objects.create",
+                    return_value=created_competitor,
+                ):
+                    response_data = create_public_competitor(
+                        request,
+                        project_id=project.id,
+                        data=PublicCompetitorCreateIn(
+                            url="https://new-competitor.com",
+                            analyze_now=True,
+                        ),
+                    )
+
+    assert response_data["status"] == "success"
+    assert response_data["message"] == "Competitor added"
+    assert response_data["competitor"]["id"] == created_competitor.id
+    created_competitor.get_page_content.assert_called_once()
+    created_competitor.populate_name_description.assert_called_once()
+
+
 def _build_generated_post(*, post_id: int, title_suggestion_id: int | None = None, posted: bool = False):
     post = Mock()
     post.id = post_id
@@ -914,6 +1069,8 @@ def test_public_openapi_includes_public_routes_only():
     assert "/public-api/projects/{project_id}/title-suggestions/{suggestion_id}" in schema_paths
     assert "/public-api/projects/{project_id}/keywords" in schema_paths
     assert "/public-api/projects/{project_id}/keywords/{keyword_id}" in schema_paths
+    assert "/public-api/projects/{project_id}/competitors" in schema_paths
+    assert "/public-api/projects/{project_id}/competitors/{competitor_id}" in schema_paths
     assert "/public-api/projects/{project_id}/pages" in schema_paths
     assert "/public-api/projects/{project_id}/pages/{page_id}" in schema_paths
     assert "/public-api/projects/{project_id}/blog-posts/generate" in schema_paths
@@ -936,6 +1093,7 @@ def test_public_openapi_groups_endpoints_by_functional_tags():
         "Title Suggestions"
     ]
     assert paths["/public-api/projects/{project_id}/keywords"]["get"]["tags"] == ["Keywords"]
+    assert paths["/public-api/projects/{project_id}/competitors"]["get"]["tags"] == ["Competitors"]
     assert paths["/public-api/projects/{project_id}/pages"]["get"]["tags"] == ["Project Pages"]
     assert paths["/public-api/projects/{project_id}/blog-posts"]["get"]["tags"] == [
         "Blog Posts"
