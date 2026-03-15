@@ -114,6 +114,13 @@ class BlogPostStatus(models.TextChoices):
     PUBLISHED = "PUBLISHED"
 
 
+class CompetitorPostGenerationStatus(models.TextChoices):
+    IDLE = "IDLE", "Idle"
+    PROCESSING = "PROCESSING", "Processing"
+    COMPLETED = "COMPLETED", "Completed"
+    FAILED = "FAILED", "Failed"
+
+
 class ProjectPageSource(models.TextChoices):
     AI = "AI", "AI"
     SITEMAP = "SITEMAP", "Sitemap"

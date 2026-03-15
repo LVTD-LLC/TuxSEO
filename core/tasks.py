@@ -15,7 +15,12 @@ from core.analytics import (
     is_known_event_name,
     normalize_event_name,
 )
-from core.choices import ContentType, EmailType, ProjectPageSource
+from core.choices import (
+    CompetitorPostGenerationStatus,
+    ContentType,
+    EmailType,
+    ProjectPageSource,
+)
 from core.models import (
     BlogPostTitleSuggestion,
     Competitor,
@@ -1974,6 +1979,67 @@ Ready to get started? {home_url}
             user_email=user.email if user else "unknown",
         )
         return f"Failed to send email to {user.email if user else 'unknown'}"
+
+
+def generate_competitor_vs_blog_post(competitor_id: int):
+    """Generate competitor comparison post asynchronously and persist generation state."""
+    try:
+        competitor = Competitor.objects.select_related("project", "project__profile").get(id=competitor_id)
+    except Competitor.DoesNotExist:
+        logger.error(
+            "[Generate Competitor VS Blog Post] Competitor not found",
+            competitor_id=competitor_id,
+        )
+        return f"Competitor {competitor_id} not found"
+
+    logger.info(
+        "[Generate Competitor VS Blog Post] Starting generation",
+        competitor_id=competitor.id,
+        project_id=competitor.project_id,
+        profile_id=competitor.project.profile_id if competitor.project else None,
+    )
+
+    try:
+        competitor.generate_vs_blog_post()
+        competitor.blog_post_generation_status = CompetitorPostGenerationStatus.COMPLETED
+        competitor.blog_post_generation_completed_at = timezone.now()
+        competitor.blog_post_generation_error = ""
+        competitor.save(
+            update_fields=[
+                "blog_post_generation_status",
+                "blog_post_generation_completed_at",
+                "blog_post_generation_error",
+            ]
+        )
+
+        logger.info(
+            "[Generate Competitor VS Blog Post] Generation completed",
+            competitor_id=competitor.id,
+            project_id=competitor.project_id,
+        )
+        return f"Successfully generated competitor blog post for competitor {competitor.id}"
+
+    except Exception as error:
+        error_message = str(error)
+        competitor.blog_post_generation_status = CompetitorPostGenerationStatus.FAILED
+        competitor.blog_post_generation_completed_at = timezone.now()
+        competitor.blog_post_generation_error = error_message[:1000]
+        competitor.save(
+            update_fields=[
+                "blog_post_generation_status",
+                "blog_post_generation_completed_at",
+                "blog_post_generation_error",
+            ]
+        )
+
+        logger.error(
+            "[Generate Competitor VS Blog Post] Generation failed",
+            competitor_id=competitor.id,
+            project_id=competitor.project_id,
+            error=error_message,
+            exc_info=True,
+        )
+        return f"Failed to generate competitor blog post for competitor {competitor.id}: {error_message}"
 
 
 def generate_blog_post_content(suggestion_id: int, send_email: bool = True):
