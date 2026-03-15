@@ -4,6 +4,7 @@ from django.conf import settings
 from django.http import HttpRequest
 from django.shortcuts import get_object_or_404
 from django.template.loader import render_to_string
+from django.urls import reverse
 from django.utils import timezone
 from django_q.models import Task
 from django_q.tasks import async_task, result
@@ -77,6 +78,10 @@ from tuxseo.utils import get_tuxseo_logger
 logger = get_tuxseo_logger(__name__)
 
 api = NinjaAPI(docs_url=None, openapi_url=None)
+
+
+def pro_monthly_checkout_url() -> str:
+    return reverse("user_upgrade_checkout_session", kwargs={"product_name": "Pro - Monthly"})
 
 
 def get_verified_email_gate_error(profile, action_name: str) -> dict | None:
@@ -314,7 +319,7 @@ def generate_title_suggestions(request: HttpRequest, data: GenerateTitleSuggesti
     if not profile.can_generate_title_suggestions:
         limit = profile.title_suggestion_limit
         current_count = profile.number_of_title_suggestions_this_month
-        message = f"Title generation limit reached ({current_count}/{limit} suggestions this month on Free plan). <a class='underline' href='/settings'>Upgrade to Pro</a> for unlimited suggestions."  # noqa: E501
+        message = f"Title generation limit reached ({current_count}/{limit} suggestions this month on Free plan). <a class='underline' href='{pro_monthly_checkout_url()}'>Upgrade to Pro</a> for unlimited suggestions."  # noqa: E501
         return {
             "suggestions": [],
             "suggestions_html": [],
@@ -384,7 +389,7 @@ def generate_title_from_idea(request: HttpRequest, data: GenerateTitleSuggestion
     if profile.reached_title_generation_limit:
         limit = profile.title_suggestion_limit
         current_count = profile.number_of_title_suggestions_this_month
-        message = f"Title generation limit reached ({current_count}/{limit} suggestions this month on Free plan). <a class='underline' href='/settings'>Upgrade to Pro</a> for unlimited suggestions."  # noqa: E501
+        message = f"Title generation limit reached ({current_count}/{limit} suggestions this month on Free plan). <a class='underline' href='{pro_monthly_checkout_url()}'>Upgrade to Pro</a> for unlimited suggestions."  # noqa: E501
         return {
             "status": "error",
             "message": message,
@@ -476,7 +481,7 @@ def generate_blog_content(request: HttpRequest, suggestion_id: int):
     if profile.reached_content_generation_limit:
         limit = profile.blog_post_generation_limit
         current_count = profile.number_of_generated_blog_posts_this_month
-        message = f"Content generation limit reached ({current_count}/{limit} blog posts this month on Free plan). <a class='underline' href='/settings'>Upgrade to Pro</a> for unlimited content."  # noqa: E501
+        message = f"Content generation limit reached ({current_count}/{limit} blog posts this month on Free plan). <a class='underline' href='{pro_monthly_checkout_url()}'>Upgrade to Pro</a> for unlimited content."  # noqa: E501
         return {
             "status": "error",
             "task_id": None,
@@ -1096,7 +1101,7 @@ def add_keyword_to_project(request: HttpRequest, data: AddKeywordIn):
 
     if not profile.can_add_keywords:
         if profile.is_on_free_plan:
-            message = "Keyword additions are not available on the Free plan. <a class='underline' href='/settings'>Upgrade to Pro</a> to add custom keywords."  # noqa: E501
+            message = f"Keyword additions are not available on the Free plan. <a class='underline' href='{pro_monthly_checkout_url()}'>Upgrade to Pro</a> to add custom keywords."  # noqa: E501
         else:
             message = "Keyword limit reached. <a class='underline' href='/settings'>Contact support</a> for assistance."  # noqa: E501
         return {"status": "error", "message": message}
