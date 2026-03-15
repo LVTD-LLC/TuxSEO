@@ -253,6 +253,12 @@ def create_project(request: HttpRequest, data: ProjectScanIn):
             }
 
         if analyzed_project:
+            async_task(
+                "core.tasks.auto_discover_and_ingest_sitemap",
+                project.id,
+                group="Discover Sitemap",
+            )
+
             return {
                 "status": "success",
                 "project_id": project.id,

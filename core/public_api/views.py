@@ -1,5 +1,6 @@
 from django.http import HttpRequest
 from django.utils import timezone
+from django_q.tasks import async_task
 from ninja import NinjaAPI
 
 from core.abuse_prevention import enforce_verified_email_for_expensive_action
@@ -194,6 +195,12 @@ def create_public_project(request: HttpRequest, data: PublicProjectIn):
         if not is_project_analyzed:
             project.delete()
             return 400, {"message": "Failed to analyze project"}
+
+        async_task(
+            "core.tasks.auto_discover_and_ingest_sitemap",
+            project.id,
+            group="Discover Sitemap",
+        )
 
         return {
             "status": "success",
