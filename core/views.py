@@ -54,18 +54,75 @@ logger = get_tuxseo_logger(__name__)
 User = get_user_model()
 
 
+PRICE_SELECTION_RULES = {
+    "Pro - Monthly": {
+        "amount": 9900,
+        "env_var": "STRIPE_PRICE_ID_PRO_MONTHLY",
+    },
+    "Pro - Yearly": {
+        "amount": 99000,
+        "env_var": "STRIPE_PRICE_ID_PRO_YEARLY",
+    },
+}
+
+
+def _price_matches_rule(price, *, expected_amount=None):
+    if expected_amount is None:
+        return True
+    return getattr(price, "unit_amount", None) == expected_amount
+
+
+def _stripe_price_matches_rule(stripe_price, *, expected_amount=None):
+    if expected_amount is None:
+        return True
+    return stripe_price.get("unit_amount") == expected_amount
+
+
 def get_price_for_product_name(product_name):
-    """Get a Stripe price for a product name with dj-stripe first, Stripe API fallback second."""
+    """Get the canonical active Stripe price for a product name.
+
+    Selection order:
+    1) Explicit env override (STRIPE_PRICE_ID_PRO_MONTHLY / STRIPE_PRICE_ID_PRO_YEARLY)
+    2) dj-stripe active price matching canonical amount
+    3) Stripe API active price matching canonical amount (synced into dj-stripe)
+    4) Backward-compatible fallback to any active product price
+    """
+    rule = PRICE_SELECTION_RULES.get(product_name, {})
+    expected_amount = rule.get("amount")
+    env_var = rule.get("env_var")
+    explicit_price_id = getattr(settings, env_var, "") if env_var else ""
+
+    if explicit_price_id:
+        try:
+            return djstripe_models.Price.objects.select_related("product").get(
+                id=explicit_price_id,
+                livemode=settings.STRIPE_LIVE_MODE,
+                active=True,
+            )
+        except djstripe_models.Price.DoesNotExist:
+            stripe_price = stripe.Price.retrieve(explicit_price_id, expand=["product"])
+            synced_price = djstripe_models.Price.sync_from_stripe_data(stripe_price)
+            if (
+                synced_price.product.name == product_name
+                and synced_price.active
+                and _price_matches_rule(synced_price, expected_amount=expected_amount)
+            ):
+                return synced_price
+        except djstripe_models.Price.MultipleObjectsReturned:
+            pass
+
     try:
         return djstripe_models.Price.objects.select_related("product").get(
             product__name=product_name,
             livemode=settings.STRIPE_LIVE_MODE,
             active=True,
+            unit_amount=expected_amount,
         )
     except (djstripe_models.Price.DoesNotExist, djstripe_models.Price.MultipleObjectsReturned):
         pass
 
     stripe_prices = stripe.Price.list(active=True, expand=["data.product"], limit=100)
+    fallback_match = None
 
     for stripe_price in stripe_prices.auto_paging_iter():
         stripe_product = stripe_price.get("product")
@@ -74,7 +131,15 @@ def get_price_for_product_name(product_name):
         if stripe_product_name != product_name:
             continue
 
-        synced_price = djstripe_models.Price.sync_from_stripe_data(stripe_price)
+        if _stripe_price_matches_rule(stripe_price, expected_amount=expected_amount):
+            synced_price = djstripe_models.Price.sync_from_stripe_data(stripe_price)
+            return synced_price
+
+        if fallback_match is None:
+            fallback_match = stripe_price
+
+    if fallback_match is not None:
+        synced_price = djstripe_models.Price.sync_from_stripe_data(fallback_match)
         return synced_price
 
     raise djstripe_models.Price.DoesNotExist
