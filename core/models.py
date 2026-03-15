@@ -1272,6 +1272,87 @@ class GeneratedBlogPost(BaseModel):
             )
             return False, f"Unexpected error: {str(error)}"
 
+    @staticmethod
+    def _dedupe_pages_by_url(pages):
+        unique_pages_by_url = {}
+        for page in pages:
+            if page.url not in unique_pages_by_url:
+                unique_pages_by_url[page.url] = page
+        return list(unique_pages_by_url.values())
+
+    @staticmethod
+    def _dedupe_external_pages_by_project(external_pages):
+        """Keep at most one page per external project to diversify outbound links."""
+        unique_pages_by_project = {}
+
+        for page in external_pages:
+            project_id = page.project_id
+            if project_id not in unique_pages_by_project:
+                unique_pages_by_project[project_id] = page
+
+        return list(unique_pages_by_project.values())
+
+    def _get_link_candidate_pages(self, max_pages=4, max_external_pages=3):
+        manually_selected_project_pages = list(self.project.project_pages.filter(always_use=True))
+        relevant_project_pages = list(
+            get_relevant_pages_for_blog_post(
+                self.project,
+                self.title_suggestion.suggested_meta_description,
+                max_pages=max_pages,
+            )
+        )
+
+        internal_project_pages = self._dedupe_pages_by_url(
+            manually_selected_project_pages + relevant_project_pages
+        )
+
+        external_project_pages = []
+        if self.project.particiate_in_link_exchange:
+            external_candidates = list(
+                get_relevant_external_pages_for_blog_post(
+                    meta_description=self.title_suggestion.suggested_meta_description,
+                    exclude_project=self.project,
+                    max_pages=max_external_pages,
+                )
+            )
+
+            filtered_external_pages = [
+                page
+                for page in external_candidates
+                if page.project and page.project.particiate_in_link_exchange
+            ]
+            external_project_pages = self._dedupe_external_pages_by_project(
+                self._dedupe_pages_by_url(filtered_external_pages)
+            )
+
+        return internal_project_pages, external_project_pages, manually_selected_project_pages
+
+    @staticmethod
+    def _build_page_contexts(internal_pages, external_pages):
+        contexts = [
+            ProjectPageContext(
+                url=page.url,
+                title=page.title,
+                description=page.description,
+                summary=page.summary,
+                link_source="internal",
+            )
+            for page in internal_pages
+        ]
+        contexts.extend(
+            [
+                ProjectPageContext(
+                    url=page.url,
+                    title=page.title,
+                    description=page.description,
+                    summary=page.summary,
+                    link_source="external",
+                )
+                for page in external_pages
+            ]
+        )
+        return contexts
+
     def insert_links_into_post(self, max_pages=4, max_external_pages=3):
         """
         Insert links from project pages into the blog post content organically.
@@ -1284,11 +1365,6 @@ class GeneratedBlogPost(BaseModel):
         Returns:
             str: The blog post content with links inserted
         """  # noqa: E501
-        from core.utils import (
-            get_relevant_pages_for_blog_post,
-            run_agent_synchronously,
-        )
-
         if not self.title_suggestion:
             logger.warning(
                 "[InsertLinksIntoPost] No title suggestion found for blog post",
@@ -1297,34 +1373,16 @@ class GeneratedBlogPost(BaseModel):
             )
             return self.content
 
-        # Get internal project pages
-        manually_selected_project_pages = list(self.project.project_pages.filter(always_use=True))
-        relevant_project_pages = list(
-            get_relevant_pages_for_blog_post(
-                self.project,
-                self.title_suggestion.suggested_meta_description,
-                max_pages=max_pages,
-            )
+        (
+            internal_project_pages,
+            external_project_pages,
+            manually_selected_project_pages,
+        ) = self._get_link_candidate_pages(
+            max_pages=max_pages,
+            max_external_pages=max_external_pages,
         )
 
-        all_project_pages = manually_selected_project_pages + relevant_project_pages
-
-        # Get external project pages if link exchange is enabled
-        external_project_pages = []
-        if self.project.particiate_in_link_exchange:
-            external_project_pages = list(
-                get_relevant_external_pages_for_blog_post(
-                    meta_description=self.title_suggestion.suggested_meta_description,
-                    exclude_project=self.project,
-                    max_pages=max_external_pages,
-                )
-            )
-            # Filter to only include pages from projects that also participate in link exchange
-            external_project_pages = [
-                page for page in external_project_pages if page.project.particiate_in_link_exchange
-            ]
-
-        all_pages_to_link = all_project_pages + external_project_pages
+        all_pages_to_link = internal_project_pages + external_project_pages
 
         if not all_pages_to_link:
             logger.info(
@@ -1334,19 +1392,14 @@ class GeneratedBlogPost(BaseModel):
             )
             return self.content
 
-        project_page_contexts = [
-            ProjectPageContext(
-                url=page.url,
-                title=page.title,
-                description=page.description,
-                summary=page.summary,
-            )
-            for page in all_pages_to_link
-        ]
+        project_page_contexts = self._build_page_contexts(
+            internal_pages=internal_project_pages,
+            external_pages=external_project_pages,
+        )
 
         # Extract URLs for logging
         urls_to_insert = [page.url for page in all_pages_to_link]
-        internal_urls = [page.url for page in all_project_pages]
+        internal_urls = [page.url for page in internal_project_pages]
         external_urls = [page.url for page in external_project_pages]
 
         link_insertion_context = LinkInsertionContext(
@@ -1363,7 +1416,7 @@ class GeneratedBlogPost(BaseModel):
             blog_post_id=self.id,
             project_id=self.project_id,
             num_total_pages=len(project_page_contexts),
-            num_internal_pages=len(all_project_pages),
+            num_internal_pages=len(internal_project_pages),
             num_external_pages=len(external_project_pages),
             num_always_use_pages=len(manually_selected_project_pages),
             participate_in_link_exchange=self.project.particiate_in_link_exchange,
