@@ -196,11 +196,19 @@ def create_public_project(request: HttpRequest, data: PublicProjectIn):
             project.delete()
             return 400, {"message": "Failed to analyze project"}
 
-        async_task(
-            "core.tasks.auto_discover_and_ingest_sitemap",
-            project.id,
-            group="Discover Sitemap",
-        )
+        try:
+            async_task(
+                "core.tasks.auto_discover_and_ingest_sitemap",
+                project.id,
+                group="Discover Sitemap",
+            )
+        except Exception as task_error:
+            logger.warning(
+                "[Public API] Failed to enqueue sitemap auto-discovery",
+                project_id=project.id,
+                profile_id=profile.id,
+                error=str(task_error),
+            )
 
         return {
             "status": "success",

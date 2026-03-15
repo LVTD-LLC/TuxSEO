@@ -253,11 +253,18 @@ def create_project(request: HttpRequest, data: ProjectScanIn):
             }
 
         if analyzed_project:
-            async_task(
-                "core.tasks.auto_discover_and_ingest_sitemap",
-                project.id,
-                group="Discover Sitemap",
-            )
+            try:
+                async_task(
+                    "core.tasks.auto_discover_and_ingest_sitemap",
+                    project.id,
+                    group="Discover Sitemap",
+                )
+            except Exception as task_error:
+                logger.warning(
+                    "[Create Project] Failed to enqueue sitemap auto-discovery",
+                    project_id=project.id,
+                    error=str(task_error),
+                )
 
             return {
                 "status": "success",
