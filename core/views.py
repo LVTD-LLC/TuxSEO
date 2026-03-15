@@ -436,6 +436,11 @@ class TermsOfServiceView(TemplateView):
     template_name = "pages/terms_of_service.html"
 
 
+def _build_billing_home_url() -> str:
+    """Return the canonical app home URL for Stripe return links."""
+    return f"{settings.SITE_URL.rstrip('/')}{reverse('home')}"
+
+
 @login_required
 def create_checkout_session(request, product_name):
     """Create a new subscription checkout session for users without active subscriptions."""
@@ -503,11 +508,10 @@ def create_checkout_session(request, product_name):
         group="Track Event",
     )
 
-    base_success_url = request.build_absolute_uri(reverse("home"))
-    base_cancel_url = request.build_absolute_uri(reverse("home"))
+    billing_home_url = _build_billing_home_url()
 
-    success_url = f"{base_success_url}?{urlencode({'payment': 'success'})}"
-    cancel_url = f"{base_cancel_url}?{urlencode({'payment': 'cancelled'})}"
+    success_url = f"{billing_home_url}?{urlencode({'payment': 'success'})}"
+    cancel_url = f"{billing_home_url}?{urlencode({'payment': 'cancelled'})}"
 
     try:
         checkout_session = stripe.checkout.Session.create(
@@ -725,7 +729,7 @@ def create_customer_portal_session(request):
 
     session = stripe.billing_portal.Session.create(
         customer=customer.id,
-        return_url=request.build_absolute_uri(reverse("home")),
+        return_url=_build_billing_home_url(),
     )
 
     return redirect(session.url, code=303)
