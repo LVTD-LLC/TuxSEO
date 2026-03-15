@@ -11,6 +11,7 @@ from core.public_api.schemas import (
     PublicContentAutomationIn,
     PublicKeywordCreateIn,
     PublicProjectIn,
+    PublicProjectPageCreateIn,
     PublicProjectUpdateIn,
     PublicTitleSuggestionCreateIn,
 )
@@ -18,14 +19,17 @@ from core.public_api.views import (
     configure_content_automation,
     create_public_keyword,
     create_public_project,
+    create_public_project_page,
     create_public_title_suggestions,
     generate_public_blog_post,
+    get_public_project_page,
     get_public_blog_post,
     get_public_keyword,
     get_public_project,
     get_public_title_suggestion,
     list_public_blog_posts,
     list_public_keywords,
+    list_public_project_pages,
     list_public_title_suggestions,
     publish_public_blog_post,
     public_api,
@@ -771,6 +775,133 @@ def test_publish_public_blog_post_sets_posted_flag_when_submission_succeeds():
     post.save.assert_called_once()
 
 
+def test_public_project_page_create_schema_requires_url_field():
+    with pytest.raises(ValidationError):
+        PublicProjectPageCreateIn.model_validate({})
+
+
+def test_create_public_project_page_returns_error_for_invalid_url_scheme():
+    request = SimpleNamespace(auth=build_profile())
+    project = Mock(id=10)
+
+    project_filter = Mock()
+    project_filter.first.return_value = project
+
+    with patch("core.public_api.views.get_verified_email_gate_error", return_value=None):
+        with patch("core.public_api.views.Project.objects.filter", return_value=project_filter):
+            response_status_code, response_data = create_public_project_page(
+                request,
+                project_id=project.id,
+                data=PublicProjectPageCreateIn(url="example.com", analyze_now=False),
+            )
+
+    assert response_status_code == 400
+    assert response_data["message"] == "Page URL must start with http:// or https://"
+
+
+def test_list_public_project_pages_returns_project_scoped_results():
+    request = SimpleNamespace(auth=build_profile())
+    project = Mock(id=10)
+
+    project_filter = Mock()
+    project_filter.first.return_value = project
+
+    page_mock = Mock(
+        id=55,
+        project_id=project.id,
+        url="https://example.com/pricing",
+        source="AI",
+        always_use=False,
+        type="Pricing",
+        type_ai_guess="Pricing",
+        title="Pricing",
+        description="Pricing page",
+        summary="Pricing summary",
+        date_scraped=None,
+        date_analyzed=None,
+    )
+    page_mock.created_at.isoformat.return_value = "2026-03-15T00:00:00+00:00"
+    page_mock.updated_at.isoformat.return_value = "2026-03-15T00:00:00+00:00"
+
+    pages_query = Mock()
+    pages_query.order_by.return_value = pages_query
+    pages_query.count.return_value = 1
+    pages_query.__getitem__ = Mock(return_value=[page_mock])
+
+    with patch("core.public_api.views.Project.objects.filter", return_value=project_filter):
+        with patch("core.public_api.views.ProjectPage.objects.filter", return_value=pages_query):
+            response_data = list_public_project_pages(request, project_id=project.id, page=1, page_size=20)
+
+    assert response_data["status"] == "success"
+    assert response_data["pages"][0]["id"] == 55
+    assert response_data["pagination"]["total"] == 1
+
+
+def test_get_public_project_page_returns_not_found_when_page_missing():
+    request = SimpleNamespace(auth=build_profile())
+    project = Mock(id=10)
+
+    project_filter = Mock()
+    project_filter.first.return_value = project
+
+    page_filter = Mock()
+    page_filter.first.return_value = None
+
+    with patch("core.public_api.views.Project.objects.filter", return_value=project_filter):
+        with patch("core.public_api.views.ProjectPage.objects.filter", return_value=page_filter):
+            response_status_code, response_data = get_public_project_page(
+                request,
+                project_id=project.id,
+                page_id=999,
+            )
+
+    assert response_status_code == 404
+    assert response_data["message"] == "Project page not found"
+
+
+def test_create_public_project_page_creates_and_analyzes_when_enabled():
+    request = SimpleNamespace(auth=build_profile())
+    project = Mock(id=10)
+
+    project_filter = Mock()
+    project_filter.first.return_value = project
+
+    page_mock = Mock(
+        id=72,
+        project_id=project.id,
+        url="https://example.com/about",
+        source="AI",
+        always_use=False,
+        type="",
+        type_ai_guess="",
+        title="",
+        description="",
+        summary="",
+        date_scraped=None,
+        date_analyzed=None,
+    )
+    page_mock.created_at.isoformat.return_value = "2026-03-15T00:00:00+00:00"
+    page_mock.updated_at.isoformat.return_value = "2026-03-15T00:00:00+00:00"
+    page_mock.get_page_content.return_value = True
+
+    with patch("core.public_api.views.get_verified_email_gate_error", return_value=None):
+        with patch("core.public_api.views.Project.objects.filter", return_value=project_filter):
+            with patch(
+                "core.public_api.views.ProjectPage.objects.get_or_create",
+                return_value=(page_mock, True),
+            ):
+                response_data = create_public_project_page(
+                    request,
+                    project_id=project.id,
+                    data=PublicProjectPageCreateIn(url="https://example.com/about", analyze_now=True),
+                )
+
+    assert response_data["status"] == "success"
+    assert response_data["message"] == "Project page added"
+    page_mock.get_page_content.assert_called_once()
+    page_mock.analyze_content.assert_called_once()
+
+
 def test_public_openapi_includes_public_routes_only():
     openapi_schema = public_api.get_openapi_schema()
     schema_paths = openapi_schema["paths"]
@@ -783,6 +914,8 @@ def test_public_openapi_includes_public_routes_only():
     assert "/public-api/projects/{project_id}/title-suggestions/{suggestion_id}" in schema_paths
     assert "/public-api/projects/{project_id}/keywords" in schema_paths
     assert "/public-api/projects/{project_id}/keywords/{keyword_id}" in schema_paths
+    assert "/public-api/projects/{project_id}/pages" in schema_paths
+    assert "/public-api/projects/{project_id}/pages/{page_id}" in schema_paths
     assert "/public-api/projects/{project_id}/blog-posts/generate" in schema_paths
     assert "/public-api/projects/{project_id}/blog-posts" in schema_paths
     assert "/public-api/projects/{project_id}/blog-posts/{blog_post_id}" in schema_paths
@@ -803,6 +936,7 @@ def test_public_openapi_groups_endpoints_by_functional_tags():
         "Title Suggestions"
     ]
     assert paths["/public-api/projects/{project_id}/keywords"]["get"]["tags"] == ["Keywords"]
+    assert paths["/public-api/projects/{project_id}/pages"]["get"]["tags"] == ["Project Pages"]
     assert paths["/public-api/projects/{project_id}/blog-posts"]["get"]["tags"] == [
         "Blog Posts"
     ]
