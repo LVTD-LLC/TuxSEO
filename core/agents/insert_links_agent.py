@@ -38,6 +38,7 @@ def create_insert_links_agent(model=None):
         8. Each project page should be linked AT MOST ONCE in the entire post
         9. Only insert links where they are contextually relevant and add value
         10. Return ONLY the markdown content, no JSON or structured output
+        11. When both internal and external link candidates are provided, include both types in the final post when contextually possible
 
         HANDLING EXISTING LINKS - FORMATTING CORRECTION ONLY:
         - You MAY convert reference-style links to inline links for better formatting
@@ -96,32 +97,48 @@ def create_insert_links_agent(model=None):
     def add_link_insertion_context(ctx) -> str:
         context: LinkInsertionContext = ctx.deps
 
-        pages_info = ""
-        for index, page in enumerate(context.project_pages, start=1):
-            pages_info += f"""
-            Page {index}:
-            - URL: {page.url}
-            - Title: {page.title}
-            - Description: {page.description}
-            - Summary: {page.summary}
-            """
+        internal_pages = [page for page in context.project_pages if page.link_source == "internal"]
+        external_pages = [page for page in context.project_pages if page.link_source == "external"]
+
+        def _format_pages(pages):
+            pages_info = ""
+            for index, page in enumerate(pages, start=1):
+                pages_info += f"""
+                Page {index}:
+                - URL: {page.url}
+                - Title: {page.title}
+                - Description: {page.description}
+                - Summary: {page.summary}
+                """
+            return pages_info or "(none)"
+
+        link_mix_instruction = (
+            "Use at least 1 internal and 1 external link when contextually relevant. "
+            "If only one source type is available, use links from that source only."
+            if internal_pages and external_pages
+            else "Only one link source is available; insert relevant links from the provided list."
+        )
 
         return f"""
-            PROJECT PAGES TO LINK:
-            {pages_info}
+            INTERNAL PROJECT PAGES TO LINK:
+            {_format_pages(internal_pages)}
+
+            EXTERNAL PROJECT PAGES TO LINK:
+            {_format_pages(external_pages)}
 
             BLOG POST CONTENT TO INSERT LINKS INTO:
             {context.blog_post_content}
 
             INSTRUCTIONS:
             1. Insert links from the project pages above organically into the blog post
-            2. Convert reference-style links (like "text [Source, Year](url)" or "text [1](url)") to natural inline links (like "[text](url)")
-            3. CRITICAL: When converting reference-style links, the URL must remain EXACTLY the same - do NOT change, update, or correct the URL
-            4. DO NOT remove any existing links from the document
-            5. DO NOT change, update, or correct ANY URLs of existing links - URLs must stay identical
-            6. Only insert NEW links from the provided project pages that are not already present
-            7. Do not change the content, only format existing links and insert new links from the provided project pages
-            8. Return only the markdown content with links properly formatted and new links inserted
+            2. {link_mix_instruction}
+            3. Convert reference-style links (like "text [Source, Year](url)" or "text [1](url)") to natural inline links (like "[text](url)")
+            4. CRITICAL: When converting reference-style links, the URL must remain EXACTLY the same - do NOT change, update, or correct the URL
+            5. DO NOT remove any existing links from the document
+            6. DO NOT change, update, or correct ANY URLs of existing links - URLs must stay identical
+            7. Only insert NEW links from the provided project pages that are not already present
+            8. Do not change the content, only format existing links and insert new links from the provided project pages
+            9. Return only the markdown content with links properly formatted and new links inserted
         """  # noqa: E501
 
     return agent

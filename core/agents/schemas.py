@@ -177,6 +177,10 @@ class ProjectPageContext(BaseModel):
         default=False,
         description="When enabled, this page link must always be included in generated blog posts",
     )
+    link_source: str = Field(
+        default="internal",
+        description="Source of the link candidate: internal or external",
+    )
 
 
 class BlogPostGenerationContext(BaseModel):
