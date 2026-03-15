@@ -1,3 +1,5 @@
+import re
+
 import markdown as md
 from bs4 import BeautifulSoup
 from django import template
@@ -7,13 +9,47 @@ from django.utils.safestring import mark_safe
 
 register = template.Library()
 
+LIST_ITEM_PATTERN = re.compile(r"^ {0,3}(?:[-*+]\s+|\d+[.)]\s+)")
+FENCE_PATTERN = re.compile(r"^ {0,3}(?:```|~~~)")
+
+
+def _normalize_list_spacing(value: str) -> str:
+    """Insert a blank line before top-level list items when missing.
+
+    Python-Markdown requires a blank line between a paragraph and a following list.
+    LLM output sometimes omits it (e.g. "Paragraph\n- item"), which causes the list
+    to render as plain text. This normalizer fixes that while preserving fenced code.
+    """
+    lines = value.splitlines()
+    normalized_lines: list[str] = []
+    inside_fenced_code_block = False
+
+    for line in lines:
+        if FENCE_PATTERN.match(line):
+            inside_fenced_code_block = not inside_fenced_code_block
+
+        is_list_item = bool(LIST_ITEM_PATTERN.match(line))
+
+        if not inside_fenced_code_block and is_list_item and normalized_lines:
+            previous_line = normalized_lines[-1]
+            previous_line_is_content = bool(previous_line.strip())
+            previous_line_is_list_item = bool(LIST_ITEM_PATTERN.match(previous_line))
+
+            if previous_line_is_content and not previous_line_is_list_item:
+                normalized_lines.append("")
+
+        normalized_lines.append(line)
+
+    return "\n".join(normalized_lines)
+
 
 @register.filter
 @stringfilter
 def markdown(value):
     md_instance = md.Markdown(extensions=["tables", "fenced_code"])
 
-    html = md_instance.convert(value)
+    normalized_value = _normalize_list_spacing(value)
+    html = md_instance.convert(normalized_value)
     soup = BeautifulSoup(html, "html.parser")
 
     for link in soup.find_all("a", href=True):

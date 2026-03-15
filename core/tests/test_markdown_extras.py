@@ -37,6 +37,36 @@ class TestMarkdownFilter:
         assert 'target="_blank"' in rendered_html
         assert 'rel="noopener noreferrer"' in rendered_html
 
+    def test_renders_bullet_list_after_paragraph_without_blank_line(self):
+        markdown_text = "Intro paragraph:\n- first\n- second"
+
+        rendered_html = markdown_filter(markdown_text)
+
+        assert "<p>Intro paragraph:</p>" in rendered_html
+        assert "<ul>" in rendered_html
+        assert "<li>first</li>" in rendered_html
+        assert "<li>second</li>" in rendered_html
+
+    def test_renders_numbered_list_after_paragraph_without_blank_line(self):
+        markdown_text = "Steps\n1. one\n2. two"
+
+        rendered_html = markdown_filter(markdown_text)
+
+        assert "<p>Steps</p>" in rendered_html
+        assert "<ol>" in rendered_html
+        assert "<li>one</li>" in rendered_html
+        assert "<li>two</li>" in rendered_html
+
+    def test_does_not_change_list_markers_inside_fenced_code_blocks(self):
+        markdown_text = "```\nNotes\n- keep literal\n1. keep literal\n```"
+
+        rendered_html = markdown_filter(markdown_text)
+
+        assert "<ul>" not in rendered_html
+        assert "<ol>" not in rendered_html
+        assert "- keep literal" in rendered_html
+        assert "1. keep literal" in rendered_html
+
 
 class TestReplaceQuotesFilter:
     def test_replaces_double_quotes_with_single_quotes(self):
