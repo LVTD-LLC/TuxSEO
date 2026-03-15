@@ -30,24 +30,14 @@
         <input type="hidden" name="remember" value="true" />
         <div class="-space-y-px rounded-md shadow-sm">
           <div>
-            {{ form.username.errors | safe }}
-            <label for="username" class="sr-only">Username</label>
-            {% render_field form.username placeholder="Username" id="username" name="username" type="text" autocomplete="username" required=True class="block relative px-3 py-2 w-full placeholder-gray-500 text-gray-900 rounded-none rounded-t-md border border-gray-300 appearance-none focus:outline-none focus:ring-gray-500 focus:border-gray-500 focus:z-10 sm:text-sm" %}
-          </div>
-          <div>
             {{ form.email.errors | safe }}
-            <label for="email" class="sr-only">Username</label>
-            {% render_field form.email id="email" name="email" placeholder="Email" type="email" autocomplete="email" required="True" class="block relative px-3 py-2 w-full placeholder-gray-500 text-gray-900 rounded-none border border-gray-300 appearance-none focus:outline-none focus:ring-gray-500 focus:border-gray-500 focus:z-10 sm:text-sm" %}
+            <label for="email" class="sr-only">Email</label>
+            {% render_field form.email id="email" name="email" placeholder="Email" type="email" autocomplete="email" required="True" class="block relative px-3 py-2 w-full placeholder-gray-500 text-gray-900 rounded-none rounded-t-md border border-gray-300 appearance-none focus:outline-none focus:ring-gray-500 focus:border-gray-500 focus:z-10 sm:text-sm" %}
           </div>
           <div>
             {{ form.password1.errors | safe }}
             <label for="password1" class="sr-only">Password</label>
-            {% render_field form.password1 id="password1" name="password1" placeholder="Password" type="password" autocomplete="new-password" required="True" class="block relative px-3 py-2 w-full placeholder-gray-500 text-gray-900 rounded-none border border-gray-300 appearance-none focus:outline-none focus:ring-gray-500 focus:border-gray-500 focus:z-10 sm:text-sm" %}
-          </div>
-          <div>
-            {{ form.password2.errors | safe }}
-            <label for="password2" class="sr-only">Password</label>
-            {% render_field form.password2 id="password2" name="password2" type="password" autocomplete="new-password" required="True" class="block relative px-3 py-2 w-full placeholder-gray-500 text-gray-900 rounded-none rounded-b-md border border-gray-300 appearance-none focus:outline-none focus:ring-gray-500 focus:border-gray-500 focus:z-10 sm:text-sm" placeholder="Confirm Password" %}
+            {% render_field form.password1 id="password1" name="password1" placeholder="Password" type="password" autocomplete="new-password" required="True" class="block relative px-3 py-2 w-full placeholder-gray-500 text-gray-900 rounded-none rounded-b-md border border-gray-300 appearance-none focus:outline-none focus:ring-gray-500 focus:border-gray-500 focus:z-10 sm:text-sm" %}
           </div>
         </div>
 

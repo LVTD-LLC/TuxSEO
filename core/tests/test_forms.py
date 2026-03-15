@@ -176,10 +176,8 @@ class TestCustomSignUpFormTurnstile:
     @patch(
         "allauth.account.forms.SignupForm.clean",
         return_value={
-            "username": "verified-user",
             "email": "verified@example.com",
             "password1": "SafePass123!",
-            "password2": "SafePass123!",
         },
     )
     @patch.object(
@@ -194,10 +192,8 @@ class TestCustomSignUpFormTurnstile:
 
         form = CustomSignUpForm(
             data={
-                "username": "verified-user",
                 "email": "verified@example.com",
                 "password1": "SafePass123!",
-                "password2": "SafePass123!",
                 "cf-turnstile-response": "valid-token",
             }
         )
@@ -205,8 +201,8 @@ class TestCustomSignUpFormTurnstile:
 
         cleaned_data = form.clean()
 
-        assert cleaned_data["username"] == "verified-user"
         assert cleaned_data["email"] == "verified@example.com"
+        assert cleaned_data["password1"] == "SafePass123!"
 
     @override_settings(
         SIGNUP_RATE_LIMIT_ATTEMPTS_PER_IP=1,

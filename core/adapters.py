@@ -21,6 +21,24 @@ class CustomAccountAdapter(DefaultAccountAdapter):
     Custom adapter to track email confirmations and welcome emails.
     """
 
+    def _generate_unique_username_from_email(self, email):
+        base_username = re.sub(r"[^\w]", "", (email or "").split("@")[0])
+        if not base_username:
+            base_username = f"user{uuid.uuid4().hex[:8]}"
+
+        username = base_username
+        counter = 1
+        while User.objects.filter(username=username).exists():
+            username = f"{base_username}{counter}"
+            counter += 1
+
+        return username
+
+    def populate_username(self, request, user):
+        """Ensure username exists even when signup form does not request it."""
+        if not user.username:
+            user.username = self._generate_unique_username_from_email(user.email)
+
     def send_confirmation_mail(self, request, emailconfirmation, signup):
         """
         Override to track email confirmation sends.
