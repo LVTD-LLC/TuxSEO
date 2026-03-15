@@ -196,5 +196,8 @@ def test_project_home_view_renders_copyable_api_and_prompt_snippets(client):
     assert "http://testserver/public-api/account" in content
     assert "Security note: treat this key like a password." in content
     assert "You are helping me operate TuxSEO for my project." in content
+    assert "TuxSEO API base URL: http://testserver/public-api" in content
+    assert f"TuxSEO API key: {user.profile.key}" in content
+    assert f"X-API-Key: {user.profile.key}" in content
     assert content.count('data-controller="copy"') >= 2
     assert content.count("click->copy#copy") >= 2
