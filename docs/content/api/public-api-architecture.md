@@ -58,6 +58,12 @@ Legacy paths (`/public-api/docs`, `/public-api/openapi.json`) redirect to these 
 - `GET /public-api/projects/{project_id}/keywords/{keyword_id}`
 - `POST /public-api/projects/{project_id}/keywords`
 
+### Project Pages
+
+- `GET /public-api/projects/{project_id}/pages`
+- `GET /public-api/projects/{project_id}/pages/{page_id}`
+- `POST /public-api/projects/{project_id}/pages`
+
 ### Blog Posts
 
 - `POST /public-api/projects/{project_id}/blog-posts/generate`
@@ -86,6 +92,27 @@ curl -X POST "https://tuxseo.com/public-api/projects/123/title-suggestions" \
     "seed_guidance": "focus on founder-led growth"
   }'
 ```
+
+### Add a page URL to "Your Pages"
+
+```bash
+curl -X POST "https://tuxseo.com/public-api/projects/123/pages" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $TUXSEO_API_KEY" \
+  -d '{
+    "url": "https://example.com/pricing",
+    "analyze_now": true
+  }'
+```
+
+### List project pages
+
+```bash
+curl -X GET "https://tuxseo.com/public-api/projects/123/pages?page=1&page_size=20" \
+  -H "X-API-Key: $TUXSEO_API_KEY"
+```
+
+Page responses include core metadata for integrations: URL, source, inferred page type, title, description, summary, always-use flag, and scrape/analyze timestamps.
 
 ### Generate a blog post from a title suggestion
 

@@ -12,6 +12,7 @@ from core.models import (
     Keyword,
     Project,
     ProjectKeyword,
+    ProjectPage,
 )
 from core.public_api.auth import public_api_key_auth
 from core.public_api.schemas import (
@@ -31,6 +32,10 @@ from core.public_api.schemas import (
     PublicProjectCreateOut,
     PublicProjectGetOut,
     PublicProjectIn,
+    PublicProjectPageCreateIn,
+    PublicProjectPageCreateOut,
+    PublicProjectPageGetOut,
+    PublicProjectPageListOut,
     PublicProjectUpdateIn,
     PublicProjectUpdateOut,
     PublicTitleSuggestionCreateIn,
@@ -113,6 +118,25 @@ def serialize_public_keyword(project_keyword: ProjectKeyword) -> dict:
         ],
         "project_keyword_id": project_keyword.id,
         "in_use": project_keyword.use,
+    }
+
+
+def serialize_public_project_page(project_page: ProjectPage) -> dict:
+    return {
+        "id": project_page.id,
+        "project_id": project_page.project_id,
+        "url": project_page.url,
+        "source": project_page.source,
+        "always_use": project_page.always_use,
+        "type": project_page.type or "",
+        "type_ai_guess": project_page.type_ai_guess or "",
+        "title": project_page.title or "",
+        "description": project_page.description or "",
+        "summary": project_page.summary or "",
+        "date_scraped": project_page.date_scraped.isoformat() if project_page.date_scraped else None,
+        "date_analyzed": project_page.date_analyzed.isoformat() if project_page.date_analyzed else None,
+        "created_at": project_page.created_at.isoformat(),
+        "updated_at": project_page.updated_at.isoformat(),
     }
 
 
@@ -543,6 +567,116 @@ def create_public_keyword(request: HttpRequest, project_id: int, data: PublicKey
         "status": "success",
         "message": message,
         "keyword": serialize_public_keyword(project_keyword),
+    }
+
+
+@public_api.get(
+    "/projects/{project_id}/pages",
+    response={200: PublicProjectPageListOut, 404: PublicAPIErrorOut},
+    auth=[public_api_key_auth],
+    tags=["Project Pages"],
+)
+def list_public_project_pages(
+    request: HttpRequest,
+    project_id: int,
+    page: int = 1,
+    page_size: int = 20,
+):
+    profile = request.auth
+    project = Project.objects.filter(id=project_id, profile=profile).first()
+    if project is None:
+        return 404, {"message": "Project not found"}
+
+    page = max(page, 1)
+    page_size = min(max(page_size, 1), 100)
+
+    pages_query = ProjectPage.objects.filter(project=project).order_by("-date_analyzed", "-created_at")
+    total = pages_query.count()
+    start_index = (page - 1) * page_size
+    end_index = start_index + page_size
+    pages = list(pages_query[start_index:end_index])
+
+    return {
+        "status": "success",
+        "pages": [serialize_public_project_page(project_page) for project_page in pages],
+        "pagination": {"page": page, "page_size": page_size, "total": total},
+    }
+
+
+@public_api.get(
+    "/projects/{project_id}/pages/{page_id}",
+    response={200: PublicProjectPageGetOut, 404: PublicAPIErrorOut},
+    auth=[public_api_key_auth],
+    tags=["Project Pages"],
+)
+def get_public_project_page(request: HttpRequest, project_id: int, page_id: int):
+    profile = request.auth
+    project = Project.objects.filter(id=project_id, profile=profile).first()
+    if project is None:
+        return 404, {"message": "Project not found"}
+
+    project_page = ProjectPage.objects.filter(id=page_id, project=project).first()
+    if project_page is None:
+        return 404, {"message": "Project page not found"}
+
+    return {"status": "success", "page": serialize_public_project_page(project_page)}
+
+
+@public_api.post(
+    "/projects/{project_id}/pages",
+    response={200: PublicProjectPageCreateOut, 400: PublicAPIErrorOut, 404: PublicAPIErrorOut},
+    auth=[public_api_key_auth],
+    tags=["Project Pages"],
+)
+def create_public_project_page(request: HttpRequest, project_id: int, data: PublicProjectPageCreateIn):
+    profile = request.auth
+
+    gate_error = get_verified_email_gate_error(profile, "project page analysis")
+    if gate_error:
+        return 400, {"message": gate_error["message"]}
+
+    project = Project.objects.filter(id=project_id, profile=profile).first()
+    if project is None:
+        return 404, {"message": "Project not found"}
+
+    page_url = data.url.strip()
+    if not page_url:
+        return 400, {"message": "Page URL cannot be empty"}
+
+    if not page_url.startswith(("http://", "https://")):
+        return 400, {"message": "Page URL must start with http:// or https://"}
+
+    project_page, is_created = ProjectPage.objects.get_or_create(
+        project=project,
+        url=page_url,
+    )
+
+    if not is_created:
+        return {
+            "status": "success",
+            "message": "Project page already exists",
+            "page": serialize_public_project_page(project_page),
+        }
+
+    if data.analyze_now:
+        try:
+            got_content = project_page.get_page_content()
+            if got_content:
+                project_page.analyze_content()
+        except Exception as error:
+            logger.warning(
+                "[Public API] Failed to analyze newly added project page",
+                error=str(error),
+                exc_info=True,
+                project_id=project_id,
+                profile_id=profile.id,
+                project_page_id=project_page.id,
+            )
+
+    return {
+        "status": "success",
+        "message": "Project page added",
+        "page": serialize_public_project_page(project_page),
     }
 
 

@@ -168,6 +168,45 @@ class PublicKeywordCreateOut(Schema):
     keyword: PublicKeywordOut | None = None
 
 
+class PublicProjectPageOut(Schema):
+    id: int
+    project_id: int
+    url: str
+    source: str
+    always_use: bool
+    type: str = ""
+    type_ai_guess: str = ""
+    title: str = ""
+    description: str = ""
+    summary: str = ""
+    date_scraped: str | None = None
+    date_analyzed: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class PublicProjectPageListOut(Schema):
+    status: str
+    pages: list[PublicProjectPageOut] = []
+    pagination: PublicPaginationOut
+
+
+class PublicProjectPageGetOut(Schema):
+    status: str
+    page: PublicProjectPageOut | None = None
+
+
+class PublicProjectPageCreateIn(Schema):
+    url: str
+    analyze_now: bool = True
+
+
+class PublicProjectPageCreateOut(Schema):
+    status: str
+    message: str = ""
+    page: PublicProjectPageOut | None = None
+
+
 class PublicBlogPostOut(Schema):
     id: int
     title: str
