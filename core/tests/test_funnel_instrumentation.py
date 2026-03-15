@@ -17,8 +17,14 @@ def test_signup_page_instruments_signup_started_event(client):
     response = client.get(reverse("account_signup"))
 
     assert response.status_code == 200
-    assert ANALYTICS_EVENTS.SIGNUP_STARTED in response.content.decode("utf-8")
-    assert "window.posthog.capture" in response.content.decode("utf-8")
+
+    content = response.content.decode("utf-8")
+    assert ANALYTICS_EVENTS.SIGNUP_STARTED in content
+    assert "window.posthog.capture" in content
+    assert 'name="email"' in content
+    assert 'name="password1"' in content
+    assert 'name="username"' not in content
+    assert 'name="password2"' not in content
 
 
 @pytest.mark.django_db
