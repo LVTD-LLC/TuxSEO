@@ -1,4 +1,6 @@
+from django.conf import settings
 from django.http import HttpRequest
+from django.urls import reverse
 from django.utils import timezone
 from django_q.tasks import async_task
 from ninja import NinjaAPI
@@ -52,6 +54,24 @@ from core.public_api.schemas import (
 from tuxseo.utils import get_tuxseo_logger
 
 logger = get_tuxseo_logger(__name__)
+
+
+def get_public_pricing_url() -> str:
+    base_url = settings.SITE_URL.rstrip("/") if getattr(settings, "SITE_URL", "") else ""
+    return f"{base_url}{reverse('pricing')}" if base_url else reverse("pricing")
+
+
+def plan_gate_error(code: str, message: str, *, status_code: int = 403) -> tuple[int, dict]:
+    return (
+        status_code,
+        {
+            "status": "error",
+            "code": code,
+            "message": message,
+            "upgrade_url": get_public_pricing_url(),
+        },
+    )
+
 
 public_api = NinjaAPI(
     title="TuxSEO Public API",
@@ -235,7 +255,12 @@ def list_public_projects(request: HttpRequest, page: int = 1, page_size: int = 2
 
 @public_api.post(
     "/projects",
-    response={200: PublicProjectCreateOut, 400: PublicAPIErrorOut, 500: PublicAPIErrorOut},
+    response={
+        200: PublicProjectCreateOut,
+        400: PublicAPIErrorOut,
+        403: PublicAPIErrorOut,
+        500: PublicAPIErrorOut,
+    },
     auth=[public_api_key_auth],
     tags=["Projects"],
 )
@@ -263,7 +288,10 @@ def create_public_project(request: HttpRequest, data: PublicProjectIn):
                 f"Project creation limit reached ({limit} project on Free plan). "
                 "Upgrade to Pro to create more projects."
             )
-            return 400, {"message": limit_message}
+            return plan_gate_error(
+                "FREE_PLAN_PROJECT_LIMIT_REACHED",
+                limit_message,
+            )
 
         return 400, {"message": "Project creation limit reached. Contact support for assistance."}
 
@@ -364,6 +392,7 @@ def update_public_project(request: HttpRequest, project_id: int, data: PublicPro
     response={
         200: PublicContentAutomationOut,
         400: PublicAPIErrorOut,
+        403: PublicAPIErrorOut,
         404: PublicAPIErrorOut,
         500: PublicAPIErrorOut,
     },
@@ -381,9 +410,10 @@ def configure_content_automation(
         return 404, {"message": "Project not found"}
 
     if not profile.is_on_pro_plan:
-        return 400, {
-            "message": "Automatic Post Submission is only available on the Pro plan."
-        }
+        return plan_gate_error(
+            "PRO_PLAN_REQUIRED_CONTENT_AUTOMATION",
+            "Automatic Post Submission is only available on the Pro plan. Upgrade to Pro to configure automation.",
+        )
 
     endpoint_url = data.endpoint_url.strip()
     if not endpoint_url:
@@ -494,7 +524,12 @@ def get_public_title_suggestion(request: HttpRequest, project_id: int, suggestio
 
 @public_api.post(
     "/projects/{project_id}/title-suggestions",
-    response={200: PublicTitleSuggestionCreateOut, 400: PublicAPIErrorOut, 404: PublicAPIErrorOut},
+    response={
+        200: PublicTitleSuggestionCreateOut,
+        400: PublicAPIErrorOut,
+        403: PublicAPIErrorOut,
+        404: PublicAPIErrorOut,
+    },
     auth=[public_api_key_auth],
     tags=["Title Suggestions"],
 )
@@ -510,6 +545,16 @@ def create_public_title_suggestions(
         content_type = ContentType[data.content_type]
     except KeyError:
         return 400, {"message": f"Invalid content type: {data.content_type}"}
+
+    if not getattr(profile, "can_generate_title_suggestions", True):
+        limit = getattr(profile, "title_suggestion_limit", None)
+        current_count = getattr(profile, "number_of_title_suggestions_this_month", None)
+        usage_text = f" ({current_count}/{limit} this month)" if limit is not None and current_count is not None else ""
+        return plan_gate_error(
+            "FREE_PLAN_TITLE_SUGGESTION_LIMIT_REACHED",
+            "Title suggestion generation limit reached on your current plan"
+            f"{usage_text}. Upgrade to Pro for higher limits.",
+        )
 
     suggestions = project.generate_title_suggestions(
         content_type=content_type,
@@ -585,7 +630,12 @@ def get_public_keyword(request: HttpRequest, project_id: int, keyword_id: int):
 
 @public_api.post(
     "/projects/{project_id}/keywords",
-    response={200: PublicKeywordCreateOut, 400: PublicAPIErrorOut, 404: PublicAPIErrorOut},
+    response={
+        200: PublicKeywordCreateOut,
+        400: PublicAPIErrorOut,
+        403: PublicAPIErrorOut,
+        404: PublicAPIErrorOut,
+    },
     auth=[public_api_key_auth],
     tags=["Keywords"],
 )
@@ -606,8 +656,9 @@ def create_public_keyword(request: HttpRequest, project_id: int, data: PublicKey
                 "Keyword additions are not available on the Free plan. "
                 "Upgrade to Pro to add custom keywords."
             )
-        else:
-            message = "Keyword limit reached. Contact support for assistance."
+            return plan_gate_error("PRO_PLAN_REQUIRED_KEYWORD_ADDITION", message)
+
+        message = "Keyword limit reached. Contact support for assistance."
         return 400, {"message": message}
 
     keyword_text_cleaned = data.keyword_text.strip().lower()
@@ -687,7 +738,12 @@ def get_public_competitor(request: HttpRequest, project_id: int, competitor_id: 
 
 @public_api.post(
     "/projects/{project_id}/competitors",
-    response={200: PublicCompetitorCreateOut, 400: PublicAPIErrorOut, 404: PublicAPIErrorOut},
+    response={
+        200: PublicCompetitorCreateOut,
+        400: PublicAPIErrorOut,
+        403: PublicAPIErrorOut,
+        404: PublicAPIErrorOut,
+    },
     auth=[public_api_key_auth],
     tags=["Competitors"],
 )
@@ -703,12 +759,13 @@ def create_public_competitor(request: HttpRequest, project_id: int, data: Public
         return 404, {"message": "Project not found"}
 
     if not profile.can_add_competitors:
-        return 400, {
-            "message": (
+        return plan_gate_error(
+            "PLAN_COMPETITOR_LIMIT_REACHED",
+            (
                 f"You have reached the competitor limit for your {profile.product_name} "
                 "plan. Please upgrade to add more competitors."
-            )
-        }
+            ),
+        )
 
     competitor_url = data.url.strip()
     if not competitor_url:
@@ -872,7 +929,12 @@ def create_public_project_page(request: HttpRequest, project_id: int, data: Publ
 
 @public_api.post(
     "/projects/{project_id}/blog-posts/generate",
-    response={200: PublicBlogPostGenerateOut, 400: PublicAPIErrorOut, 404: PublicAPIErrorOut},
+    response={
+        200: PublicBlogPostGenerateOut,
+        400: PublicAPIErrorOut,
+        403: PublicAPIErrorOut,
+        404: PublicAPIErrorOut,
+    },
     auth=[public_api_key_auth],
     tags=["Blog Posts"],
 )
@@ -886,6 +948,16 @@ def generate_public_blog_post(request: HttpRequest, project_id: int, data: Publi
     project = Project.objects.filter(id=project_id, profile=profile).first()
     if project is None:
         return 404, {"message": "Project not found"}
+
+    if not getattr(profile, "can_generate_blog_posts", True):
+        limit = getattr(profile, "blog_post_generation_limit", None)
+        current_count = getattr(profile, "number_of_generated_blog_posts_this_month", None)
+        usage_text = f" ({current_count}/{limit} this month)" if limit is not None and current_count is not None else ""
+        return plan_gate_error(
+            "FREE_PLAN_BLOG_POST_LIMIT_REACHED",
+            "Blog post generation limit reached on your current plan"
+            f"{usage_text}. Upgrade to Pro for higher limits.",
+        )
 
     suggestion = BlogPostTitleSuggestion.objects.filter(
         id=data.title_suggestion_id, project=project

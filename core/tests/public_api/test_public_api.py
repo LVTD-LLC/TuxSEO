@@ -133,6 +133,27 @@ def test_create_public_project_returns_error_for_duplicate_project_url():
     assert response_data["message"] == "You already added this project URL"
 
 
+def test_create_public_project_returns_plan_gate_error_when_free_limit_reached():
+    request = SimpleNamespace(auth=build_profile(can_create_project=False, is_on_free_plan=True))
+
+    project_filter_mock = Mock()
+    project_filter_mock.exists.return_value = False
+
+    with patch("core.public_api.views.get_verified_email_gate_error", return_value=None):
+        with patch(
+            "core.public_api.views.Project.objects.filter",
+            return_value=project_filter_mock,
+        ):
+            response_status_code, response_data = create_public_project(
+                request,
+                PublicProjectIn(url="https://example.com", source="public_api"),
+            )
+
+    assert response_status_code == 403
+    assert response_data["code"] == "FREE_PLAN_PROJECT_LIMIT_REACHED"
+    assert "Upgrade to Pro" in response_data["message"]
+
+
 def test_create_public_project_returns_success():
     project_mock = Mock()
     project_mock.id = 10
@@ -344,8 +365,10 @@ def test_configure_content_automation_returns_plan_error_for_free_profile():
             data=PublicContentAutomationIn(endpoint_url="https://example.com/publish"),
         )
 
-    assert response_status_code == 400
+    assert response_status_code == 403
+    assert response_data["code"] == "PRO_PLAN_REQUIRED_CONTENT_AUTOMATION"
     assert "Pro plan" in response_data["message"]
+    assert "upgrade_url" in response_data
 
 
 def test_configure_content_automation_returns_success_for_pro_profile():
@@ -556,6 +579,29 @@ def test_create_public_title_suggestions_passes_count_and_seed_guidance():
     )
 
 
+def test_create_public_title_suggestions_returns_plan_gate_error_when_limit_reached():
+    profile = build_profile(
+        can_generate_title_suggestions=False,
+        title_suggestion_limit=10,
+        number_of_title_suggestions_this_month=10,
+    )
+    request = SimpleNamespace(auth=profile)
+    project = Mock(id=10)
+    project_filter = Mock()
+    project_filter.first.return_value = project
+
+    with patch("core.public_api.views.Project.objects.filter", return_value=project_filter):
+        response_status_code, response_data = create_public_title_suggestions(
+            request,
+            project_id=project.id,
+            data=PublicTitleSuggestionCreateIn(count=2),
+        )
+
+    assert response_status_code == 403
+    assert response_data["code"] == "FREE_PLAN_TITLE_SUGGESTION_LIMIT_REACHED"
+    assert "Upgrade to Pro" in response_data["message"]
+
+
 def _build_project_keyword(*, keyword_id: int, project_keyword_id: int, keyword_text: str):
     keyword = Mock()
     keyword.id = keyword_id
@@ -645,6 +691,27 @@ def test_get_public_keyword_returns_keyword_details():
     assert response_data["status"] == "success"
     assert response_data["keyword"]["id"] == 4
     assert response_data["keyword"]["project_keyword_id"] == 44
+
+
+def test_create_public_keyword_returns_plan_gate_error_for_free_profile():
+    request = SimpleNamespace(
+        auth=build_profile(can_add_keywords=False, is_on_free_plan=True)
+    )
+    project = Mock(id=10)
+    project_filter = Mock()
+    project_filter.first.return_value = project
+
+    with patch("core.public_api.views.get_verified_email_gate_error", return_value=None):
+        with patch("core.public_api.views.Project.objects.filter", return_value=project_filter):
+            response_status_code, response_data = create_public_keyword(
+                request,
+                project_id=project.id,
+                data=PublicKeywordCreateIn(keyword_text="automation"),
+            )
+
+    assert response_status_code == 403
+    assert response_data["code"] == "PRO_PLAN_REQUIRED_KEYWORD_ADDITION"
+    assert "Upgrade to Pro" in response_data["message"]
 
 
 def test_create_public_keyword_returns_error_for_blank_text():
@@ -802,6 +869,25 @@ def test_create_public_competitor_returns_error_for_invalid_url_scheme():
     assert response_data["message"] == "Competitor URL must start with http:// or https://"
 
 
+def test_create_public_competitor_returns_plan_gate_error_when_limit_reached():
+    profile = build_profile(can_add_competitors=False, product_name="Free")
+    request = SimpleNamespace(auth=profile)
+    project = Mock(id=10)
+    project_filter = Mock()
+    project_filter.first.return_value = project
+
+    with patch("core.public_api.views.get_verified_email_gate_error", return_value=None):
+        with patch("core.public_api.views.Project.objects.filter", return_value=project_filter):
+            response_status_code, response_data = create_public_competitor(
+                request,
+                project_id=project.id,
+                data=PublicCompetitorCreateIn(url="https://competitor.com", analyze_now=False),
+            )
+
+    assert response_status_code == 403
+    assert response_data["code"] == "PLAN_COMPETITOR_LIMIT_REACHED"
+
+
 def test_create_public_competitor_returns_existing_competitor_when_duplicate():
     profile = build_profile(can_add_competitors=True)
     request = SimpleNamespace(auth=profile)
@@ -877,6 +963,30 @@ def _build_generated_post(*, post_id: int, title_suggestion_id: int | None = Non
     post.title_suggestion_id = title_suggestion_id
     post.save = Mock()
     return post
+
+
+def test_generate_public_blog_post_returns_plan_gate_error_when_limit_reached():
+    profile = build_profile(
+        can_generate_blog_posts=False,
+        blog_post_generation_limit=3,
+        number_of_generated_blog_posts_this_month=3,
+    )
+    request = SimpleNamespace(auth=profile)
+    project = Mock(id=10)
+
+    project_filter = Mock()
+    project_filter.first.return_value = project
+
+    with patch("core.public_api.views.get_verified_email_gate_error", return_value=None):
+        with patch("core.public_api.views.Project.objects.filter", return_value=project_filter):
+            response_status_code, response_data = generate_public_blog_post(
+                request,
+                project_id=project.id,
+                data=PublicBlogPostGenerateIn(title_suggestion_id=50),
+            )
+
+    assert response_status_code == 403
+    assert response_data["code"] == "FREE_PLAN_BLOG_POST_LIMIT_REACHED"
 
 
 def test_generate_public_blog_post_from_title_suggestion():

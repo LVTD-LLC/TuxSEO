@@ -4,7 +4,9 @@ from pydantic import Field
 
 class PublicAPIErrorOut(Schema):
     status: str = "error"
+    code: str | None = None
     message: str
+    upgrade_url: str | None = None
 
 
 class PublicAccountOut(Schema):
