@@ -103,6 +103,12 @@ class PublicPaginationOut(Schema):
     total: int
 
 
+class PublicProjectListOut(Schema):
+    status: str
+    projects: list[PublicProjectOut] = []
+    pagination: PublicPaginationOut
+
+
 class PublicTitleSuggestionListOut(Schema):
     status: str
     suggestions: list[PublicTitleSuggestionOut] = []
