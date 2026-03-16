@@ -295,3 +295,50 @@ class PublicBlogPostPublishOut(Schema):
     status: str
     message: str = ""
     post: PublicBlogPostOut | None = None
+
+
+class PublicExecutionJobCreateIn(Schema):
+    operation: str
+    title_suggestion_id: int | None = None
+
+
+class PublicExecutionJobOut(Schema):
+    id: int
+    project_id: int
+    operation: str
+    status: str
+    idempotency_key: str
+    payload: dict = {}
+    result: dict = {}
+    error_code: str = ""
+    error_message: str = ""
+    queued_at: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+    canceled_at: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class PublicExecutionJobCreateOut(Schema):
+    status: str
+    message: str = ""
+    created: bool = True
+    job: PublicExecutionJobOut | None = None
+
+
+class PublicExecutionJobGetOut(Schema):
+    status: str
+    job: PublicExecutionJobOut | None = None
+
+
+class PublicExecutionJobListOut(Schema):
+    status: str
+    jobs: list[PublicExecutionJobOut] = []
+    pagination: PublicPaginationOut
+
+
+class PublicExecutionJobActionOut(Schema):
+    status: str
+    message: str = ""
+    job: PublicExecutionJobOut | None = None

@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
@@ -10,6 +11,7 @@ from core.public_api.schemas import (
     PublicBlogPostGenerateIn,
     PublicCompetitorCreateIn,
     PublicContentAutomationIn,
+    PublicExecutionJobCreateIn,
     PublicKeywordCreateIn,
     PublicProjectIn,
     PublicProjectPageCreateIn,
@@ -17,8 +19,10 @@ from core.public_api.schemas import (
     PublicTitleSuggestionCreateIn,
 )
 from core.public_api.views import (
+    cancel_public_execution_job,
     configure_content_automation,
     create_public_competitor,
+    create_public_execution_job,
     create_public_keyword,
     create_public_project,
     create_public_project_page,
@@ -28,16 +32,19 @@ from core.public_api.views import (
     get_public_blog_post,
     get_public_competitor,
     get_public_keyword,
+    get_public_execution_job,
     get_public_project,
     get_public_title_suggestion,
     list_public_blog_posts,
     list_public_competitors,
+    list_public_execution_jobs,
     list_public_keywords,
     list_public_project_pages,
     list_public_projects,
     list_public_title_suggestions,
     publish_public_blog_post,
     public_api,
+    retry_public_execution_job,
     update_public_project,
 )
 
@@ -1217,6 +1224,143 @@ def test_create_public_project_page_creates_and_analyzes_when_enabled():
     page_mock.analyze_content.assert_called_once()
 
 
+def _build_execution_job(*, job_id: int, project_id: int, status: str = "QUEUED"):
+    job = Mock(
+        id=job_id,
+        project_id=project_id,
+        operation="GENERATE_BLOG_POST",
+        status=status,
+        idempotency_key="idem-1",
+        payload={"title_suggestion_id": 5},
+        result={},
+        error_code="",
+        error_message="",
+        queued_at=None,
+        started_at=None,
+        completed_at=None,
+        canceled_at=None,
+        created_at=SimpleNamespace(isoformat=Mock(return_value="2026-03-15T00:00:00+00:00")),
+        updated_at=SimpleNamespace(isoformat=Mock(return_value="2026-03-15T00:00:00+00:00")),
+    )
+    job.save = Mock()
+    return job
+
+
+def test_create_public_execution_job_requires_idempotency_key_header():
+    request = SimpleNamespace(auth=build_profile(), headers={})
+    project = Mock(id=10)
+    project_filter = Mock()
+    project_filter.first.return_value = project
+
+    with patch("core.public_api.views.Project.objects.filter", return_value=project_filter):
+        response_status, response = create_public_execution_job(
+            request,
+            project_id=project.id,
+            data=PublicExecutionJobCreateIn(operation="GENERATE_BLOG_POST", title_suggestion_id=5),
+        )
+
+    assert response_status == 400
+    assert response["code"] == "MISSING_IDEMPOTENCY_KEY"
+
+
+def test_create_public_execution_job_creates_job_and_queues_worker():
+    request = SimpleNamespace(auth=build_profile(), headers={"Idempotency-Key": "idem-1"})
+    project = Mock(id=10)
+    project_filter = Mock()
+    project_filter.first.return_value = project
+
+    suggestion_filter = Mock()
+    suggestion_filter.first.return_value = Mock(id=5)
+
+    job = _build_execution_job(job_id=101, project_id=project.id)
+
+    with patch("core.public_api.views.Project.objects.filter", return_value=project_filter):
+        with patch(
+            "core.public_api.views.BlogPostTitleSuggestion.objects.filter",
+            return_value=suggestion_filter,
+        ):
+            with patch(
+                "core.public_api.views.AgentExecutionJob.objects.get_or_create",
+                return_value=(job, True),
+            ):
+                with patch("core.public_api.views.transaction.atomic", return_value=nullcontext()):
+                    with patch("core.public_api.views.async_task", return_value="task-123") as mock_async:
+                        response = create_public_execution_job(
+                            request,
+                            project_id=project.id,
+                            data=PublicExecutionJobCreateIn(
+                                operation="GENERATE_BLOG_POST",
+                                title_suggestion_id=5,
+                            ),
+                        )
+
+    assert response["status"] == "success"
+    assert response["created"] is True
+    mock_async.assert_called_once()
+
+
+def test_retry_public_execution_job_requires_failed_or_canceled_state():
+    request = SimpleNamespace(auth=build_profile(), headers={"Idempotency-Key": "retry-1"})
+    job = _build_execution_job(job_id=201, project_id=10, status="SUCCEEDED")
+
+    job_filter = Mock()
+    job_filter.first.return_value = job
+
+    with patch("core.public_api.views.transaction.atomic", return_value=nullcontext()):
+        with patch("core.public_api.views.AgentExecutionJob.objects.filter", return_value=job_filter):
+            response_status, response = retry_public_execution_job(request, job_id=job.id)
+
+    assert response_status == 400
+    assert response["code"] == "RETRY_NOT_ALLOWED"
+
+
+def test_list_public_execution_jobs_returns_paginated_jobs():
+    request = SimpleNamespace(auth=build_profile())
+    job = _build_execution_job(job_id=301, project_id=10)
+
+    query = MagicMock()
+    query.filter.return_value = query
+    query.order_by.return_value = query
+    query.count.return_value = 1
+    query.__getitem__.return_value = [job]
+
+    with patch("core.public_api.views.AgentExecutionJob.objects.filter", return_value=query):
+        response = list_public_execution_jobs(request, page=1, page_size=20)
+
+    assert response["status"] == "success"
+    assert response["pagination"]["total"] == 1
+    assert response["jobs"][0]["id"] == 301
+
+
+def test_get_public_execution_job_returns_not_found_for_other_profile():
+    request = SimpleNamespace(auth=build_profile())
+
+    job_filter = Mock()
+    job_filter.first.return_value = None
+
+    with patch("core.public_api.views.AgentExecutionJob.objects.filter", return_value=job_filter):
+        response_status, response = get_public_execution_job(request, job_id=404)
+
+    assert response_status == 404
+    assert response["code"] == "JOB_NOT_FOUND"
+
+
+def test_cancel_public_execution_job_returns_error_for_terminal_job():
+    request = SimpleNamespace(auth=build_profile())
+    terminal_job = _build_execution_job(job_id=501, project_id=10, status="FAILED")
+
+    query = Mock()
+    query.filter.return_value = query
+    query.first.return_value = terminal_job
+
+    with patch("core.public_api.views.transaction.atomic", return_value=nullcontext()):
+        with patch("core.public_api.views.AgentExecutionJob.objects.select_for_update", return_value=query):
+            response_status, response = cancel_public_execution_job(request, job_id=terminal_job.id)
+
+    assert response_status == 400
+    assert response["code"] == "JOB_ALREADY_TERMINAL"
+
+
 def test_public_openapi_includes_public_routes_only():
     openapi_schema = public_api.get_openapi_schema()
     schema_paths = openapi_schema["paths"]
@@ -1233,6 +1377,11 @@ def test_public_openapi_includes_public_routes_only():
     assert "/public-api/projects/{project_id}/competitors/{competitor_id}" in schema_paths
     assert "/public-api/projects/{project_id}/pages" in schema_paths
     assert "/public-api/projects/{project_id}/pages/{page_id}" in schema_paths
+    assert "/public-api/projects/{project_id}/executions" in schema_paths
+    assert "/public-api/executions" in schema_paths
+    assert "/public-api/executions/{job_id}" in schema_paths
+    assert "/public-api/executions/{job_id}/cancel" in schema_paths
+    assert "/public-api/executions/{job_id}/retry" in schema_paths
     assert "/public-api/projects/{project_id}/blog-posts/generate" in schema_paths
     assert "/public-api/projects/{project_id}/blog-posts" in schema_paths
     assert "/public-api/projects/{project_id}/blog-posts/{blog_post_id}" in schema_paths
@@ -1255,6 +1404,10 @@ def test_public_openapi_groups_endpoints_by_functional_tags():
     assert paths["/public-api/projects/{project_id}/keywords"]["get"]["tags"] == ["Keywords"]
     assert paths["/public-api/projects/{project_id}/competitors"]["get"]["tags"] == ["Competitors"]
     assert paths["/public-api/projects/{project_id}/pages"]["get"]["tags"] == ["Project Pages"]
+    assert paths["/public-api/projects/{project_id}/executions"]["post"]["tags"] == [
+        "Execution Jobs"
+    ]
+    assert paths["/public-api/executions"]["get"]["tags"] == ["Execution Jobs"]
     assert paths["/public-api/projects/{project_id}/blog-posts"]["get"]["tags"] == [
         "Blog Posts"
     ]

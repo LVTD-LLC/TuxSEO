@@ -114,6 +114,7 @@ def test_docs_navigation_places_resource_api_pages_in_api_section():
         "authorization",
         "account",
         "projects",
+        "execution-jobs",
         "title-suggestions",
         "keywords",
         "competitors",
@@ -287,6 +288,16 @@ def test_docs_root_with_trailing_slash_redirects_to_docs_introduction(client):
                 "POST /public-api/projects",
                 "GET /public-api/projects/{project_id}",
                 "PATCH /public-api/projects/{project_id}",
+            ],
+        ),
+        (
+            "execution-jobs",
+            [
+                "POST /public-api/projects/{project_id}/executions",
+                "GET /public-api/executions",
+                "GET /public-api/executions/{job_id}",
+                "POST /public-api/executions/{job_id}/cancel",
+                "POST /public-api/executions/{job_id}/retry",
             ],
         ),
         (

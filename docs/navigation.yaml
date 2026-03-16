@@ -43,6 +43,7 @@ navigation:
     - authorization
     - account
     - projects
+    - execution-jobs
     - title-suggestions
     - keywords
     - competitors

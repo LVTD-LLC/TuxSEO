@@ -46,6 +46,8 @@ from core.choices import (
     CompetitorPostGenerationStatus,
     ContentType,
     EmailType,
+    ExecutionJobOperation,
+    ExecutionJobStatus,
     KeywordDataSource,
     Language,
     OGImageStyle,
@@ -1877,6 +1879,57 @@ class Competitor(BaseModel):
         self.save(update_fields=["blog_post"])
 
         return self.blog_post
+
+
+class AgentExecutionJob(BaseModel):
+    profile = models.ForeignKey(
+        Profile,
+        on_delete=models.CASCADE,
+        related_name="agent_execution_jobs",
+    )
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="agent_execution_jobs",
+    )
+    operation = models.CharField(
+        max_length=64,
+        choices=ExecutionJobOperation.choices,
+    )
+    status = models.CharField(
+        max_length=32,
+        choices=ExecutionJobStatus.choices,
+        default=ExecutionJobStatus.QUEUED,
+    )
+    idempotency_key = models.CharField(max_length=255)
+    payload = models.JSONField(default=dict, blank=True)
+    result = models.JSONField(default=dict, blank=True)
+    error_code = models.CharField(max_length=128, blank=True, default="")
+    error_message = models.TextField(blank=True, default="")
+    queued_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    canceled_at = models.DateTimeField(null=True, blank=True)
+    canceled_reason = models.TextField(blank=True, default="")
+    retry_of = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="retry_jobs",
+    )
+    queue_task_id = models.CharField(max_length=255, blank=True, default="")
+
+    class Meta:
+        unique_together = ("profile", "operation", "idempotency_key")
+        indexes = [
+            models.Index(fields=["profile", "status", "created_at"]),
+            models.Index(fields=["project", "status", "created_at"]),
+            models.Index(fields=["operation", "status", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"Job {self.id} {self.operation} ({self.status})"
 
 
 class Keyword(BaseModel):

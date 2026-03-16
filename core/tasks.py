@@ -6,6 +6,7 @@ from urllib.parse import unquote, urlencode, urljoin, urlparse
 import posthog
 import requests
 from django.conf import settings
+from django.db import transaction
 from django.utils import timezone
 from django_q.tasks import async_task
 
@@ -19,9 +20,12 @@ from core.choices import (
     CompetitorPostGenerationStatus,
     ContentType,
     EmailType,
+    ExecutionJobOperation,
+    ExecutionJobStatus,
     ProjectPageSource,
 )
 from core.models import (
+    AgentExecutionJob,
     BlogPostTitleSuggestion,
     Competitor,
     EmailSent,
@@ -2125,3 +2129,92 @@ def generate_blog_post_content(suggestion_id: int, send_email: bool = True):
             project_id=suggestion.project.id if suggestion.project else None,
         )
         return f"Unexpected error: {str(error)}"
+
+
+def run_agent_execution_job(job_id: int):
+    try:
+        with transaction.atomic():
+            job = AgentExecutionJob.objects.select_for_update().select_related("project", "profile").get(
+                id=job_id
+            )
+
+            if job.status == ExecutionJobStatus.CANCELED:
+                logger.info("[Execution Job] Skipping canceled job", job_id=job.id)
+                return f"Job {job.id} canceled before start"
+
+            if job.status in {ExecutionJobStatus.SUCCEEDED, ExecutionJobStatus.FAILED}:
+                logger.info(
+                    "[Execution Job] Job already terminal",
+                    job_id=job.id,
+                    status=job.status,
+                )
+                return f"Job {job.id} already {job.status}"
+
+            job.status = ExecutionJobStatus.RUNNING
+            job.started_at = job.started_at or timezone.now()
+            job.error_code = ""
+            job.error_message = ""
+            job.save(update_fields=["status", "started_at", "error_code", "error_message", "updated_at"])
+
+        if job.operation == ExecutionJobOperation.GENERATE_BLOG_POST:
+            title_suggestion_id = int(job.payload.get("title_suggestion_id"))
+            suggestion = BlogPostTitleSuggestion.objects.select_related("project", "project__profile").get(
+                id=title_suggestion_id,
+                project=job.project,
+            )
+
+            blog_post = suggestion.generate_content(content_type=suggestion.content_type)
+
+            with transaction.atomic():
+                latest_job = AgentExecutionJob.objects.select_for_update().get(id=job.id)
+                if latest_job.status == ExecutionJobStatus.CANCELED:
+                    logger.warning(
+                        "[Execution Job] Job canceled while running",
+                        job_id=latest_job.id,
+                    )
+                    return f"Job {latest_job.id} canceled while running"
+
+                latest_job.status = ExecutionJobStatus.SUCCEEDED
+                latest_job.completed_at = timezone.now()
+                latest_job.result = {
+                    "blog_post_id": blog_post.id,
+                    "title_suggestion_id": suggestion.id,
+                }
+                latest_job.save(update_fields=["status", "completed_at", "result", "updated_at"])
+
+            return f"Job {job.id} succeeded"
+
+        with transaction.atomic():
+            latest_job = AgentExecutionJob.objects.select_for_update().get(id=job.id)
+            latest_job.status = ExecutionJobStatus.FAILED
+            latest_job.completed_at = timezone.now()
+            latest_job.error_code = "UNSUPPORTED_OPERATION"
+            latest_job.error_message = f"Unsupported operation: {job.operation}"
+            latest_job.save(
+                update_fields=["status", "completed_at", "error_code", "error_message", "updated_at"]
+            )
+
+        return f"Job {job.id} failed: unsupported operation"
+
+    except BlogPostTitleSuggestion.DoesNotExist:
+        AgentExecutionJob.objects.filter(id=job_id).update(
+            status=ExecutionJobStatus.FAILED,
+            completed_at=timezone.now(),
+            error_code="TITLE_SUGGESTION_NOT_FOUND",
+            error_message="Title suggestion not found for this project",
+        )
+        return f"Job {job_id} failed: title suggestion missing"
+    except Exception as error:
+        AgentExecutionJob.objects.filter(id=job_id).update(
+            status=ExecutionJobStatus.FAILED,
+            completed_at=timezone.now(),
+            error_code="EXECUTION_FAILED",
+            error_message=str(error)[:2000],
+        )
+        logger.error(
+            "[Execution Job] Failed",
+            job_id=job_id,
+            error=str(error),
+            exc_info=True,
+        )
+        return f"Job {job_id} failed: {str(error)}"
