@@ -17,9 +17,13 @@ from core.models import (
 from core.outcome_attribution import (
     backfill_project_outcome_attribution,
     get_project_outcome_attribution_report,
+    get_project_reporting_snapshot,
     record_outcome_attribution_event,
 )
-from core.public_api.views import get_public_project_outcome_attribution
+from core.public_api.views import (
+    get_public_project_outcome_attribution,
+    get_public_project_reporting_snapshot,
+)
 
 
 @pytest.mark.django_db
@@ -138,3 +142,74 @@ def test_public_outcome_attribution_endpoint_returns_project_report():
     assert response["status"] == "success"
     assert response["project_id"] == project.id
     assert response["event_count"] >= 3
+
+
+@pytest.mark.django_db
+def test_reporting_snapshot_flags_partial_coverage_and_contribution_split():
+    user = User.objects.create_user(
+        username="attrib-reporting",
+        email="attrib-reporting@example.com",
+        password="pass",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        name="Reporting",
+        url="https://reporting.example.com",
+    )
+
+    now = timezone.now()
+    for index in range(3):
+        record_outcome_attribution_event(
+            project=project,
+            profile=user.profile,
+            event_name="content.blog_post_published",
+            source_model="TestSource",
+            source_object_id=index,
+            occurred_at=now - timedelta(days=index),
+            emit_analytics=False,
+        )
+
+    snapshot = get_project_reporting_snapshot(
+        project=project,
+        start_date=(now - timedelta(days=6)).date(),
+        end_date=now.date(),
+    )
+
+    assert snapshot["project_id"] == project.id
+    assert snapshot["coverage"]["status"] == "partial"
+    assert "links_placed" in snapshot["coverage"]["missing_metrics"]
+    assert "pages_analyzed" in snapshot["coverage"]["missing_metrics"]
+    assert any(item["dimension"] == "content" for item in snapshot["contribution_split"])
+    assert len(snapshot["trend"]) == 7
+
+
+@pytest.mark.django_db
+def test_public_reporting_snapshot_endpoint_returns_snapshot_payload():
+    user = User.objects.create_user(
+        username="attrib-reporting-api",
+        email="attrib-reporting-api@example.com",
+        password="pass",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        name="Reporting API",
+        url="https://reporting-api.example.com",
+    )
+
+    OutcomeAttributionRollup.objects.create(
+        project=project,
+        window_start=timezone.now().date(),
+        granularity="DAY",
+        dimension="distribution",
+        outcome_metric="links_placed",
+        total_value=2,
+        event_count=2,
+    )
+
+    request = SimpleNamespace(auth=user.profile)
+    response = get_public_project_reporting_snapshot(request, project.id, days=30)
+
+    assert response["status"] == "success"
+    assert response["project_id"] == project.id
+    assert "ai_visibility" in response
+    assert "contribution_split" in response

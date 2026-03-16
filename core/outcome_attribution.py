@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import posthog
 from django.conf import settings
@@ -34,6 +34,36 @@ OUTCOME_ATTRIBUTION_EVENTS = {
         "outcome_metric": "pages_analyzed",
     },
 }
+
+REPORTING_METRIC_DEFINITIONS = {
+    "blog_posts_generated": {
+        "label": "Drafts generated",
+        "tooltip": "Count of generated blog post drafts produced by TuxSEO workflows.",
+        "definition": "Total generated draft outcomes linked through content.blog_post_generated events.",
+    },
+    "blog_posts_published": {
+        "label": "Posts published",
+        "tooltip": "Count of posts successfully published from TuxSEO workflows.",
+        "definition": "Total publish outcomes linked through content.blog_post_published events.",
+    },
+    "links_placed": {
+        "label": "Links placed",
+        "tooltip": "Count of link placements that can support citation and referral discovery.",
+        "definition": "Total distribution outcomes linked through distribution.link_placement events.",
+    },
+    "pages_analyzed": {
+        "label": "Pages analyzed",
+        "tooltip": "Count of project pages analyzed for optimization and technical readiness.",
+        "definition": "Total technical outcomes linked through technical.page_analyzed events.",
+    },
+}
+
+AI_VISIBILITY_METRICS = {"blog_posts_published", "links_placed"}
+EXPECTED_COVERAGE_METRICS = {"blog_posts_published", "links_placed", "pages_analyzed"}
+
+EVENT_NAMES_BY_METRIC: dict[str, list[str]] = {}
+for _event_name, _event_definition in OUTCOME_ATTRIBUTION_EVENTS.items():
+    EVENT_NAMES_BY_METRIC.setdefault(_event_definition["outcome_metric"], []).append(_event_name)
 
 
 def _normalize_occurred_at(value: datetime | None) -> datetime:
@@ -240,6 +270,184 @@ def get_project_outcome_attribution_report(
             }
             for row in top_events
         ],
+        "generated_in_ms": generated_in_ms,
+    }
+
+
+def _iter_dates(start_date: date, end_date: date):
+    cursor = start_date
+    while cursor <= end_date:
+        yield cursor
+        cursor += timedelta(days=1)
+
+
+def _coverage_status(coverage_ratio: float) -> str:
+    if coverage_ratio >= 1.0:
+        return "full"
+    if coverage_ratio >= 0.5:
+        return "partial"
+    return "low"
+
+
+def _confidence_label(*, coverage_ratio: float, event_count: int) -> str:
+    if coverage_ratio >= 1.0 and event_count >= 8:
+        return "high"
+    if coverage_ratio >= 0.5 and event_count >= 3:
+        return "medium"
+    return "low"
+
+
+def get_project_reporting_snapshot(
+    *,
+    project: Project,
+    start_date: date,
+    end_date: date,
+) -> dict:
+    timer_start = time.perf_counter()
+
+    if start_date > end_date:
+        raise ValueError("start_date must be <= end_date")
+
+    rollup_rows = list(
+        OutcomeAttributionRollup.objects.filter(
+            project=project,
+            granularity=ROLLUP_GRANULARITY_DAY,
+            window_start__gte=start_date,
+            window_start__lte=end_date,
+        )
+        .values("window_start", "dimension", "outcome_metric")
+        .annotate(total_value=Sum("total_value"), event_count=Sum("event_count"))
+    )
+
+    daily_values = {
+        day.isoformat(): {
+            "date": day.isoformat(),
+            "seo_outcome_value": 0.0,
+            "ai_visibility_signal_value": 0.0,
+            "event_count": 0,
+        }
+        for day in _iter_dates(start_date, end_date)
+    }
+    metric_totals: dict[str, dict] = {}
+    dimension_totals: dict[str, dict] = {}
+
+    total_value = 0.0
+    total_event_count = 0
+
+    for row in rollup_rows:
+        day_key = row["window_start"].isoformat()
+        metric = row["outcome_metric"]
+        dimension = row["dimension"]
+        metric_value = float(row["total_value"] or 0.0)
+        metric_events = int(row["event_count"] or 0)
+
+        daily_values[day_key]["seo_outcome_value"] += metric_value
+        daily_values[day_key]["event_count"] += metric_events
+
+        if metric in AI_VISIBILITY_METRICS:
+            daily_values[day_key]["ai_visibility_signal_value"] += metric_value
+
+        metric_bucket = metric_totals.setdefault(
+            metric,
+            {
+                "metric": metric,
+                "total_value": 0.0,
+                "event_count": 0,
+                "source_events": EVENT_NAMES_BY_METRIC.get(metric, []),
+            },
+        )
+        metric_bucket["total_value"] += metric_value
+        metric_bucket["event_count"] += metric_events
+
+        dimension_bucket = dimension_totals.setdefault(
+            dimension,
+            {
+                "dimension": dimension,
+                "total_value": 0.0,
+                "event_count": 0,
+            },
+        )
+        dimension_bucket["total_value"] += metric_value
+        dimension_bucket["event_count"] += metric_events
+
+        total_value += metric_value
+        total_event_count += metric_events
+
+    trend = [daily_values[day.isoformat()] for day in _iter_dates(start_date, end_date)]
+
+    contribution_split = []
+    for dimension, totals in sorted(dimension_totals.items(), key=lambda row: row[0]):
+        share_pct = (totals["total_value"] / total_value * 100.0) if total_value > 0 else 0.0
+        contribution_split.append(
+            {
+                "dimension": dimension,
+                "total_value": totals["total_value"],
+                "event_count": totals["event_count"],
+                "share_pct": round(share_pct, 2),
+            }
+        )
+
+    observed_metrics = set(metric_totals.keys())
+    coverage_ratio = (
+        len(observed_metrics.intersection(EXPECTED_COVERAGE_METRICS)) / len(EXPECTED_COVERAGE_METRICS)
+    )
+    coverage_status = _coverage_status(coverage_ratio)
+    missing_metrics = sorted(EXPECTED_COVERAGE_METRICS.difference(observed_metrics))
+
+    ai_visibility_value = sum(
+        metric_totals.get(metric, {}).get("total_value", 0.0) for metric in AI_VISIBILITY_METRICS
+    )
+    ai_visibility_events = sum(
+        metric_totals.get(metric, {}).get("event_count", 0) for metric in AI_VISIBILITY_METRICS
+    )
+
+    metric_definitions = []
+    for metric_name, definition in sorted(REPORTING_METRIC_DEFINITIONS.items()):
+        metric_definitions.append(
+            {
+                "metric": metric_name,
+                "label": definition["label"],
+                "tooltip": definition["tooltip"],
+                "definition": definition["definition"],
+                "source_events": EVENT_NAMES_BY_METRIC.get(metric_name, []),
+                "is_observed": metric_name in observed_metrics,
+            }
+        )
+
+    generated_in_ms = int((time.perf_counter() - timer_start) * 1000)
+
+    return {
+        "project_id": project.id,
+        "schema_version": OUTCOME_ATTRIBUTION_SCHEMA_VERSION,
+        "window_start": start_date.isoformat(),
+        "window_end": end_date.isoformat(),
+        "total_value": total_value,
+        "event_count": total_event_count,
+        "seo_outcomes": {
+            "total_value": total_value,
+            "event_count": total_event_count,
+            "metrics": sorted(metric_totals.values(), key=lambda row: row["metric"]),
+        },
+        "ai_visibility": {
+            "signal_value": ai_visibility_value,
+            "event_count": ai_visibility_events,
+            "metrics": sorted(AI_VISIBILITY_METRICS),
+        },
+        "trend": trend,
+        "contribution_split": contribution_split,
+        "coverage": {
+            "ratio": round(coverage_ratio, 2),
+            "status": coverage_status,
+            "missing_metrics": missing_metrics,
+            "note": (
+                "Snapshot uses available attribution events. Missing metrics lower confidence and can understate impact."
+            ),
+        },
+        "confidence": {
+            "label": _confidence_label(coverage_ratio=coverage_ratio, event_count=total_event_count),
+            "reason": "Confidence is based on event coverage and sample size for the selected window.",
+        },
+        "metric_definitions": metric_definitions,
         "generated_in_ms": generated_in_ms,
     }
 

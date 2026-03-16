@@ -10,6 +10,7 @@ from core.models import (
     Competitor,
     GeneratedBlogPost,
     Keyword,
+    OutcomeAttributionRollup,
     Project,
     ProjectKeyword,
     ProjectPage,
@@ -209,3 +210,30 @@ def test_project_home_view_renders_copyable_api_and_prompt_snippets(client):
     assert "Settings → API Access" in content
     assert content.count('data-controller="copy"') >= 2
     assert content.count("click->copy#copy") >= 2
+
+
+@pytest.mark.django_db
+def test_project_home_view_renders_reporting_snapshot_card(client):
+    user, project = create_user_with_project(
+        username="project-home-reporting-user",
+        project_url="https://reporting-home.example.com",
+    )
+    OutcomeAttributionRollup.objects.create(
+        project=project,
+        window_start=timezone.now().date(),
+        granularity="DAY",
+        dimension="content",
+        outcome_metric="blog_posts_published",
+        total_value=4,
+        event_count=4,
+    )
+
+    client.force_login(user)
+    response = client.get(reverse("project_home", kwargs={"pk": project.id}))
+
+    assert response.status_code == 200
+    assert "reporting_snapshot_state" in response.context
+    content = response.content.decode()
+    assert "AI Visibility + SEO Outcome Snapshot (30d)" in content
+    assert "Contribution split" in content
+    assert "Metric definitions" in content
