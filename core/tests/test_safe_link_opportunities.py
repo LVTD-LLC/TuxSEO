@@ -8,7 +8,6 @@ from core.models import (
     BlogPostTitleSuggestion,
     GeneratedBlogPost,
     LinkOpportunityAuditLog,
-    Profile,
     Project,
     ProjectPage,
 )
@@ -24,9 +23,8 @@ def _vec(*pairs):
 @pytest.fixture
 def blog_post_with_title_suggestion(db):
     user = User.objects.create_user(username="safe-links", password="x")
-    profile = Profile.objects.create(user=user)
     source_project = Project.objects.create(
-        profile=profile,
+        profile=user.profile,
         url="https://source.example.com",
         name="Source",
         particiate_in_link_exchange=True,
