@@ -9,7 +9,7 @@ author: Rasul Kireev
 
 ## Required configuration
 
-Before deploying, you need to configure environment variables. See the [Environment Variables](/api/docs/deployment/environment-variables/) guide for detailed information about all configuration options.
+Before deploying, you need to configure environment variables. See the [Environment Variables](/docs/deployment/environment-variables/) guide for detailed information about all configuration options.
 
 The minimum required variables are:
 

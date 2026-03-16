@@ -30,7 +30,6 @@ from core.views import (
     skill_markdown_view,
     trigger_error,
 )
-from docs.views import docs_page_view
 from tuxseo.sitemaps import sitemaps
 
 urlpatterns = [
@@ -64,11 +63,10 @@ urlpatterns = [
         RedirectView.as_view(url="/api/openapi.json", permanent=False),
         name="legacy_public_api_openapi",
     ),
-    path("api/docs/<str:category>/<str:page>/", docs_page_view, name="api_docs_page"),
     path(
-        "docs/<str:category>/<str:page>/",
-        RedirectView.as_view(url="/api/docs/%(category)s/%(page)s/", permanent=False),
-        name="legacy_docs_page",
+        "api/docs/<str:category>/<str:page>/",
+        RedirectView.as_view(url="/docs/%(category)s/%(page)s/", permanent=False),
+        name="legacy_api_docs_page",
     ),
     path(
         "docs",

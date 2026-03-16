@@ -13,4 +13,4 @@ TuxSEO is an AI-powered SEO blog writer that helps you create high-quality, sear
 
 ## Next Steps
 
-Ready to [get started](/api/docs/getting-started/quickstart/)? Sign up for a free account and create your first project!
+Ready to [get started](/docs/getting-started/quickstart/)? Sign up for a free account and create your first project!
