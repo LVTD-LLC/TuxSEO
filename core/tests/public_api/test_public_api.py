@@ -1086,15 +1086,109 @@ def test_publish_public_blog_post_sets_posted_flag_when_submission_succeeds():
 
     with patch("core.public_api.views.Project.objects.filter", return_value=project_filter):
         with patch("core.public_api.views.GeneratedBlogPost.objects.filter", return_value=post_filter):
-            response_data = publish_public_blog_post(
-                request,
-                project_id=project.id,
-                blog_post_id=post.id,
-            )
+            with patch(
+                "core.public_api.views.evaluate_pre_publish_quality_gate",
+                return_value={
+                    "decision": "allow",
+                    "summary": "",
+                    "blocking_checks": [],
+                    "warning_checks": [],
+                    "checks": [],
+                    "aggregate_score": 0.9,
+                },
+            ):
+                response_data = publish_public_blog_post(
+                    request,
+                    project_id=project.id,
+                    blog_post_id=post.id,
+                )
 
     assert response_data["status"] == "success"
     assert response_data["post"]["posted"] is True
     post.save.assert_called_once()
+
+
+def test_publish_public_blog_post_blocks_when_quality_gate_fails():
+    request = SimpleNamespace(auth=build_profile())
+    project = Mock(id=10)
+    post = _build_generated_post(post_id=301)
+
+    project_filter = Mock()
+    project_filter.first.return_value = project
+
+    post_filter = Mock()
+    post_filter.first.return_value = post
+
+    with patch("core.public_api.views.Project.objects.filter", return_value=project_filter):
+        with patch("core.public_api.views.GeneratedBlogPost.objects.filter", return_value=post_filter):
+            with patch(
+                "core.public_api.views.evaluate_pre_publish_quality_gate",
+                return_value={
+                    "decision": "block",
+                    "summary": "Generated content is too short.",
+                    "blocking_checks": [
+                        {
+                            "severity": "block",
+                            "code": "CONTENT_TOO_SHORT",
+                            "message": "Generated content is too short.",
+                        }
+                    ],
+                    "warning_checks": [],
+                    "checks": [],
+                    "aggregate_score": 0.4,
+                },
+            ):
+                response_status_code, response_data = publish_public_blog_post(
+                    request,
+                    project_id=project.id,
+                    blog_post_id=post.id,
+                )
+
+    assert response_status_code == 400
+    assert response_data["message"].startswith("Publish blocked by quality gate:")
+    post.submit_blog_post_to_endpoint.assert_not_called()
+
+
+def test_publish_public_blog_post_allows_with_warnings():
+    request = SimpleNamespace(auth=build_profile())
+    project = Mock(id=10)
+    post = _build_generated_post(post_id=302)
+    post.submit_blog_post_to_endpoint.return_value = True
+
+    project_filter = Mock()
+    project_filter.first.return_value = project
+
+    post_filter = Mock()
+    post_filter.first.return_value = post
+
+    with patch("core.public_api.views.Project.objects.filter", return_value=project_filter):
+        with patch("core.public_api.views.GeneratedBlogPost.objects.filter", return_value=post_filter):
+            with patch(
+                "core.public_api.views.evaluate_pre_publish_quality_gate",
+                return_value={
+                    "decision": "warn",
+                    "summary": "Low quality score.",
+                    "blocking_checks": [],
+                    "warning_checks": [
+                        {
+                            "severity": "warn",
+                            "code": "LOW_QUALITY_SCORE",
+                            "message": "Low quality score.",
+                        }
+                    ],
+                    "checks": [],
+                    "aggregate_score": 0.6,
+                },
+            ):
+                response_data = publish_public_blog_post(
+                    request,
+                    project_id=project.id,
+                    blog_post_id=post.id,
+                )
+
+    assert response_data["status"] == "success"
+    assert "quality warnings" in response_data["message"]
+    assert response_data["post"]["posted"] is True
 
 
 def test_public_project_page_create_schema_requires_url_field():
