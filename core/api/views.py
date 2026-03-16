@@ -1650,6 +1650,22 @@ def post_generated_blog_post(request: HttpRequest, data: PostGeneratedBlogPostIn
         if generated_post.project and generated_post.project.profile != profile:
             return {"status": "error", "message": "Forbidden: You do not have access to this post."}
 
+        if generated_post.publish_approval_status != GeneratedBlogPost.ApprovalStatus.APPROVED:
+            generated_post.create_workflow_audit_event(
+                checkpoint="PUBLISH",
+                event_type="ACTION_BLOCKED",
+                actor_profile=profile,
+                decision=generated_post.publish_approval_status,
+                reason="awaiting_publish_approval",
+            )
+            return {
+                "status": "error",
+                "message": (
+                    "Publish blocked by approval checkpoint: "
+                    f"current_status={generated_post.publish_approval_status}"
+                ),
+            }
+
         quality_gate_result = evaluate_pre_publish_quality_gate(generated_post)
         if quality_gate_result["decision"] == "block":
             logger.warning(
@@ -1657,6 +1673,14 @@ def post_generated_blog_post(request: HttpRequest, data: PostGeneratedBlogPostIn
                 blog_post_id=blog_post_id,
                 profile_id=profile.id,
                 checks=quality_gate_result["blocking_checks"],
+            )
+            generated_post.create_workflow_audit_event(
+                checkpoint="PUBLISH",
+                event_type="QUALITY_GATE_BLOCKED",
+                actor_profile=profile,
+                decision="BLOCKED",
+                reason=quality_gate_result["summary"],
+                metadata={"blocking_checks": quality_gate_result["blocking_checks"]},
             )
             return {
                 "status": "error",
@@ -1679,13 +1703,29 @@ def post_generated_blog_post(request: HttpRequest, data: PostGeneratedBlogPostIn
             generated_post.save(update_fields=["posted", "date_posted"])
 
             if quality_gate_result["decision"] == "warn":
-                return {
-                    "status": "success",
-                    "message": f"Blog post published with quality warnings: {quality_gate_result['summary']}",
-                }
+                publish_message = (
+                    f"Blog post published with quality warnings: {quality_gate_result['summary']}"
+                )
+            else:
+                publish_message = "Blog post published!"
 
-            return {"status": "success", "message": "Blog post published!"}
+            generated_post.create_workflow_audit_event(
+                checkpoint="PUBLISH",
+                event_type="PUBLISHED",
+                actor_profile=profile,
+                decision="SUCCESS",
+                reason=publish_message,
+                metadata={"quality_gate_decision": quality_gate_result["decision"]},
+            )
+            return {"status": "success", "message": publish_message}
         else:
+            generated_post.create_workflow_audit_event(
+                checkpoint="PUBLISH",
+                event_type="PUBLISH_FAILED",
+                actor_profile=profile,
+                decision="FAILED",
+                reason="endpoint_submission_failed",
+            )
             return {"status": "error", "message": "Failed to post blog."}
     except GeneratedBlogPost.DoesNotExist:
         return {"status": "error", "message": "Generated blog post not found."}

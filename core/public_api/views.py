@@ -24,6 +24,8 @@ from core.publish_quality_gate import evaluate_pre_publish_quality_gate
 from core.public_api.schemas import (
     PublicAPIErrorOut,
     PublicAccountOut,
+    PublicBlogPostApprovalReviewIn,
+    PublicBlogPostApprovalReviewOut,
     PublicBlogPostGenerateIn,
     PublicBlogPostGenerateOut,
     PublicBlogPostGetOut,
@@ -208,6 +210,7 @@ def serialize_public_blog_post(
     *,
     include_content: bool = True,
     include_link_audit: bool = False,
+    include_workflow_audit: bool = False,
 ) -> dict:
     payload = {
         "id": blog_post.id,
@@ -219,7 +222,12 @@ def serialize_public_blog_post(
         "date_posted": blog_post.date_posted.isoformat() if blog_post.date_posted else None,
         "title_suggestion_id": blog_post.title_suggestion_id,
         "content": blog_post.content if include_content else None,
+        "publish_approval_status": blog_post.publish_approval_status,
+        "external_links_approval_status": blog_post.external_links_approval_status,
+        "publish_review_reason": blog_post.publish_review_reason or "",
+        "external_links_review_reason": blog_post.external_links_review_reason or "",
         "link_audit_logs": [],
+        "workflow_audit_logs": [],
     }
 
     if include_link_audit:
@@ -242,6 +250,21 @@ def serialize_public_blog_post(
                 "created_at": log.created_at.isoformat(),
             }
             for log in logs
+        ]
+
+    if include_workflow_audit:
+        payload["workflow_audit_logs"] = [
+            {
+                "id": log.id,
+                "checkpoint": log.checkpoint,
+                "event_type": log.event_type,
+                "decision": log.decision,
+                "reason": log.reason,
+                "actor_profile_id": log.actor_profile_id,
+                "metadata": log.metadata or {},
+                "created_at": log.created_at.isoformat(),
+            }
+            for log in blog_post.workflow_audit_logs.order_by("created_at")
         ]
 
     return payload
@@ -1397,7 +1420,59 @@ def get_public_blog_post(request: HttpRequest, project_id: int, blog_post_id: in
 
     return {
         "status": "success",
-        "post": serialize_public_blog_post(post, include_link_audit=True),
+        "post": serialize_public_blog_post(
+            post,
+            include_link_audit=True,
+            include_workflow_audit=True,
+        ),
+    }
+
+
+@public_api.post(
+    "/projects/{project_id}/blog-posts/{blog_post_id}/review",
+    response={200: PublicBlogPostApprovalReviewOut, 404: PublicAPIErrorOut, 400: PublicAPIErrorOut},
+    auth=[public_api_key_auth],
+    tags=["Blog Posts"],
+)
+def review_public_blog_post(
+    request: HttpRequest,
+    project_id: int,
+    blog_post_id: int,
+    data: PublicBlogPostApprovalReviewIn,
+):
+    profile = request.auth
+
+    project = Project.objects.filter(id=project_id, profile=profile).first()
+    if project is None:
+        return 404, {"message": "Project not found"}
+
+    post = GeneratedBlogPost.objects.filter(id=blog_post_id, project=project).first()
+    if post is None:
+        return 404, {"message": "Blog post not found"}
+
+    checkpoint = (data.checkpoint or "").strip().lower()
+    decision = (data.decision or "").strip().lower()
+
+    valid_checkpoints = {"publish", "external_links"}
+    valid_decisions = {"approve", "reject", "request_changes"}
+
+    if checkpoint not in valid_checkpoints:
+        return 400, {"message": "Invalid checkpoint. Use one of: publish, external_links"}
+
+    if decision not in valid_decisions:
+        return 400, {"message": "Invalid decision. Use one of: approve, reject, request_changes"}
+
+    post.apply_approval_decision(
+        checkpoint=checkpoint,
+        decision=decision,
+        actor_profile=profile,
+        reason=data.reason,
+    )
+
+    return {
+        "status": "success",
+        "message": "Review decision recorded",
+        "post": serialize_public_blog_post(post),
     }
 
 
@@ -1425,6 +1500,21 @@ def publish_public_blog_post(request: HttpRequest, project_id: int, blog_post_id
             "post": serialize_public_blog_post(post),
         }
 
+    if post.publish_approval_status != GeneratedBlogPost.ApprovalStatus.APPROVED:
+        post.create_workflow_audit_event(
+            checkpoint="PUBLISH",
+            event_type="ACTION_BLOCKED",
+            actor_profile=profile,
+            decision=post.publish_approval_status,
+            reason="awaiting_publish_approval",
+        )
+        return 400, {
+            "message": (
+                "Publish blocked by approval checkpoint: "
+                f"current_status={post.publish_approval_status}"
+            )
+        }
+
     quality_gate_result = evaluate_pre_publish_quality_gate(post)
     if quality_gate_result["decision"] == "block":
         logger.warning(
@@ -1433,6 +1523,14 @@ def publish_public_blog_post(request: HttpRequest, project_id: int, blog_post_id
             project_id=project_id,
             blog_post_id=blog_post_id,
             checks=quality_gate_result["blocking_checks"],
+        )
+        post.create_workflow_audit_event(
+            checkpoint="PUBLISH",
+            event_type="QUALITY_GATE_BLOCKED",
+            actor_profile=profile,
+            decision="BLOCKED",
+            reason=quality_gate_result["summary"],
+            metadata={"blocking_checks": quality_gate_result["blocking_checks"]},
         )
         return 400, {"message": f"Publish blocked by quality gate: {quality_gate_result['summary']}"}
 
@@ -1448,6 +1546,13 @@ def publish_public_blog_post(request: HttpRequest, project_id: int, blog_post_id
 
     submitted = post.submit_blog_post_to_endpoint()
     if not submitted:
+        post.create_workflow_audit_event(
+            checkpoint="PUBLISH",
+            event_type="PUBLISH_FAILED",
+            actor_profile=profile,
+            decision="FAILED",
+            reason="endpoint_submission_failed",
+        )
         return 400, {"message": "Failed to publish blog post"}
 
     post.posted = True
@@ -1458,6 +1563,15 @@ def publish_public_blog_post(request: HttpRequest, project_id: int, blog_post_id
         publish_message = f"Blog post published with quality warnings: {quality_gate_result['summary']}"
     else:
         publish_message = "Blog post published"
+
+    post.create_workflow_audit_event(
+        checkpoint="PUBLISH",
+        event_type="PUBLISHED",
+        actor_profile=profile,
+        decision="SUCCESS",
+        reason=publish_message,
+        metadata={"quality_gate_decision": quality_gate_result["decision"]},
+    )
 
     return {
         "status": "success",

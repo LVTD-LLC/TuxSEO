@@ -6,6 +6,7 @@ from django.utils import timezone
 
 from core.models import (
     BlogPostTitleSuggestion,
+    BlogPostWorkflowAuditLog,
     GeneratedBlogPost,
     LinkOpportunityAuditLog,
     Project,
@@ -191,3 +192,77 @@ def test_record_link_placement_audit_logs_tracks_placed_and_not_placed(blog_post
     assert placed.final_anchor == "guide"
     assert not_placed.decision == LinkOpportunityAuditLog.Decision.NOT_PLACED
     assert "agent_did_not_place_link" in not_placed.reasons
+
+
+@pytest.mark.django_db
+def test_insert_links_blocks_external_candidates_when_approval_pending(monkeypatch, blog_post_with_title_suggestion):
+    blog_post = blog_post_with_title_suggestion
+
+    external_project = Project.objects.create(
+        profile=blog_post.project.profile,
+        url="https://external.example.com",
+        name="External",
+        particiate_in_link_exchange=True,
+    )
+    external_page = ProjectPage.objects.create(
+        project=external_project,
+        url="https://external.example.com/page",
+        title="External Page",
+        description="External Page",
+        summary="External Page",
+    )
+
+    blog_post.external_links_approval_status = GeneratedBlogPost.ApprovalStatus.PENDING
+    blog_post.save(update_fields=["external_links_approval_status"])
+
+    monkeypatch.setattr(
+        blog_post,
+        "_get_link_candidate_pages",
+        lambda max_pages=4, max_external_pages=3: ([], [external_page], []),
+    )
+
+    result = blog_post.insert_links_into_post()
+
+    assert result == blog_post.content
+    blocked_log = LinkOpportunityAuditLog.objects.get(
+        generated_blog_post=blog_post,
+        phase=LinkOpportunityAuditLog.Phase.SUGGESTION,
+        candidate_page=external_page,
+    )
+    assert blocked_log.decision == LinkOpportunityAuditLog.Decision.BLOCKED
+    assert "awaiting_external_links_approval" in blocked_log.reasons
+
+
+@pytest.mark.django_db
+def test_apply_approval_decision_updates_post_and_creates_workflow_audit(blog_post_with_title_suggestion):
+    blog_post = blog_post_with_title_suggestion
+
+    blog_post.apply_approval_decision(
+        checkpoint="publish",
+        decision="approve",
+        actor_profile=blog_post.project.profile,
+        reason="Looks client-safe",
+    )
+
+    blog_post.refresh_from_db()
+    assert blog_post.publish_approval_status == GeneratedBlogPost.ApprovalStatus.APPROVED
+
+    workflow_log = BlogPostWorkflowAuditLog.objects.get(generated_blog_post=blog_post)
+    assert workflow_log.checkpoint == "PUBLISH"
+    assert workflow_log.event_type == "REVIEW_DECISION"
+    assert workflow_log.reason == "Looks client-safe"
+
+
+@pytest.mark.django_db
+def test_workflow_audit_log_is_immutable(blog_post_with_title_suggestion):
+    blog_post = blog_post_with_title_suggestion
+    audit_log = blog_post.create_workflow_audit_event(
+        checkpoint="PUBLISH",
+        event_type="REVIEW_DECISION",
+        actor_profile=blog_post.project.profile,
+        decision="APPROVED",
+    )
+
+    with pytest.raises(ValueError):
+        audit_log.reason = "mutated"
+        audit_log.save()

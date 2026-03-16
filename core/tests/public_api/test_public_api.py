@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from core.api.views import api
 from core.public_api.auth import PublicAPIKeyAuth
 from core.public_api.schemas import (
+    PublicBlogPostApprovalReviewIn,
     PublicBlogPostGenerateIn,
     PublicCompetitorCreateIn,
     PublicContentAutomationIn,
@@ -44,6 +45,7 @@ from core.public_api.views import (
     list_public_title_suggestions,
     publish_public_blog_post,
     public_api,
+    review_public_blog_post,
     retry_public_execution_job,
     update_public_project,
 )
@@ -968,6 +970,11 @@ def _build_generated_post(*, post_id: int, title_suggestion_id: int | None = Non
     post.posted = posted
     post.date_posted = None
     post.title_suggestion_id = title_suggestion_id
+    post.publish_approval_status = "APPROVED"
+    post.external_links_approval_status = "APPROVED"
+    post.publish_review_reason = ""
+    post.external_links_review_reason = ""
+    post.workflow_audit_logs.order_by.return_value = []
     post.save = Mock()
     return post
 
@@ -1070,6 +1077,66 @@ def test_get_public_blog_post_returns_not_found_when_missing():
 
     assert response_status_code == 404
     assert response_data["message"] == "Blog post not found"
+
+
+def test_review_public_blog_post_updates_checkpoint_state():
+    request = SimpleNamespace(auth=build_profile())
+    project = Mock(id=10)
+    post = _build_generated_post(post_id=250)
+    post.apply_approval_decision = Mock()
+
+    project_filter = Mock()
+    project_filter.first.return_value = project
+
+    post_filter = Mock()
+    post_filter.first.return_value = post
+
+    with patch("core.public_api.views.Project.objects.filter", return_value=project_filter):
+        with patch("core.public_api.views.GeneratedBlogPost.objects.filter", return_value=post_filter):
+            response_data = review_public_blog_post(
+                request,
+                project_id=project.id,
+                blog_post_id=post.id,
+                data=PublicBlogPostApprovalReviewIn(
+                    checkpoint="publish",
+                    decision="approve",
+                    reason="ready for client",
+                ),
+            )
+
+    assert response_data["status"] == "success"
+    post.apply_approval_decision.assert_called_once_with(
+        checkpoint="publish",
+        decision="approve",
+        actor_profile=request.auth,
+        reason="ready for client",
+    )
+
+
+def test_publish_public_blog_post_blocks_when_approval_pending():
+    request = SimpleNamespace(auth=build_profile())
+    project = Mock(id=10)
+    post = _build_generated_post(post_id=299)
+    post.publish_approval_status = "PENDING"
+    post.create_workflow_audit_event = Mock()
+
+    project_filter = Mock()
+    project_filter.first.return_value = project
+
+    post_filter = Mock()
+    post_filter.first.return_value = post
+
+    with patch("core.public_api.views.Project.objects.filter", return_value=project_filter):
+        with patch("core.public_api.views.GeneratedBlogPost.objects.filter", return_value=post_filter):
+            response_status_code, response_data = publish_public_blog_post(
+                request,
+                project_id=project.id,
+                blog_post_id=post.id,
+            )
+
+    assert response_status_code == 400
+    assert "approval checkpoint" in response_data["message"]
+    post.create_workflow_audit_event.assert_called_once()
 
 
 def test_publish_public_blog_post_sets_posted_flag_when_submission_succeeds():
@@ -1479,6 +1546,7 @@ def test_public_openapi_includes_public_routes_only():
     assert "/public-api/projects/{project_id}/blog-posts/generate" in schema_paths
     assert "/public-api/projects/{project_id}/blog-posts" in schema_paths
     assert "/public-api/projects/{project_id}/blog-posts/{blog_post_id}" in schema_paths
+    assert "/public-api/projects/{project_id}/blog-posts/{blog_post_id}/review" in schema_paths
     assert "/public-api/projects/{project_id}/blog-posts/{blog_post_id}/publish" in schema_paths
     assert "get" in schema_paths["/public-api/projects"]
     assert "post" in schema_paths["/public-api/projects"]

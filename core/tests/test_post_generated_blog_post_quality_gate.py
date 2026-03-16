@@ -10,7 +10,22 @@ def _build_generated_post(post_id: int) -> Mock:
     post.project = SimpleNamespace(profile=SimpleNamespace(id=9))
     post.posted = False
     post.date_posted = None
+    post.publish_approval_status = "APPROVED"
+    post.create_workflow_audit_event = Mock()
     return post
+
+
+def test_post_generated_blog_post_blocks_when_approval_pending():
+    request = SimpleNamespace(auth=SimpleNamespace(id=9))
+    generated_post = _build_generated_post(post_id=76)
+    generated_post.publish_approval_status = "PENDING"
+
+    with patch("core.api.views.GeneratedBlogPost.objects.get", return_value=generated_post):
+        response_data = post_generated_blog_post(request, data=SimpleNamespace(id=generated_post.id))
+
+    assert response_data["status"] == "error"
+    assert "approval checkpoint" in response_data["message"]
+    generated_post.submit_blog_post_to_endpoint.assert_not_called()
 
 
 def test_post_generated_blog_post_blocks_when_quality_gate_fails():

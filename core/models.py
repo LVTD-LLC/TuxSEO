@@ -994,6 +994,12 @@ class BlogPostTitleSuggestion(BaseModel):
             tags=generated_tags,
             content=generated_content,
         )
+        blog_post.create_workflow_audit_event(
+            checkpoint="CONTENT",
+            event_type="CONTENT_GENERATED",
+            actor_profile=self.project.profile,
+            decision=GeneratedBlogPost.ApprovalStatus.PENDING,
+        )
 
         blog_post.insert_links_into_post()
 
@@ -1087,11 +1093,110 @@ class GeneratedBlogPost(BaseModel):
     icon = models.ImageField(upload_to="generated_blog_post_icons/", blank=True)
     image = models.ImageField(upload_to="generated_blog_post_images/", blank=True)
 
+    class ApprovalStatus(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        APPROVED = "APPROVED", "Approved"
+        REJECTED = "REJECTED", "Rejected"
+        CHANGES_REQUESTED = "CHANGES_REQUESTED", "Changes Requested"
+
     posted = models.BooleanField(default=False)
     date_posted = models.DateTimeField(null=True, blank=True)
+    publish_approval_status = models.CharField(
+        max_length=32,
+        choices=ApprovalStatus.choices,
+        default=ApprovalStatus.PENDING,
+    )
+    external_links_approval_status = models.CharField(
+        max_length=32,
+        choices=ApprovalStatus.choices,
+        default=ApprovalStatus.PENDING,
+    )
+    publish_review_reason = models.TextField(blank=True, default="")
+    external_links_review_reason = models.TextField(blank=True, default="")
+    publish_reviewed_at = models.DateTimeField(null=True, blank=True)
+    external_links_reviewed_at = models.DateTimeField(null=True, blank=True)
+    publish_reviewed_by = models.ForeignKey(
+        "Profile",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="approved_publish_blog_posts",
+    )
+    external_links_reviewed_by = models.ForeignKey(
+        "Profile",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="approved_external_links_blog_posts",
+    )
 
     def __str__(self):
         return f"{self.project.name}: {self.title}"
+
+    def create_workflow_audit_event(
+        self,
+        *,
+        checkpoint: str,
+        event_type: str,
+        actor_profile=None,
+        decision: str = "",
+        reason: str = "",
+        metadata: dict | None = None,
+    ):
+        return BlogPostWorkflowAuditLog.objects.create(
+            project=self.project,
+            generated_blog_post=self,
+            checkpoint=checkpoint,
+            event_type=event_type,
+            actor_profile=actor_profile,
+            decision=decision,
+            reason=reason,
+            metadata=metadata or {},
+        )
+
+    def apply_approval_decision(self, *, checkpoint: str, decision: str, actor_profile, reason: str = ""):
+        now = timezone.now()
+        status_map = {
+            "approve": self.ApprovalStatus.APPROVED,
+            "reject": self.ApprovalStatus.REJECTED,
+            "request_changes": self.ApprovalStatus.CHANGES_REQUESTED,
+        }
+        new_status = status_map[decision]
+
+        if checkpoint == "publish":
+            self.publish_approval_status = new_status
+            self.publish_review_reason = reason or ""
+            self.publish_reviewed_at = now
+            self.publish_reviewed_by = actor_profile
+            self.save(
+                update_fields=[
+                    "publish_approval_status",
+                    "publish_review_reason",
+                    "publish_reviewed_at",
+                    "publish_reviewed_by",
+                ]
+            )
+        else:
+            self.external_links_approval_status = new_status
+            self.external_links_review_reason = reason or ""
+            self.external_links_reviewed_at = now
+            self.external_links_reviewed_by = actor_profile
+            self.save(
+                update_fields=[
+                    "external_links_approval_status",
+                    "external_links_review_reason",
+                    "external_links_reviewed_at",
+                    "external_links_reviewed_by",
+                ]
+            )
+
+        self.create_workflow_audit_event(
+            checkpoint=checkpoint.upper(),
+            event_type="REVIEW_DECISION",
+            actor_profile=actor_profile,
+            decision=new_status,
+            reason=reason or "",
+        )
 
     @classmethod
     def blog_post_structure_rules(cls):
@@ -1561,6 +1666,39 @@ class GeneratedBlogPost(BaseModel):
             max_pages=max_pages,
             max_external_pages=max_external_pages,
         )
+
+        if (
+            external_project_pages
+            and self.external_links_approval_status != self.ApprovalStatus.APPROVED
+        ):
+            blocked_logs = [
+                LinkOpportunityAuditLog(
+                    phase=LinkOpportunityAuditLog.Phase.SUGGESTION,
+                    decision=LinkOpportunityAuditLog.Decision.BLOCKED,
+                    source_project=self.project,
+                    target_project=page.project,
+                    generated_blog_post=self,
+                    candidate_page=page,
+                    candidate_url=page.url,
+                    candidate_domain=self._extract_domain(page.url),
+                    source_domain=self._extract_domain(self.project.url),
+                    link_source="external",
+                    proposed_anchor=self._build_default_anchor_for_page(page),
+                    policy_flags=["requires_human_approval"],
+                    reasons=["awaiting_external_links_approval"],
+                )
+                for page in external_project_pages
+            ]
+            LinkOpportunityAuditLog.objects.bulk_create(blocked_logs)
+            self.create_workflow_audit_event(
+                checkpoint="EXTERNAL_LINKS",
+                event_type="ACTION_BLOCKED",
+                actor_profile=self.project.profile,
+                decision=self.external_links_approval_status,
+                reason="awaiting_external_links_approval",
+                metadata={"blocked_candidates": len(external_project_pages)},
+            )
+            external_project_pages = []
 
         safe_internal_pages, safe_external_pages = self._evaluate_safe_link_opportunities(
             internal_pages=internal_project_pages,
@@ -2178,6 +2316,50 @@ class LinkOpportunityAuditLog(BaseModel):
             models.Index(fields=["candidate_domain", "phase", "created_at"]),
             models.Index(fields=["decision", "phase", "created_at"]),
         ]
+
+
+class BlogPostWorkflowAuditLog(BaseModel):
+    project = models.ForeignKey(
+        Project,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="blog_post_workflow_audit_logs",
+    )
+    generated_blog_post = models.ForeignKey(
+        GeneratedBlogPost,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="workflow_audit_logs",
+    )
+    checkpoint = models.CharField(max_length=32)
+    event_type = models.CharField(max_length=64)
+    actor_profile = models.ForeignKey(
+        "Profile",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="blog_post_workflow_events",
+    )
+    decision = models.CharField(max_length=32, blank=True, default="")
+    reason = models.TextField(blank=True, default="")
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["generated_blog_post", "created_at"]),
+            models.Index(fields=["project", "checkpoint", "created_at"]),
+            models.Index(fields=["event_type", "created_at"]),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise ValueError("BlogPostWorkflowAuditLog is immutable and cannot be updated")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("BlogPostWorkflowAuditLog is immutable and cannot be deleted")
 
 
 class Keyword(BaseModel):
