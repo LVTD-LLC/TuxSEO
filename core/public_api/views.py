@@ -203,8 +203,13 @@ def serialize_public_project_page(project_page: ProjectPage) -> dict:
     }
 
 
-def serialize_public_blog_post(blog_post: GeneratedBlogPost, *, include_content: bool = True) -> dict:
-    return {
+def serialize_public_blog_post(
+    blog_post: GeneratedBlogPost,
+    *,
+    include_content: bool = True,
+    include_link_audit: bool = False,
+) -> dict:
+    payload = {
         "id": blog_post.id,
         "title": blog_post.title,
         "slug": blog_post.slug,
@@ -214,7 +219,32 @@ def serialize_public_blog_post(blog_post: GeneratedBlogPost, *, include_content:
         "date_posted": blog_post.date_posted.isoformat() if blog_post.date_posted else None,
         "title_suggestion_id": blog_post.title_suggestion_id,
         "content": blog_post.content if include_content else None,
+        "link_audit_logs": [],
     }
+
+    if include_link_audit:
+        logs = blog_post.link_opportunity_audit_logs.order_by("created_at")
+        payload["link_audit_logs"] = [
+            {
+                "id": log.id,
+                "phase": log.phase,
+                "decision": log.decision,
+                "candidate_url": log.candidate_url,
+                "candidate_domain": log.candidate_domain,
+                "link_source": log.link_source,
+                "relevance_score": log.relevance_score,
+                "relevance_threshold": log.relevance_threshold,
+                "proposed_anchor": log.proposed_anchor,
+                "final_anchor": log.final_anchor,
+                "relation": log.relation,
+                "policy_flags": log.policy_flags or [],
+                "reasons": log.reasons or [],
+                "created_at": log.created_at.isoformat(),
+            }
+            for log in logs
+        ]
+
+    return payload
 
 
 def serialize_public_execution_job(job: AgentExecutionJob) -> dict:
@@ -1365,7 +1395,10 @@ def get_public_blog_post(request: HttpRequest, project_id: int, blog_post_id: in
     if post is None:
         return 404, {"message": "Blog post not found"}
 
-    return {"status": "success", "post": serialize_public_blog_post(post)}
+    return {
+        "status": "success",
+        "post": serialize_public_blog_post(post, include_link_audit=True),
+    }
 
 
 @public_api.post(
