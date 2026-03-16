@@ -20,7 +20,8 @@ def test_post_generated_blog_post_blocks_when_approval_pending():
     generated_post = _build_generated_post(post_id=76)
     generated_post.publish_approval_status = "PENDING"
 
-    with patch("core.api.views.GeneratedBlogPost.objects.get", return_value=generated_post):
+    with patch("core.api.views.GeneratedBlogPost.objects.filter") as filter_mock:
+        filter_mock.return_value.first.return_value = generated_post
         response_data = post_generated_blog_post(request, data=SimpleNamespace(id=generated_post.id))
 
     assert response_data["status"] == "error"
@@ -32,7 +33,8 @@ def test_post_generated_blog_post_blocks_when_quality_gate_fails():
     request = SimpleNamespace(auth=SimpleNamespace(id=9))
     generated_post = _build_generated_post(post_id=77)
 
-    with patch("core.api.views.GeneratedBlogPost.objects.get", return_value=generated_post):
+    with patch("core.api.views.GeneratedBlogPost.objects.filter") as filter_mock:
+        filter_mock.return_value.first.return_value = generated_post
         with patch(
             "core.api.views.evaluate_pre_publish_quality_gate",
             return_value={
@@ -62,7 +64,8 @@ def test_post_generated_blog_post_allows_publish_with_warnings():
     generated_post = _build_generated_post(post_id=78)
     generated_post.submit_blog_post_to_endpoint.return_value = True
 
-    with patch("core.api.views.GeneratedBlogPost.objects.get", return_value=generated_post):
+    with patch("core.api.views.GeneratedBlogPost.objects.filter") as filter_mock:
+        filter_mock.return_value.first.return_value = generated_post
         with patch(
             "core.api.views.evaluate_pre_publish_quality_gate",
             return_value={
