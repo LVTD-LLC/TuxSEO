@@ -275,6 +275,17 @@ class PublicLinkAuditLogOut(Schema):
     created_at: str
 
 
+class PublicWorkflowAuditLogOut(Schema):
+    id: int
+    checkpoint: str
+    event_type: str
+    decision: str = ""
+    reason: str = ""
+    actor_profile_id: int | None = None
+    metadata: dict = {}
+    created_at: str
+
+
 class PublicBlogPostOut(Schema):
     id: int
     title: str
@@ -285,7 +296,12 @@ class PublicBlogPostOut(Schema):
     date_posted: str | None = None
     title_suggestion_id: int | None = None
     content: str | None = None
+    publish_approval_status: str = ""
+    external_links_approval_status: str = ""
+    publish_review_reason: str = ""
+    external_links_review_reason: str = ""
     link_audit_logs: list[PublicLinkAuditLogOut] = []
+    workflow_audit_logs: list[PublicWorkflowAuditLogOut] = []
 
 
 class PublicBlogPostListOut(Schema):
@@ -310,6 +326,18 @@ class PublicBlogPostGenerateOut(Schema):
 
 
 class PublicBlogPostPublishOut(Schema):
+    status: str
+    message: str = ""
+    post: PublicBlogPostOut | None = None
+
+
+class PublicBlogPostApprovalReviewIn(Schema):
+    checkpoint: str
+    decision: str
+    reason: str = ""
+
+
+class PublicBlogPostApprovalReviewOut(Schema):
     status: str
     message: str = ""
     post: PublicBlogPostOut | None = None
