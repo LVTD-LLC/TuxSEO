@@ -284,7 +284,7 @@ def _iter_dates(start_date: date, end_date: date):
 def _coverage_status(coverage_ratio: float) -> str:
     if coverage_ratio >= 1.0:
         return "full"
-    if coverage_ratio >= 0.5:
+    if coverage_ratio > 0:
         return "partial"
     return "low"
 
