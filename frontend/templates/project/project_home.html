@@ -88,7 +88,7 @@
               rows="5"
               data-copy-target="source"
               class="block px-3 py-2 w-full text-xs font-mono text-gray-800 bg-gray-50 rounded-md border border-gray-300"
-            >curl -X GET "{{ request.scheme }}://{{ request.get_host }}/public-api/account" \
+            >curl -X GET "https://tuxseo.com/public-api/account" \
   -H "X-API-Key: {{ request.user.profile.key }}" \
   -H "Accept: application/json"</textarea>
             <button
@@ -109,19 +109,8 @@
               data-copy-target="source"
               class="block px-3 py-2 w-full text-xs font-mono text-gray-800 bg-gray-50 rounded-md border border-gray-300"
             >You are helping me operate TuxSEO for my project.
-Project URL: {{ project.url }}
-Goal: increase organic traffic with useful content.
-TuxSEO API base URL: {{ request.scheme }}://{{ request.get_host }}/public-api
-TuxSEO API key: {{ request.user.profile.key }}
-
-Use this key in every API request header:
-X-API-Key: {{ request.user.profile.key }}
-
-Workflow:
-1) Pull account and project status via the TuxSEO public API.
-2) Suggest 10 SEO title ideas based on project context.
-3) Propose which titles to generate first and why.
-4) Return a short weekly execution plan.</textarea>
+TuxSEO API base URL: https://tuxseo.com/public-api
+TuxSEO API key: {{ request.user.profile.key }}</textarea>
             <button
               type="button"
               data-copy-target="button"
