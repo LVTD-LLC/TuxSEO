@@ -123,10 +123,6 @@ Responses:
 - `400` no fields provided or invalid values (for example empty `name`)
 - `404` project not found
 
-### Content Automation
-
-- `POST /public-api/projects/{project_id}/content-automation`
-
 ### Title Suggestions
 
 - `GET /public-api/projects/{project_id}/title-suggestions`

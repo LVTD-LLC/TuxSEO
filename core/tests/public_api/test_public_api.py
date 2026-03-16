@@ -1114,7 +1114,7 @@ def test_public_openapi_includes_public_routes_only():
     assert "/public-api/account" in schema_paths
     assert "/public-api/projects" in schema_paths
     assert "/public-api/projects/{project_id}" in schema_paths
-    assert "/public-api/projects/{project_id}/content-automation" in schema_paths
+    assert "/public-api/projects/{project_id}/content-automation" not in schema_paths
     assert "/public-api/projects/{project_id}/title-suggestions" in schema_paths
     assert "/public-api/projects/{project_id}/title-suggestions/{suggestion_id}" in schema_paths
     assert "/public-api/projects/{project_id}/keywords" in schema_paths
@@ -1139,9 +1139,6 @@ def test_public_openapi_groups_endpoints_by_functional_tags():
     assert paths["/public-api/account"]["get"]["tags"] == ["Account"]
     assert paths["/public-api/projects"]["get"]["tags"] == ["Projects"]
     assert paths["/public-api/projects"]["post"]["tags"] == ["Projects"]
-    assert paths["/public-api/projects/{project_id}/content-automation"]["post"]["tags"] == [
-        "Content Automation"
-    ]
     assert paths["/public-api/projects/{project_id}/title-suggestions"]["get"]["tags"] == [
         "Title Suggestions"
     ]

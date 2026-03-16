@@ -369,6 +369,7 @@ def update_public_project(request: HttpRequest, project_id: int, data: PublicPro
     },
     auth=[public_api_key_auth],
     tags=["Content Automation"],
+    include_in_schema=False,
 )
 def configure_content_automation(
     request: HttpRequest, project_id: int, data: PublicContentAutomationIn
