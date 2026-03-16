@@ -94,11 +94,23 @@ def get_verified_email_gate_error(profile, action_name: str) -> dict | None:
 
 
 def get_entitlement_error(profile, entitlement: PlanEntitlement) -> dict | None:
-    return evaluate_plan_entitlement(
+    error = evaluate_plan_entitlement(
         profile,
         entitlement,
         upgrade_url=pro_monthly_checkout_url(),
     )
+    if not error:
+        return None
+
+    if error.get("upgrade_url") and entitlement in {
+        PlanEntitlement.TITLE_GENERATION,
+        PlanEntitlement.CONTENT_GENERATION,
+        PlanEntitlement.KEYWORD_ADD,
+    }:
+        upgrade_link = f"<a class='underline' href='{pro_monthly_checkout_url()}'>Upgrade to Pro</a>"
+        error["message"] = f"{error['message']} {upgrade_link}"
+
+    return error
 
 
 def should_allow_unverified_first_onboarding_project(profile, project_source: str) -> bool:
