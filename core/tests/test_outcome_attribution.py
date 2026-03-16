@@ -17,6 +17,7 @@ from core.models import (
 from core.outcome_attribution import (
     backfill_project_outcome_attribution,
     get_project_outcome_attribution_report,
+    record_outcome_attribution_event,
 )
 from core.public_api.views import get_public_project_outcome_attribution
 
@@ -86,17 +87,15 @@ def test_project_outcome_attribution_report_is_project_scoped_and_fast(django_as
     now = timezone.now()
 
     for index in range(40):
-        OutcomeAttributionEvent.objects.create(
-            profile=user.profile,
+        record_outcome_attribution_event(
             project=project,
+            profile=user.profile,
             event_name="content.blog_post_generated",
-            dimension=OutcomeAttributionEvent.Dimension.CONTENT,
-            outcome_metric="blog_posts_generated",
-            outcome_value=1,
-            occurred_at=now - timedelta(days=index % 7),
             source_model="TestSource",
             source_object_id=index,
-            event_fingerprint=f"fingerprint-{index}",
+            occurred_at=now - timedelta(days=index % 7),
+            outcome_value=1,
+            emit_analytics=False,
         )
 
     backfill_project_outcome_attribution(project=project)
