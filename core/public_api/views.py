@@ -20,6 +20,7 @@ from core.models import (
     ProjectPage,
 )
 from core.public_api.auth import public_api_key_auth
+from core.publish_quality_gate import evaluate_pre_publish_quality_gate
 from core.public_api.schemas import (
     PublicAPIErrorOut,
     PublicAccountOut,
@@ -1391,6 +1392,27 @@ def publish_public_blog_post(request: HttpRequest, project_id: int, blog_post_id
             "post": serialize_public_blog_post(post),
         }
 
+    quality_gate_result = evaluate_pre_publish_quality_gate(post)
+    if quality_gate_result["decision"] == "block":
+        logger.warning(
+            "[Public API Publish Quality Gate] Blocking publish attempt",
+            profile_id=profile.id,
+            project_id=project_id,
+            blog_post_id=blog_post_id,
+            checks=quality_gate_result["blocking_checks"],
+        )
+        return 400, {"message": f"Publish blocked by quality gate: {quality_gate_result['summary']}"}
+
+    if quality_gate_result["decision"] == "warn":
+        logger.warning(
+            "[Public API Publish Quality Gate] Publish allowed with warnings",
+            profile_id=profile.id,
+            project_id=project_id,
+            blog_post_id=blog_post_id,
+            checks=quality_gate_result["warning_checks"],
+            aggregate_score=quality_gate_result["aggregate_score"],
+        )
+
     submitted = post.submit_blog_post_to_endpoint()
     if not submitted:
         return 400, {"message": "Failed to publish blog post"}
@@ -1399,8 +1421,13 @@ def publish_public_blog_post(request: HttpRequest, project_id: int, blog_post_id
     post.date_posted = post.date_posted or timezone.now()
     post.save(update_fields=["posted", "date_posted"])
 
+    if quality_gate_result["decision"] == "warn":
+        publish_message = f"Blog post published with quality warnings: {quality_gate_result['summary']}"
+    else:
+        publish_message = "Blog post published"
+
     return {
         "status": "success",
-        "message": "Blog post published",
+        "message": publish_message,
         "post": serialize_public_blog_post(post),
     }

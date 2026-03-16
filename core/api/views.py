@@ -75,6 +75,7 @@ from core.models import (
     ProjectKeyword,
     ProjectPage,
 )
+from core.publish_quality_gate import evaluate_pre_publish_quality_gate
 from core.utils import download_image_from_url, generate_random_key
 from tuxseo.utils import get_tuxseo_logger
 
@@ -1648,11 +1649,41 @@ def post_generated_blog_post(request: HttpRequest, data: PostGeneratedBlogPostIn
         generated_post = GeneratedBlogPost.objects.get(id=blog_post_id)
         if generated_post.project and generated_post.project.profile != profile:
             return {"status": "error", "message": "Forbidden: You do not have access to this post."}
+
+        quality_gate_result = evaluate_pre_publish_quality_gate(generated_post)
+        if quality_gate_result["decision"] == "block":
+            logger.warning(
+                "[Publish Quality Gate] Blocking publish attempt",
+                blog_post_id=blog_post_id,
+                profile_id=profile.id,
+                checks=quality_gate_result["blocking_checks"],
+            )
+            return {
+                "status": "error",
+                "message": f"Publish blocked by quality gate: {quality_gate_result['summary']}",
+            }
+
+        if quality_gate_result["decision"] == "warn":
+            logger.warning(
+                "[Publish Quality Gate] Publish allowed with warnings",
+                blog_post_id=blog_post_id,
+                profile_id=profile.id,
+                checks=quality_gate_result["warning_checks"],
+                aggregate_score=quality_gate_result["aggregate_score"],
+            )
+
         result = generated_post.submit_blog_post_to_endpoint()
         if result is True:
             generated_post.posted = True
             generated_post.date_posted = timezone.now()
             generated_post.save(update_fields=["posted", "date_posted"])
+
+            if quality_gate_result["decision"] == "warn":
+                return {
+                    "status": "success",
+                    "message": f"Blog post published with quality warnings: {quality_gate_result['summary']}",
+                }
+
             return {"status": "success", "message": "Blog post published!"}
         else:
             return {"status": "error", "message": "Failed to post blog."}
