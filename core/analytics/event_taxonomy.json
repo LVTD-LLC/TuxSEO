@@ -72,6 +72,10 @@
     "abuse_guardrail_triggered": {
       "stage": "risk",
       "description": "A signup or expensive-action abuse guardrail blocked a request."
+    },
+    "outcome_attribution_recorded": {
+      "stage": "lifecycle",
+      "description": "A workflow contribution was linked to a measurable project outcome metric."
     }
   },
   "deprecated_aliases": {

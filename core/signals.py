@@ -5,7 +5,16 @@ from django.dispatch import receiver
 from django_q.tasks import async_task
 
 from core.analytics import ANALYTICS_EVENTS
-from core.models import Profile, ProfileStates, Project
+from core.models import (
+    BlogPostWorkflowAuditLog,
+    GeneratedBlogPost,
+    LinkOpportunityAuditLog,
+    Profile,
+    ProfileStates,
+    Project,
+    ProjectPage,
+)
+from core.outcome_attribution import record_outcome_attribution_event
 from core.tasks import add_email_to_buttondown
 from tuxseo.utils import get_tuxseo_logger
 
@@ -109,3 +118,90 @@ def parse_sitemap_on_save(sender, instance, created, **kwargs):
                 instance.id,
                 group="Parse Sitemap",
             )
+
+
+@receiver(post_save, sender=GeneratedBlogPost)
+def create_content_generation_attribution(sender, instance, created, **kwargs):
+    if not created or not instance.project_id:
+        return
+
+    record_outcome_attribution_event(
+        project=instance.project,
+        profile=instance.project.profile,
+        event_name="content.blog_post_generated",
+        source_model="GeneratedBlogPost",
+        source_object_id=instance.id,
+        occurred_at=instance.created_at,
+        metadata={"title_suggestion_id": instance.title_suggestion_id},
+    )
+
+
+@receiver(post_save, sender=BlogPostWorkflowAuditLog)
+def create_content_publish_attribution(sender, instance, created, **kwargs):
+    if not created or instance.event_type != "PUBLISHED" or not instance.project_id:
+        return
+
+    record_outcome_attribution_event(
+        project=instance.project,
+        profile=instance.project.profile,
+        event_name="content.blog_post_published",
+        source_model="BlogPostWorkflowAuditLog",
+        source_object_id=instance.id,
+        occurred_at=instance.created_at,
+        metadata={"generated_blog_post_id": instance.generated_blog_post_id},
+    )
+
+
+@receiver(post_save, sender=LinkOpportunityAuditLog)
+def create_distribution_attribution(sender, instance, created, **kwargs):
+    if (
+        not created
+        or not instance.source_project_id
+        or instance.phase != LinkOpportunityAuditLog.Phase.PLACEMENT
+        or instance.decision != LinkOpportunityAuditLog.Decision.PLACED
+    ):
+        return
+
+    record_outcome_attribution_event(
+        project=instance.source_project,
+        profile=instance.source_project.profile,
+        event_name="distribution.link_placement",
+        source_model="LinkOpportunityAuditLog",
+        source_object_id=instance.id,
+        occurred_at=instance.created_at,
+        metadata={
+            "candidate_domain": instance.candidate_domain,
+            "link_source": instance.link_source,
+            "generated_blog_post_id": instance.generated_blog_post_id,
+        },
+    )
+
+
+@receiver(pre_save, sender=ProjectPage)
+def remember_previous_project_page_analysis(sender, instance, **kwargs):
+    previous_date_analyzed = None
+    if instance.pk:
+        previous_date_analyzed = (
+            ProjectPage.objects.filter(pk=instance.pk).values_list("date_analyzed", flat=True).first()
+        )
+    instance._previous_date_analyzed = previous_date_analyzed
+
+
+@receiver(post_save, sender=ProjectPage)
+def create_technical_attribution(sender, instance, created, **kwargs):
+    if not instance.project_id or not instance.date_analyzed:
+        return
+
+    previous_date_analyzed = getattr(instance, "_previous_date_analyzed", None)
+    if not created and previous_date_analyzed is not None:
+        return
+
+    record_outcome_attribution_event(
+        project=instance.project,
+        profile=instance.project.profile,
+        event_name="technical.page_analyzed",
+        source_model="ProjectPage",
+        source_object_id=instance.id,
+        occurred_at=instance.date_analyzed,
+        metadata={"source": instance.source, "url": instance.url},
+    )

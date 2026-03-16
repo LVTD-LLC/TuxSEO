@@ -33,6 +33,7 @@ This file is the **single source of truth** for event names and deprecated alias
 - `subscription_upgraded`
 - `subscription_cancelled`
 - `subscription_deleted`
+- `outcome_attribution_recorded`
 
 ## Deprecated aliases
 
