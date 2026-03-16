@@ -24,6 +24,7 @@ from core.choices import (
     ExecutionJobStatus,
     ProjectPageSource,
 )
+from core.execution_reliability import append_job_history, build_failure_payload
 from core.models import (
     AgentExecutionJob,
     BlogPostTitleSuggestion,
@@ -2154,7 +2155,25 @@ def run_agent_execution_job(job_id: int):
             job.started_at = job.started_at or timezone.now()
             job.error_code = ""
             job.error_message = ""
-            job.save(update_fields=["status", "started_at", "error_code", "error_message", "updated_at"])
+            running_result = append_job_history(
+                job.result,
+                event="JOB_STARTED",
+                status=ExecutionJobStatus.RUNNING,
+                details={"operation": job.operation},
+                at=job.started_at,
+            )
+            running_result.pop("failure", None)
+            job.result = running_result
+            job.save(
+                update_fields=[
+                    "status",
+                    "started_at",
+                    "error_code",
+                    "error_message",
+                    "result",
+                    "updated_at",
+                ]
+            )
 
         if job.operation == ExecutionJobOperation.GENERATE_BLOG_POST:
             title_suggestion_id = int(job.payload.get("title_suggestion_id"))
@@ -2176,10 +2195,24 @@ def run_agent_execution_job(job_id: int):
 
                 latest_job.status = ExecutionJobStatus.SUCCEEDED
                 latest_job.completed_at = timezone.now()
-                latest_job.result = {
+                success_result = {
                     "blog_post_id": blog_post.id,
                     "title_suggestion_id": suggestion.id,
                 }
+                success_result = append_job_history(
+                    success_result,
+                    event="JOB_SUCCEEDED",
+                    status=ExecutionJobStatus.SUCCEEDED,
+                    details={"blog_post_id": blog_post.id, "title_suggestion_id": suggestion.id},
+                    at=latest_job.completed_at,
+                )
+                success_result["rollback"] = {
+                    "supported": True,
+                    "state": "available",
+                    "hook": f"/public-api/executions/{latest_job.id}/rollback",
+                    "summary": "Reverts generated draft blog post for this execution when possible.",
+                }
+                latest_job.result = success_result
                 latest_job.save(update_fields=["status", "completed_at", "result", "updated_at"])
 
             return f"Job {job.id} succeeded"
@@ -2190,26 +2223,70 @@ def run_agent_execution_job(job_id: int):
             latest_job.completed_at = timezone.now()
             latest_job.error_code = "UNSUPPORTED_OPERATION"
             latest_job.error_message = f"Unsupported operation: {job.operation}"
+            failed_result = append_job_history(
+                latest_job.result,
+                event="JOB_FAILED",
+                status=ExecutionJobStatus.FAILED,
+                details={"operation": job.operation},
+                at=latest_job.completed_at,
+            )
+            failed_result["failure"] = build_failure_payload(
+                latest_job.error_code,
+                latest_job.error_message,
+            )
+            latest_job.result = failed_result
             latest_job.save(
-                update_fields=["status", "completed_at", "error_code", "error_message", "updated_at"]
+                update_fields=[
+                    "status",
+                    "completed_at",
+                    "error_code",
+                    "error_message",
+                    "result",
+                    "updated_at",
+                ]
             )
 
         return f"Job {job.id} failed: unsupported operation"
 
     except BlogPostTitleSuggestion.DoesNotExist:
+        job = AgentExecutionJob.objects.filter(id=job_id).first()
+        result = append_job_history(
+            job.result if job else {},
+            event="JOB_FAILED",
+            status=ExecutionJobStatus.FAILED,
+            details={"reason": "title_suggestion_not_found"},
+            at=timezone.now(),
+        )
+        result["failure"] = build_failure_payload(
+            "TITLE_SUGGESTION_NOT_FOUND",
+            "Title suggestion not found for this project",
+        )
         AgentExecutionJob.objects.filter(id=job_id).update(
             status=ExecutionJobStatus.FAILED,
             completed_at=timezone.now(),
             error_code="TITLE_SUGGESTION_NOT_FOUND",
             error_message="Title suggestion not found for this project",
+            result=result,
         )
         return f"Job {job_id} failed: title suggestion missing"
     except Exception as error:
+        error_message = str(error)[:2000]
+        job = AgentExecutionJob.objects.filter(id=job_id).first()
+        result = append_job_history(
+            job.result if job else {},
+            event="JOB_FAILED",
+            status=ExecutionJobStatus.FAILED,
+            details={"reason": "unexpected_error"},
+            at=timezone.now(),
+        )
+        result["failure"] = build_failure_payload("EXECUTION_FAILED", error_message)
+
         AgentExecutionJob.objects.filter(id=job_id).update(
             status=ExecutionJobStatus.FAILED,
             completed_at=timezone.now(),
             error_code="EXECUTION_FAILED",
-            error_message=str(error)[:2000],
+            error_message=error_message,
+            result=result,
         )
         logger.error(
             "[Execution Job] Failed",

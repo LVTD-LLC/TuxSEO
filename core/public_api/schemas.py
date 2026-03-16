@@ -2,11 +2,33 @@ from ninja import Schema
 from pydantic import Field
 
 
+class PublicFailureOut(Schema):
+    taxonomy_version: str = "v1"
+    category: str
+    code: str
+    message: str
+    retryable: bool
+    fix_required: bool
+    remediation_hints: list[str] = []
+    next_actions: list[str] = []
+    retry_after_seconds: int | None = None
+
+
+class PublicRollbackHookOut(Schema):
+    supported: bool
+    state: str
+    hook: str | None = None
+    summary: str = ""
+    executed_at: str | None = None
+    reverted_blog_post_id: int | None = None
+
+
 class PublicAPIErrorOut(Schema):
     status: str = "error"
     code: str | None = None
     message: str
     upgrade_url: str | None = None
+    failure: PublicFailureOut | None = None
 
 
 class PublicAccountOut(Schema):
@@ -358,6 +380,9 @@ class PublicExecutionJobOut(Schema):
     result: dict = {}
     error_code: str = ""
     error_message: str = ""
+    failure: PublicFailureOut | None = None
+    rollback: PublicRollbackHookOut | None = None
+    history: list[dict] = []
     queued_at: str | None = None
     started_at: str | None = None
     completed_at: str | None = None
