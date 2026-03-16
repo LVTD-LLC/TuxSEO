@@ -105,10 +105,11 @@
             <label class="block mb-2 text-xs font-semibold tracking-wide text-gray-600 uppercase">Prompt template for AI agents</label>
             <textarea
               readonly
-              rows="7"
+              rows="9"
               data-copy-target="source"
               class="block px-3 py-2 w-full text-xs font-mono text-gray-800 bg-gray-50 rounded-md border border-gray-300"
             >You are helping me operate TuxSEO for my project.
+First read the agent skill file: https://tuxseo.com/skill.md
 TuxSEO API base URL: https://tuxseo.com/public-api
 TuxSEO API key: {{ request.user.profile.key }}</textarea>
             <button
