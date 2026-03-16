@@ -2362,6 +2362,76 @@ class BlogPostWorkflowAuditLog(BaseModel):
         raise ValueError("BlogPostWorkflowAuditLog is immutable and cannot be deleted")
 
 
+class OutcomeAttributionEvent(BaseModel):
+    class Dimension(models.TextChoices):
+        CONTENT = "content", "Content"
+        DISTRIBUTION = "distribution", "Links / Distribution"
+        TECHNICAL = "technical", "Technical Operations"
+
+    profile = models.ForeignKey(
+        Profile,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="outcome_attribution_events",
+    )
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="outcome_attribution_events",
+    )
+    event_name = models.CharField(max_length=128)
+    dimension = models.CharField(max_length=32, choices=Dimension.choices)
+    outcome_metric = models.CharField(max_length=64)
+    outcome_value = models.FloatField(default=1.0)
+    occurred_at = models.DateTimeField(default=timezone.now)
+    source_model = models.CharField(max_length=128)
+    source_object_id = models.BigIntegerField(null=True, blank=True)
+    event_fingerprint = models.CharField(max_length=64, unique=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    schema_version = models.PositiveSmallIntegerField(default=1)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["project", "occurred_at"]),
+            models.Index(fields=["project", "dimension", "occurred_at"]),
+            models.Index(fields=["project", "outcome_metric", "occurred_at"]),
+            models.Index(fields=["event_name", "occurred_at"]),
+        ]
+
+
+class OutcomeAttributionRollup(BaseModel):
+    class Granularity(models.TextChoices):
+        DAY = "DAY", "Day"
+
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="outcome_attribution_rollups",
+    )
+    window_start = models.DateField()
+    granularity = models.CharField(max_length=8, choices=Granularity.choices, default=Granularity.DAY)
+    dimension = models.CharField(max_length=32, choices=OutcomeAttributionEvent.Dimension.choices)
+    outcome_metric = models.CharField(max_length=64)
+    total_value = models.FloatField(default=0.0)
+    event_count = models.PositiveIntegerField(default=0)
+    last_aggregated_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        unique_together = (
+            "project",
+            "window_start",
+            "granularity",
+            "dimension",
+            "outcome_metric",
+        )
+        indexes = [
+            models.Index(fields=["project", "window_start"]),
+            models.Index(fields=["project", "window_start", "dimension"]),
+            models.Index(fields=["project", "window_start", "outcome_metric"]),
+        ]
+
+
 class Keyword(BaseModel):
     keyword_text = models.CharField(max_length=255, help_text="The keyword string")
     volume = models.IntegerField(

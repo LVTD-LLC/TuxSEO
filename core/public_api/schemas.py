@@ -388,3 +388,36 @@ class PublicExecutionJobActionOut(Schema):
     status: str
     message: str = ""
     job: PublicExecutionJobOut | None = None
+
+
+class PublicOutcomeAttributionMetricOut(Schema):
+    metric: str
+    total_value: float
+    event_count: int
+
+
+class PublicOutcomeAttributionDimensionOut(Schema):
+    dimension: str
+    total_value: float
+    event_count: int
+    metrics: list[PublicOutcomeAttributionMetricOut] = []
+
+
+class PublicOutcomeAttributionTopEventOut(Schema):
+    event_name: str
+    dimension: str
+    total_value: float
+    event_count: int
+
+
+class PublicOutcomeAttributionOut(Schema):
+    status: str
+    project_id: int
+    schema_version: int
+    window_start: str
+    window_end: str
+    total_value: float
+    event_count: int
+    generated_in_ms: int
+    dimensions: list[PublicOutcomeAttributionDimensionOut] = []
+    top_events: list[PublicOutcomeAttributionTopEventOut] = []
