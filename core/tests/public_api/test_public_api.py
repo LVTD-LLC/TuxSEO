@@ -47,6 +47,7 @@ from core.public_api.views import (
     public_api,
     review_public_blog_post,
     retry_public_execution_job,
+    rollback_public_execution_job,
     update_public_project,
 )
 
@@ -1520,6 +1521,58 @@ def test_cancel_public_execution_job_returns_error_for_terminal_job():
 
     assert response_status == 400
     assert response["code"] == "JOB_ALREADY_TERMINAL"
+    assert response["failure"]["category"] == "policy"
+    assert response["failure"]["retryable"] is False
+
+
+def test_publish_public_blog_post_returns_normalized_failure_payload_when_blocked_by_policy():
+    request = SimpleNamespace(auth=build_profile())
+    project = Mock(id=10)
+    post = _build_generated_post(post_id=777)
+    post.publish_approval_status = "PENDING"
+    post.create_workflow_audit_event = Mock()
+
+    project_filter = Mock()
+    project_filter.first.return_value = project
+
+    post_filter = Mock()
+    post_filter.first.return_value = post
+
+    with patch("core.public_api.views.Project.objects.filter", return_value=project_filter):
+        with patch("core.public_api.views.GeneratedBlogPost.objects.filter", return_value=post_filter):
+            response_status_code, response_data = publish_public_blog_post(
+                request,
+                project_id=project.id,
+                blog_post_id=post.id,
+            )
+
+    assert response_status_code == 400
+    assert response_data["code"] == "PUBLISH_APPROVAL_PENDING"
+    assert response_data["failure"]["category"] == "policy"
+    assert response_data["failure"]["fix_required"] is True
+
+
+def test_rollback_public_execution_job_reverts_generated_draft_post():
+    request = SimpleNamespace(auth=build_profile())
+    succeeded_job = _build_execution_job(job_id=900, project_id=10, status="SUCCEEDED")
+    succeeded_job.result = {"blog_post_id": 42, "history": []}
+
+    post = Mock(id=42, posted=False)
+    post.delete = Mock()
+
+    job_filter = Mock()
+    job_filter.first.return_value = succeeded_job
+
+    post_filter = Mock()
+    post_filter.first.return_value = post
+
+    with patch("core.public_api.views.AgentExecutionJob.objects.filter", return_value=job_filter):
+        with patch("core.public_api.views.GeneratedBlogPost.objects.filter", return_value=post_filter):
+            response_data = rollback_public_execution_job(request, job_id=succeeded_job.id)
+
+    assert response_data["status"] == "success"
+    assert response_data["job"]["rollback"]["state"] == "completed"
+    post.delete.assert_called_once()
 
 
 def test_public_openapi_includes_public_routes_only():
@@ -1543,6 +1596,7 @@ def test_public_openapi_includes_public_routes_only():
     assert "/public-api/executions/{job_id}" in schema_paths
     assert "/public-api/executions/{job_id}/cancel" in schema_paths
     assert "/public-api/executions/{job_id}/retry" in schema_paths
+    assert "/public-api/executions/{job_id}/rollback" in schema_paths
     assert "/public-api/projects/{project_id}/blog-posts/generate" in schema_paths
     assert "/public-api/projects/{project_id}/blog-posts" in schema_paths
     assert "/public-api/projects/{project_id}/blog-posts/{blog_post_id}" in schema_paths
@@ -1570,6 +1624,7 @@ def test_public_openapi_groups_endpoints_by_functional_tags():
         "Execution Jobs"
     ]
     assert paths["/public-api/executions"]["get"]["tags"] == ["Execution Jobs"]
+    assert paths["/public-api/executions/{job_id}/rollback"]["post"]["tags"] == ["Execution Jobs"]
     assert paths["/public-api/projects/{project_id}/blog-posts"]["get"]["tags"] == [
         "Blog Posts"
     ]

@@ -11,6 +11,13 @@ from ninja import NinjaAPI
 from core.abuse_prevention import enforce_verified_email_for_expensive_action
 from core.api_error_semantics import PlanEntitlement, error_payload, evaluate_plan_entitlement
 from core.choices import ContentType, ExecutionJobOperation, ExecutionJobStatus
+from core.execution_reliability import (
+    append_job_history,
+    build_failure_payload,
+    error_response,
+    get_job_failure_payload,
+    get_job_rollback_hook,
+)
 from core.models import (
     AgentExecutionJob,
     AutoSubmissionSetting,
@@ -283,6 +290,9 @@ def serialize_public_blog_post(
 
 
 def serialize_public_execution_job(job: AgentExecutionJob) -> dict:
+    result = job.result or {}
+    history = result.get("history") if isinstance(result, dict) else []
+
     return {
         "id": job.id,
         "project_id": job.project_id,
@@ -290,9 +300,12 @@ def serialize_public_execution_job(job: AgentExecutionJob) -> dict:
         "status": job.status.lower(),
         "idempotency_key": job.idempotency_key,
         "payload": job.payload or {},
-        "result": job.result or {},
+        "result": result,
         "error_code": job.error_code or "",
         "error_message": job.error_message or "",
+        "failure": get_job_failure_payload(job),
+        "rollback": get_job_rollback_hook(job),
+        "history": history if isinstance(history, list) else [],
         "queued_at": job.queued_at.isoformat() if job.queued_at else None,
         "started_at": job.started_at.isoformat() if job.started_at else None,
         "completed_at": job.completed_at.isoformat() if job.completed_at else None,
@@ -303,14 +316,7 @@ def serialize_public_execution_job(job: AgentExecutionJob) -> dict:
 
 
 def execution_error(code: str, message: str, *, status_code: int) -> tuple[int, dict]:
-    return (
-        status_code,
-        {
-            "status": "error",
-            "code": code,
-            "message": message,
-        },
-    )
+    return error_response(code, message, status_code=status_code)
 
 
 def get_request_idempotency_key(request: HttpRequest) -> str:
@@ -1151,6 +1157,12 @@ def create_public_execution_job(request: HttpRequest, project_id: int, data: Pub
                     "project": project,
                     "payload": {"title_suggestion_id": suggestion.id},
                     "status": ExecutionJobStatus.QUEUED,
+                    "result": append_job_history(
+                        {},
+                        event="JOB_CREATED",
+                        status=ExecutionJobStatus.QUEUED,
+                        details={"title_suggestion_id": suggestion.id},
+                    ),
                 },
             )
 
@@ -1288,6 +1300,15 @@ def cancel_public_execution_job(request: HttpRequest, job_id: int):
         job.canceled_reason = "Canceled via Public API"
         job.error_code = "CANCELED"
         job.error_message = "Execution canceled by user request"
+        next_result = append_job_history(
+            job.result,
+            event="JOB_CANCELED",
+            status=ExecutionJobStatus.CANCELED,
+            details={"reason": job.canceled_reason},
+            at=job.canceled_at,
+        )
+        next_result["failure"] = build_failure_payload(job.error_code, job.error_message)
+        job.result = next_result
         job.save(
             update_fields=[
                 "status",
@@ -1296,6 +1317,7 @@ def cancel_public_execution_job(request: HttpRequest, job_id: int):
                 "canceled_reason",
                 "error_code",
                 "error_message",
+                "result",
                 "updated_at",
             ]
         )
@@ -1345,6 +1367,12 @@ def retry_public_execution_job(request: HttpRequest, job_id: int):
                 "payload": base_job.payload,
                 "status": ExecutionJobStatus.QUEUED,
                 "retry_of": base_job,
+                "result": append_job_history(
+                    {},
+                    event="JOB_RETRIED",
+                    status=ExecutionJobStatus.QUEUED,
+                    details={"retry_of": base_job.id},
+                ),
             },
         )
 
@@ -1361,6 +1389,86 @@ def retry_public_execution_job(request: HttpRequest, job_id: int):
         "status": "success",
         "message": "Execution job retried" if created else "Existing retry job returned for idempotency key",
         "job": serialize_public_execution_job(retry_job),
+    }
+
+
+@public_api.post(
+    "/executions/{job_id}/rollback",
+    response={200: PublicExecutionJobActionOut, 404: PublicAPIErrorOut, 400: PublicAPIErrorOut},
+    auth=[public_api_key_auth],
+    tags=["Execution Jobs"],
+)
+def rollback_public_execution_job(request: HttpRequest, job_id: int):
+    profile = request.auth
+    job = AgentExecutionJob.objects.filter(id=job_id, profile=profile).first()
+    if job is None:
+        return execution_error("JOB_NOT_FOUND", "Execution job not found", status_code=404)
+
+    if job.operation != ExecutionJobOperation.GENERATE_BLOG_POST:
+        return execution_error(
+            "ROLLBACK_NOT_SUPPORTED",
+            "Rollback is currently supported only for GENERATE_BLOG_POST.",
+            status_code=400,
+        )
+
+    if job.status != ExecutionJobStatus.SUCCEEDED:
+        return execution_error(
+            "ROLLBACK_NOT_ALLOWED",
+            "Rollback is available only for succeeded jobs.",
+            status_code=400,
+        )
+
+    result = job.result or {}
+    rollback = result.get("rollback") if isinstance(result, dict) else None
+    if isinstance(rollback, dict) and rollback.get("state") == "completed":
+        return {
+            "status": "success",
+            "message": "Execution rollback already completed",
+            "job": serialize_public_execution_job(job),
+        }
+
+    blog_post_id = result.get("blog_post_id") if isinstance(result, dict) else None
+    if not blog_post_id:
+        return execution_error(
+            "ROLLBACK_CONTEXT_MISSING",
+            "Execution result does not include a blog_post_id rollback target.",
+            status_code=400,
+        )
+
+    post = GeneratedBlogPost.objects.filter(id=blog_post_id, project_id=job.project_id).first()
+    if post and post.posted:
+        return execution_error(
+            "ROLLBACK_REQUIRES_MANUAL_UNPUBLISH",
+            "Cannot auto-rollback a post that is already published externally.",
+            status_code=400,
+        )
+
+    if post:
+        post.delete()
+
+    rollback_payload = {
+        "supported": True,
+        "state": "completed",
+        "hook": f"/public-api/executions/{job.id}/rollback",
+        "summary": "Generated draft blog post reverted.",
+        "executed_at": timezone.now().isoformat(),
+        "reverted_blog_post_id": int(blog_post_id),
+    }
+
+    next_result = append_job_history(
+        result,
+        event="JOB_ROLLBACK_COMPLETED",
+        status=job.status,
+        details={"reverted_blog_post_id": int(blog_post_id)},
+    )
+    next_result["rollback"] = rollback_payload
+    job.result = next_result
+    job.save(update_fields=["result", "updated_at"])
+
+    return {
+        "status": "success",
+        "message": "Execution rollback completed",
+        "job": serialize_public_execution_job(job),
     }
 
 
@@ -1565,12 +1673,14 @@ def publish_public_blog_post(request: HttpRequest, project_id: int, blog_post_id
             decision=post.publish_approval_status,
             reason="awaiting_publish_approval",
         )
-        return 400, {
-            "message": (
+        return execution_error(
+            "PUBLISH_APPROVAL_PENDING",
+            (
                 "Publish blocked by approval checkpoint: "
                 f"current_status={post.publish_approval_status}"
-            )
-        }
+            ),
+            status_code=400,
+        )
 
     quality_gate_result = evaluate_pre_publish_quality_gate(post)
     if quality_gate_result["decision"] == "block":
@@ -1589,7 +1699,11 @@ def publish_public_blog_post(request: HttpRequest, project_id: int, blog_post_id
             reason=quality_gate_result["summary"],
             metadata={"blocking_checks": quality_gate_result["blocking_checks"]},
         )
-        return 400, {"message": f"Publish blocked by quality gate: {quality_gate_result['summary']}"}
+        return execution_error(
+            "PUBLISH_QUALITY_GATE_BLOCKED",
+            f"Publish blocked by quality gate: {quality_gate_result['summary']}",
+            status_code=400,
+        )
 
     if quality_gate_result["decision"] == "warn":
         logger.warning(
@@ -1610,7 +1724,11 @@ def publish_public_blog_post(request: HttpRequest, project_id: int, blog_post_id
             decision="FAILED",
             reason="endpoint_submission_failed",
         )
-        return 400, {"message": "Failed to publish blog post"}
+        return execution_error(
+            "PUBLISH_ENDPOINT_FAILED",
+            "Failed to publish blog post",
+            status_code=400,
+        )
 
     post.posted = True
     post.date_posted = post.date_posted or timezone.now()
