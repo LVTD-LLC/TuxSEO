@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.db import IntegrityError, transaction
 from django.http import HttpRequest
 from django.urls import reverse
 from django.utils import timezone
@@ -6,8 +7,9 @@ from django_q.tasks import async_task
 from ninja import NinjaAPI
 
 from core.abuse_prevention import enforce_verified_email_for_expensive_action
-from core.choices import ContentType
+from core.choices import ContentType, ExecutionJobOperation, ExecutionJobStatus
 from core.models import (
+    AgentExecutionJob,
     AutoSubmissionSetting,
     BlogPostTitleSuggestion,
     Competitor,
@@ -32,6 +34,11 @@ from core.public_api.schemas import (
     PublicCompetitorCreateOut,
     PublicCompetitorGetOut,
     PublicCompetitorListOut,
+    PublicExecutionJobActionOut,
+    PublicExecutionJobCreateIn,
+    PublicExecutionJobCreateOut,
+    PublicExecutionJobGetOut,
+    PublicExecutionJobListOut,
     PublicKeywordCreateIn,
     PublicKeywordCreateOut,
     PublicKeywordGetOut,
@@ -207,6 +214,47 @@ def serialize_public_blog_post(blog_post: GeneratedBlogPost, *, include_content:
         "title_suggestion_id": blog_post.title_suggestion_id,
         "content": blog_post.content if include_content else None,
     }
+
+
+def serialize_public_execution_job(job: AgentExecutionJob) -> dict:
+    return {
+        "id": job.id,
+        "project_id": job.project_id,
+        "operation": job.operation,
+        "status": job.status.lower(),
+        "idempotency_key": job.idempotency_key,
+        "payload": job.payload or {},
+        "result": job.result or {},
+        "error_code": job.error_code or "",
+        "error_message": job.error_message or "",
+        "queued_at": job.queued_at.isoformat() if job.queued_at else None,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+        "canceled_at": job.canceled_at.isoformat() if job.canceled_at else None,
+        "created_at": job.created_at.isoformat(),
+        "updated_at": job.updated_at.isoformat(),
+    }
+
+
+def execution_error(code: str, message: str, *, status_code: int) -> tuple[int, dict]:
+    return (
+        status_code,
+        {
+            "status": "error",
+            "code": code,
+            "message": message,
+        },
+    )
+
+
+def get_request_idempotency_key(request: HttpRequest) -> str:
+    header_key = (
+        request.headers.get("Idempotency-Key")
+        or request.headers.get("idempotency-key")
+        or request.headers.get("X-Idempotency-Key")
+        or request.headers.get("x-idempotency-key")
+    )
+    return (header_key or "").strip()
 
 
 @public_api.get(
@@ -924,6 +972,278 @@ def create_public_project_page(request: HttpRequest, project_id: int, data: Publ
         "status": "success",
         "message": "Project page added",
         "page": serialize_public_project_page(project_page),
+    }
+
+
+@public_api.post(
+    "/projects/{project_id}/executions",
+    response={
+        200: PublicExecutionJobCreateOut,
+        400: PublicAPIErrorOut,
+        404: PublicAPIErrorOut,
+    },
+    auth=[public_api_key_auth],
+    tags=["Execution Jobs"],
+)
+def create_public_execution_job(request: HttpRequest, project_id: int, data: PublicExecutionJobCreateIn):
+    profile = request.auth
+    project = Project.objects.filter(id=project_id, profile=profile).first()
+    if project is None:
+        return execution_error("PROJECT_NOT_FOUND", "Project not found", status_code=404)
+
+    idempotency_key = get_request_idempotency_key(request)
+    if not idempotency_key:
+        return execution_error(
+            "MISSING_IDEMPOTENCY_KEY",
+            "Provide an Idempotency-Key header for job creation.",
+            status_code=400,
+        )
+
+    if data.operation != ExecutionJobOperation.GENERATE_BLOG_POST:
+        return execution_error(
+            "INVALID_OPERATION",
+            "Unsupported operation. Supported operations: GENERATE_BLOG_POST.",
+            status_code=400,
+        )
+
+    if data.title_suggestion_id is None:
+        return execution_error(
+            "MISSING_TITLE_SUGGESTION_ID",
+            "title_suggestion_id is required for GENERATE_BLOG_POST operation.",
+            status_code=400,
+        )
+
+    suggestion = BlogPostTitleSuggestion.objects.filter(
+        id=data.title_suggestion_id,
+        project=project,
+    ).first()
+    if suggestion is None:
+        return execution_error(
+            "TITLE_SUGGESTION_NOT_FOUND",
+            "Title suggestion not found for this project.",
+            status_code=404,
+        )
+
+    try:
+        with transaction.atomic():
+            job, created = AgentExecutionJob.objects.get_or_create(
+                profile=profile,
+                operation=data.operation,
+                idempotency_key=idempotency_key,
+                defaults={
+                    "project": project,
+                    "payload": {"title_suggestion_id": suggestion.id},
+                    "status": ExecutionJobStatus.QUEUED,
+                },
+            )
+
+            if not created and job.project_id != project.id:
+                return execution_error(
+                    "IDEMPOTENCY_KEY_CONFLICT",
+                    "Idempotency key already used for a different project or payload.",
+                    status_code=400,
+                )
+
+            if created:
+                queue_task_id = async_task(
+                    "core.tasks.run_agent_execution_job",
+                    job.id,
+                    group="Agent Execution Jobs",
+                )
+                job.queue_task_id = queue_task_id or ""
+                job.save(update_fields=["queue_task_id", "updated_at"])
+    except IntegrityError:
+        job = AgentExecutionJob.objects.filter(
+            profile=profile,
+            operation=data.operation,
+            idempotency_key=idempotency_key,
+        ).first()
+        created = False
+
+    if job is None:
+        return execution_error(
+            "JOB_CREATION_FAILED",
+            "Failed to create execution job. Please retry with a new idempotency key.",
+            status_code=400,
+        )
+
+    return {
+        "status": "success",
+        "message": "Execution job created" if created else "Existing execution job returned for idempotency key",
+        "created": created,
+        "job": serialize_public_execution_job(job),
+    }
+
+
+@public_api.get(
+    "/executions/{job_id}",
+    response={200: PublicExecutionJobGetOut, 404: PublicAPIErrorOut},
+    auth=[public_api_key_auth],
+    tags=["Execution Jobs"],
+)
+def get_public_execution_job(request: HttpRequest, job_id: int):
+    profile = request.auth
+    job = AgentExecutionJob.objects.filter(id=job_id, profile=profile).first()
+    if job is None:
+        return execution_error("JOB_NOT_FOUND", "Execution job not found", status_code=404)
+
+    return {"status": "success", "job": serialize_public_execution_job(job)}
+
+
+@public_api.get(
+    "/executions",
+    response={200: PublicExecutionJobListOut},
+    auth=[public_api_key_auth],
+    tags=["Execution Jobs"],
+)
+def list_public_execution_jobs(
+    request: HttpRequest,
+    project_id: int | None = None,
+    operation: str | None = None,
+    status: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+):
+    profile = request.auth
+
+    page = max(page, 1)
+    page_size = min(max(page_size, 1), 100)
+
+    jobs_query = AgentExecutionJob.objects.filter(profile=profile)
+
+    if project_id is not None:
+        jobs_query = jobs_query.filter(project_id=project_id)
+
+    if operation:
+        jobs_query = jobs_query.filter(operation=operation)
+
+    if status:
+        normalized_status = status.upper()
+        valid_statuses = {choice[0] for choice in ExecutionJobStatus.choices}
+        if normalized_status in valid_statuses:
+            jobs_query = jobs_query.filter(status=normalized_status)
+
+    jobs_query = jobs_query.order_by("-created_at")
+
+    total = jobs_query.count()
+    start_index = (page - 1) * page_size
+    end_index = start_index + page_size
+    jobs = list(jobs_query[start_index:end_index])
+
+    return {
+        "status": "success",
+        "jobs": [serialize_public_execution_job(job) for job in jobs],
+        "pagination": {"page": page, "page_size": page_size, "total": total},
+    }
+
+
+@public_api.post(
+    "/executions/{job_id}/cancel",
+    response={200: PublicExecutionJobActionOut, 404: PublicAPIErrorOut, 400: PublicAPIErrorOut},
+    auth=[public_api_key_auth],
+    tags=["Execution Jobs"],
+)
+def cancel_public_execution_job(request: HttpRequest, job_id: int):
+    profile = request.auth
+
+    with transaction.atomic():
+        job = AgentExecutionJob.objects.select_for_update().filter(id=job_id, profile=profile).first()
+        if job is None:
+            return execution_error("JOB_NOT_FOUND", "Execution job not found", status_code=404)
+
+        if job.status in {ExecutionJobStatus.SUCCEEDED, ExecutionJobStatus.FAILED}:
+            return execution_error(
+                "JOB_ALREADY_TERMINAL",
+                "Only queued or running jobs can be canceled.",
+                status_code=400,
+            )
+
+        if job.status == ExecutionJobStatus.CANCELED:
+            return {
+                "status": "success",
+                "message": "Execution job already canceled",
+                "job": serialize_public_execution_job(job),
+            }
+
+        job.status = ExecutionJobStatus.CANCELED
+        job.canceled_at = timezone.now()
+        job.completed_at = job.completed_at or job.canceled_at
+        job.canceled_reason = "Canceled via Public API"
+        job.error_code = "CANCELED"
+        job.error_message = "Execution canceled by user request"
+        job.save(
+            update_fields=[
+                "status",
+                "canceled_at",
+                "completed_at",
+                "canceled_reason",
+                "error_code",
+                "error_message",
+                "updated_at",
+            ]
+        )
+
+    return {
+        "status": "success",
+        "message": "Execution job canceled",
+        "job": serialize_public_execution_job(job),
+    }
+
+
+@public_api.post(
+    "/executions/{job_id}/retry",
+    response={200: PublicExecutionJobActionOut, 404: PublicAPIErrorOut, 400: PublicAPIErrorOut},
+    auth=[public_api_key_auth],
+    tags=["Execution Jobs"],
+)
+def retry_public_execution_job(request: HttpRequest, job_id: int):
+    profile = request.auth
+
+    base_job = AgentExecutionJob.objects.filter(id=job_id, profile=profile).first()
+    if base_job is None:
+        return execution_error("JOB_NOT_FOUND", "Execution job not found", status_code=404)
+
+    if base_job.status not in {ExecutionJobStatus.FAILED, ExecutionJobStatus.CANCELED}:
+        return execution_error(
+            "RETRY_NOT_ALLOWED",
+            "Only failed or canceled jobs can be retried.",
+            status_code=400,
+        )
+
+    idempotency_key = get_request_idempotency_key(request)
+    if not idempotency_key:
+        return execution_error(
+            "MISSING_IDEMPOTENCY_KEY",
+            "Provide an Idempotency-Key header when retrying a job.",
+            status_code=400,
+        )
+
+    with transaction.atomic():
+        retry_job, created = AgentExecutionJob.objects.get_or_create(
+            profile=profile,
+            operation=base_job.operation,
+            idempotency_key=idempotency_key,
+            defaults={
+                "project": base_job.project,
+                "payload": base_job.payload,
+                "status": ExecutionJobStatus.QUEUED,
+                "retry_of": base_job,
+            },
+        )
+
+        if created:
+            queue_task_id = async_task(
+                "core.tasks.run_agent_execution_job",
+                retry_job.id,
+                group="Agent Execution Jobs",
+            )
+            retry_job.queue_task_id = queue_task_id or ""
+            retry_job.save(update_fields=["queue_task_id", "updated_at"])
+
+    return {
+        "status": "success",
+        "message": "Execution job retried" if created else "Existing retry job returned for idempotency key",
+        "job": serialize_public_execution_job(retry_job),
     }
 
 

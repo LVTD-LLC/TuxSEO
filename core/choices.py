@@ -121,6 +121,18 @@ class CompetitorPostGenerationStatus(models.TextChoices):
     FAILED = "FAILED", "Failed"
 
 
+class ExecutionJobOperation(models.TextChoices):
+    GENERATE_BLOG_POST = "GENERATE_BLOG_POST", "Generate Blog Post"
+
+
+class ExecutionJobStatus(models.TextChoices):
+    QUEUED = "QUEUED", "Queued"
+    RUNNING = "RUNNING", "Running"
+    SUCCEEDED = "SUCCEEDED", "Succeeded"
+    FAILED = "FAILED", "Failed"
+    CANCELED = "CANCELED", "Canceled"
+
+
 class ProjectPageSource(models.TextChoices):
     AI = "AI", "AI"
     SITEMAP = "SITEMAP", "Sitemap"
