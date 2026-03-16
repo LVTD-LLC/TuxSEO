@@ -40,6 +40,7 @@ from core.models import (
     ProfileStateTransition,
     Project,
 )
+from core.outcome_attribution import get_project_reporting_snapshot
 from core.tasks import (
     track_event,
     try_create_posthog_alias,
@@ -785,6 +786,41 @@ class ProjectHomeView(LoginRequiredMixin, DetailView):
             "has_items": item_count > 0,
         }
 
+    def get_reporting_snapshot_state(self, *, project: Project) -> dict:
+        window_end = timezone.now().date()
+        window_start = window_end - timedelta(days=29)
+        snapshot = get_project_reporting_snapshot(
+            project=project,
+            start_date=window_start,
+            end_date=window_end,
+        )
+
+        trend = snapshot["trend"]
+        latest = trend[-1] if trend else {
+            "seo_outcome_value": 0.0,
+            "ai_visibility_signal_value": 0.0,
+            "event_count": 0,
+        }
+
+        sparkline = []
+        max_value = max((item["seo_outcome_value"] for item in trend), default=0.0)
+        for item in trend[-14:]:
+            relative_height = int((item["seo_outcome_value"] / max_value) * 100) if max_value > 0 else 0
+            sparkline.append(
+                {
+                    "date": item["date"],
+                    "value": item["seo_outcome_value"],
+                    "height_pct": max(relative_height, 8) if item["seo_outcome_value"] > 0 else 6,
+                }
+            )
+
+        return {
+            "snapshot": snapshot,
+            "latest": latest,
+            "sparkline": sparkline,
+            "is_empty": snapshot["event_count"] == 0,
+        }
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         project = self.object
@@ -834,6 +870,7 @@ class ProjectHomeView(LoginRequiredMixin, DetailView):
         context["is_summary_empty_state"] = is_summary_empty_state
         context["has_loading_generation_state"] = has_loading_generation_state
         context["has_empty_generation_state"] = has_empty_generation_state
+        context["reporting_snapshot_state"] = self.get_reporting_snapshot_state(project=project)
 
         return context
 

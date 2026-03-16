@@ -130,6 +130,92 @@ TuxSEO API key: {{ request.user.profile.key }}</textarea>
         </div>
       </article>
 
+      <article class="p-5 bg-white rounded-lg border border-gray-200 shadow-sm md:col-span-2 xl:col-span-3">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h3 class="text-base font-semibold text-gray-900">AI Visibility + SEO Outcome Snapshot (30d)</h3>
+            <p class="mt-1 text-sm text-gray-600">
+              Aggregated from outcome attribution events for client-ready reporting and exports.
+            </p>
+          </div>
+          <span class="inline-flex items-center px-2.5 py-1 text-xs font-medium rounded-full
+            {% if reporting_snapshot_state.snapshot.confidence.label == "high" %}
+              text-green-800 bg-green-100
+            {% elif reporting_snapshot_state.snapshot.confidence.label == "medium" %}
+              text-amber-800 bg-amber-100
+            {% else %}
+              text-gray-700 bg-gray-100
+            {% endif %}
+          ">
+            Confidence: {{ reporting_snapshot_state.snapshot.confidence.label|title }}
+          </span>
+        </div>
+
+        <div class="grid grid-cols-1 gap-4 mt-4 md:grid-cols-3">
+          <div class="p-3 rounded-md border border-gray-200 bg-gray-50">
+            <p class="text-xs font-semibold tracking-wide text-gray-600 uppercase">AI visibility signal</p>
+            <p class="mt-1 text-2xl font-semibold text-gray-900">{{ reporting_snapshot_state.snapshot.ai_visibility.signal_value|floatformat:0 }}</p>
+            <p class="mt-1 text-xs text-gray-600">Events: {{ reporting_snapshot_state.snapshot.ai_visibility.event_count }}</p>
+          </div>
+          <div class="p-3 rounded-md border border-gray-200 bg-gray-50">
+            <p class="text-xs font-semibold tracking-wide text-gray-600 uppercase">SEO outcome value</p>
+            <p class="mt-1 text-2xl font-semibold text-gray-900">{{ reporting_snapshot_state.snapshot.seo_outcomes.total_value|floatformat:0 }}</p>
+            <p class="mt-1 text-xs text-gray-600">Events: {{ reporting_snapshot_state.snapshot.seo_outcomes.event_count }}</p>
+          </div>
+          <div class="p-3 rounded-md border border-gray-200 bg-gray-50">
+            <p class="text-xs font-semibold tracking-wide text-gray-600 uppercase">Coverage</p>
+            <p class="mt-1 text-2xl font-semibold text-gray-900">{{ reporting_snapshot_state.snapshot.coverage.ratio|floatformat:2 }}</p>
+            <p class="mt-1 text-xs text-gray-600">Status: {{ reporting_snapshot_state.snapshot.coverage.status|title }}</p>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 gap-4 mt-4 lg:grid-cols-2">
+          <div>
+            <p class="text-xs font-semibold tracking-wide text-gray-600 uppercase">Outcome trend (14d)</p>
+            <div class="flex gap-1 items-end h-20 mt-2">
+              {% for point in reporting_snapshot_state.sparkline %}
+                <div class="flex-1 rounded-sm bg-pink-300"
+                     style="height: {{ point.height_pct }}%;"
+                     title="{{ point.date }}: {{ point.value|floatformat:2 }}">
+                </div>
+              {% endfor %}
+            </div>
+          </div>
+          <div>
+            <p class="text-xs font-semibold tracking-wide text-gray-600 uppercase">Contribution split</p>
+            <ul class="mt-2 space-y-1 text-sm text-gray-700">
+              {% for item in reporting_snapshot_state.snapshot.contribution_split %}
+                <li class="flex justify-between">
+                  <span class="capitalize">{{ item.dimension }}</span>
+                  <span>{{ item.share_pct|floatformat:1 }}%</span>
+                </li>
+              {% empty %}
+                <li class="text-xs text-gray-500">No attribution events yet in selected window.</li>
+              {% endfor %}
+            </ul>
+          </div>
+        </div>
+
+        <details class="mt-4">
+          <summary class="text-xs font-semibold tracking-wide text-gray-600 uppercase cursor-pointer">Metric definitions</summary>
+          <ul class="mt-2 space-y-2">
+            {% for metric in reporting_snapshot_state.snapshot.metric_definitions %}
+              <li class="text-xs text-gray-600">
+                <span class="font-semibold text-gray-800">{{ metric.label }}</span> — {{ metric.tooltip }}
+                <span class="block mt-0.5 text-gray-500">Source events: {{ metric.source_events|join:", " }}</span>
+              </li>
+            {% endfor %}
+          </ul>
+        </details>
+
+        <p class="mt-4 text-xs text-amber-700">
+          {{ reporting_snapshot_state.snapshot.coverage.note }}
+          {% if reporting_snapshot_state.snapshot.coverage.missing_metrics %}
+            Missing metrics: {{ reporting_snapshot_state.snapshot.coverage.missing_metrics|join:", " }}.
+          {% endif %}
+        </p>
+      </article>
+
       <article class="p-5 bg-white rounded-lg border border-gray-200 shadow-sm">
         <p class="text-sm font-medium text-gray-500">Title Ideas</p>
         <p class="mt-2 text-3xl font-semibold text-gray-900">{{ title_ideas_state.count }}</p>

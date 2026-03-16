@@ -22,7 +22,10 @@ from core.models import (
     ProjectKeyword,
     ProjectPage,
 )
-from core.outcome_attribution import get_project_outcome_attribution_report
+from core.outcome_attribution import (
+    get_project_outcome_attribution_report,
+    get_project_reporting_snapshot,
+)
 from core.public_api.auth import public_api_key_auth
 from core.publish_quality_gate import evaluate_pre_publish_quality_gate
 from core.public_api.schemas import (
@@ -51,6 +54,7 @@ from core.public_api.schemas import (
     PublicKeywordGetOut,
     PublicKeywordListOut,
     PublicOutcomeAttributionOut,
+    PublicReportingSnapshotOut,
     PublicProjectCreateOut,
     PublicProjectGetOut,
     PublicProjectIn,
@@ -489,6 +493,34 @@ def get_public_project_outcome_attribution(request: HttpRequest, project_id: int
     return {
         "status": "success",
         **report,
+    }
+
+
+@public_api.get(
+    "/projects/{project_id}/reporting-snapshot",
+    response={200: PublicReportingSnapshotOut, 404: PublicAPIErrorOut},
+    auth=[public_api_key_auth],
+    tags=["Projects"],
+)
+def get_public_project_reporting_snapshot(request: HttpRequest, project_id: int, days: int = 30):
+    profile = request.auth
+    project = Project.objects.filter(id=project_id, profile=profile).first()
+    if project is None:
+        return 404, {"message": "Project not found"}
+
+    normalized_days = min(max(days, 1), 365)
+    window_end = timezone.now().date()
+    window_start = window_end - timedelta(days=normalized_days - 1)
+
+    snapshot = get_project_reporting_snapshot(
+        project=project,
+        start_date=window_start,
+        end_date=window_end,
+    )
+
+    return {
+        "status": "success",
+        **snapshot,
     }
 
 

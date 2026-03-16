@@ -421,3 +421,75 @@ class PublicOutcomeAttributionOut(Schema):
     generated_in_ms: int
     dimensions: list[PublicOutcomeAttributionDimensionOut] = []
     top_events: list[PublicOutcomeAttributionTopEventOut] = []
+
+
+class PublicReportingSnapshotMetricOut(Schema):
+    metric: str
+    total_value: float
+    event_count: int
+    source_events: list[str] = []
+
+
+class PublicReportingSnapshotSEOOutcomesOut(Schema):
+    total_value: float
+    event_count: int
+    metrics: list[PublicReportingSnapshotMetricOut] = []
+
+
+class PublicReportingSnapshotAIVisibilityOut(Schema):
+    signal_value: float
+    event_count: int
+    metrics: list[str] = []
+
+
+class PublicReportingSnapshotTrendPointOut(Schema):
+    date: str
+    seo_outcome_value: float
+    ai_visibility_signal_value: float
+    event_count: int
+
+
+class PublicReportingSnapshotContributionOut(Schema):
+    dimension: str
+    total_value: float
+    event_count: int
+    share_pct: float
+
+
+class PublicReportingSnapshotCoverageOut(Schema):
+    ratio: float
+    status: str
+    missing_metrics: list[str] = []
+    note: str
+
+
+class PublicReportingSnapshotConfidenceOut(Schema):
+    label: str
+    reason: str
+
+
+class PublicReportingSnapshotMetricDefinitionOut(Schema):
+    metric: str
+    label: str
+    tooltip: str
+    definition: str
+    source_events: list[str] = []
+    is_observed: bool
+
+
+class PublicReportingSnapshotOut(Schema):
+    status: str
+    project_id: int
+    schema_version: int
+    window_start: str
+    window_end: str
+    total_value: float
+    event_count: int
+    seo_outcomes: PublicReportingSnapshotSEOOutcomesOut
+    ai_visibility: PublicReportingSnapshotAIVisibilityOut
+    trend: list[PublicReportingSnapshotTrendPointOut] = []
+    contribution_split: list[PublicReportingSnapshotContributionOut] = []
+    coverage: PublicReportingSnapshotCoverageOut
+    confidence: PublicReportingSnapshotConfidenceOut
+    metric_definitions: list[PublicReportingSnapshotMetricDefinitionOut] = []
+    generated_in_ms: int
