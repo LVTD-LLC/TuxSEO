@@ -105,14 +105,23 @@ def test_docs_navigation_groups_api_as_top_level_section():
     ]
 
 
-def test_docs_navigation_places_public_api_page_in_api_section():
+def test_docs_navigation_places_resource_api_pages_in_api_section():
     navigation = get_docs_navigation()
     pages_by_category = {section["category_slug"]: section["pages"] for section in navigation}
 
     assert "api" in pages_by_category
-    assert [page["slug"] for page in pages_by_category["api"]] == ["public-api-architecture"]
+    assert [page["slug"] for page in pages_by_category["api"]] == [
+        "authorization",
+        "account",
+        "projects",
+        "title-suggestions",
+        "keywords",
+        "competitors",
+        "project-pages",
+        "blog-posts",
+    ]
     assert "public-api-architecture" not in {
-        page["slug"] for page in pages_by_category.get("features", [])
+        page["slug"] for page in pages_by_category.get("api", [])
     }
 
 
@@ -266,19 +275,70 @@ def test_docs_root_with_trailing_slash_redirects_to_docs_introduction(client):
     assert response["Location"] == "/docs/getting-started/introduction/"
 
 
-def test_public_api_architecture_doc_includes_competitor_and_blog_post_endpoints_and_examples():
+@pytest.mark.parametrize(
+    ("slug", "expected_endpoints"),
+    [
+        ("authorization", ["X-API-Key", "GET /api/docs", "GET /api/openapi.json"]),
+        ("account", ["GET /public-api/account"]),
+        (
+            "projects",
+            [
+                "GET /public-api/projects",
+                "POST /public-api/projects",
+                "GET /public-api/projects/{project_id}",
+                "PATCH /public-api/projects/{project_id}",
+            ],
+        ),
+        (
+            "title-suggestions",
+            [
+                "GET /public-api/projects/{project_id}/title-suggestions",
+                "GET /public-api/projects/{project_id}/title-suggestions/{suggestion_id}",
+                "POST /public-api/projects/{project_id}/title-suggestions",
+            ],
+        ),
+        (
+            "keywords",
+            [
+                "GET /public-api/projects/{project_id}/keywords",
+                "GET /public-api/projects/{project_id}/keywords/{keyword_id}",
+                "POST /public-api/projects/{project_id}/keywords",
+            ],
+        ),
+        (
+            "competitors",
+            [
+                "GET /public-api/projects/{project_id}/competitors",
+                "GET /public-api/projects/{project_id}/competitors/{competitor_id}",
+                "POST /public-api/projects/{project_id}/competitors",
+            ],
+        ),
+        (
+            "project-pages",
+            [
+                "GET /public-api/projects/{project_id}/pages",
+                "GET /public-api/projects/{project_id}/pages/{page_id}",
+                "POST /public-api/projects/{project_id}/pages",
+            ],
+        ),
+        (
+            "blog-posts",
+            [
+                "POST /public-api/projects/{project_id}/blog-posts/generate",
+                "GET /public-api/projects/{project_id}/blog-posts",
+                "GET /public-api/projects/{project_id}/blog-posts/{blog_post_id}",
+                "POST /public-api/projects/{project_id}/blog-posts/{blog_post_id}/publish",
+            ],
+        ),
+    ],
+)
+def test_api_docs_pages_include_expected_endpoints(slug, expected_endpoints):
     docs_root = Path(__file__).resolve().parent / "content"
-    architecture_doc = docs_root / "api" / "public-api-architecture.md"
-    content = architecture_doc.read_text(encoding="utf-8")
+    api_doc = docs_root / "api" / f"{slug}.md"
+    content = api_doc.read_text(encoding="utf-8")
 
-    assert "GET /public-api/projects/{project_id}/competitors" in content
-    assert "GET /public-api/projects/{project_id}/competitors/{competitor_id}" in content
-    assert "POST /public-api/projects/{project_id}/competitors" in content
-    assert "POST /public-api/projects/{project_id}/blog-posts/generate" in content
-    assert "GET /public-api/projects/{project_id}/blog-posts" in content
-    assert "GET /public-api/projects/{project_id}/blog-posts/{blog_post_id}" in content
-    assert "POST /public-api/projects/{project_id}/blog-posts/{blog_post_id}/publish" in content
-    assert "include_content=false" in content
+    for endpoint in expected_endpoints:
+        assert endpoint in content
 
 
 def test_legacy_api_docs_page_redirects_to_docs_page(client):
