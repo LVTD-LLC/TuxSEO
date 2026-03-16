@@ -24,7 +24,12 @@ from django.views.generic.base import RedirectView
 from ninja.openapi.views import openapi_json, openapi_view
 
 from core.public_api.views import public_api
-from core.views import AccountSignupView, OnboardingFriendlyConfirmEmailView, trigger_error
+from core.views import (
+    AccountSignupView,
+    OnboardingFriendlyConfirmEmailView,
+    skill_markdown_view,
+    trigger_error,
+)
 from docs.views import docs_page_view
 from tuxseo.sitemaps import sitemaps
 
@@ -39,6 +44,7 @@ urlpatterns = [
     path("accounts/", include("allauth.urls")),
     path("anymail/", include("anymail.urls")),
     path("uses", TemplateView.as_view(template_name="pages/uses.html"), name="uses"),
+    path("skill.md", skill_markdown_view, name="skill_markdown"),
     path("stripe/", include("djstripe.urls", namespace="djstripe")),
     path("api/docs", partial(openapi_view, api=public_api), name="api_docs"),
     path("api/docs/", partial(openapi_view, api=public_api), name="api_docs_slash"),

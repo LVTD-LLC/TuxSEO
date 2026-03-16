@@ -196,6 +196,7 @@ def test_project_home_view_renders_copyable_api_and_prompt_snippets(client):
     assert "https://tuxseo.com/public-api/account" in content
     assert "Security note: treat this key like a password." in content
     assert "You are helping me operate TuxSEO for my project." in content
+    assert "First read the agent skill file: https://tuxseo.com/skill.md" in content
     assert "TuxSEO API base URL: https://tuxseo.com/public-api" in content
     assert f"TuxSEO API key: {user.profile.key}" in content
     assert "Project URL:" not in content

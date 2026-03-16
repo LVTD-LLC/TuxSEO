@@ -1352,3 +1352,13 @@ def changelog_view(request):
     }
 
     return render(request, "pages/changelog.html", context)
+
+
+def skill_markdown_view(request):
+    """Serve the canonical agent skill markdown file at /skill.md."""
+    skill_file = Path(settings.BASE_DIR) / "skill.md"
+
+    with open(skill_file, encoding="utf-8") as file:
+        skill_content = file.read()
+
+    return HttpResponse(skill_content, content_type="text/markdown; charset=utf-8")

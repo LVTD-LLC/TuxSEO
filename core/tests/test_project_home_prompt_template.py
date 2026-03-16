@@ -9,6 +9,7 @@ def test_project_home_prompt_template_uses_minimal_tuxseo_agent_template():
 
     assert "Prompt template for AI agents" in content
     assert "You are helping me operate TuxSEO for my project." in content
+    assert "First read the agent skill file: https://tuxseo.com/skill.md" in content
     assert "TuxSEO API base URL: https://tuxseo.com/public-api" in content
     assert "TuxSEO API key:" in content
     assert "Project URL:" not in content
