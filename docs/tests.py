@@ -125,12 +125,12 @@ def test_get_flat_page_list_flattens_navigation_structure():
                 {
                     "slug": "introduction",
                     "title": "Introduction",
-                    "url": "/api/docs/getting-started/introduction/",
+                    "url": "/docs/getting-started/introduction/",
                 },
                 {
                     "slug": "quickstart",
                     "title": "Quickstart",
-                    "url": "/api/docs/getting-started/quickstart/",
+                    "url": "/docs/getting-started/quickstart/",
                 },
             ],
         }
@@ -152,12 +152,12 @@ def test_get_previous_and_next_pages_returns_neighbor_pages():
                 {
                     "slug": "introduction",
                     "title": "Introduction",
-                    "url": "/api/docs/getting-started/introduction/",
+                    "url": "/docs/getting-started/introduction/",
                 },
                 {
                     "slug": "quickstart",
                     "title": "Quickstart",
-                    "url": "/api/docs/getting-started/quickstart/",
+                    "url": "/docs/getting-started/quickstart/",
                 },
             ],
         },
@@ -168,7 +168,7 @@ def test_get_previous_and_next_pages_returns_neighbor_pages():
                 {
                     "slug": "blog-post-suggestions",
                     "title": "Blog Post Suggestions",
-                    "url": "/api/docs/features/blog-post-suggestions/",
+                    "url": "/docs/features/blog-post-suggestions/",
                 }
             ],
         },
@@ -281,21 +281,21 @@ def test_public_api_architecture_doc_includes_competitor_and_blog_post_endpoints
     assert "include_content=false" in content
 
 
-def test_legacy_docs_page_redirects_to_api_docs_page(client):
-    response = client.get("/docs/getting-started/introduction/", follow=False)
+def test_legacy_api_docs_page_redirects_to_docs_page(client):
+    response = client.get("/api/docs/getting-started/introduction/", follow=False)
 
     assert response.status_code == 302
-    assert response["Location"] == "/api/docs/getting-started/introduction/"
+    assert response["Location"] == "/docs/getting-started/introduction/"
 
 
-def test_api_docs_category_page_is_served_from_existing_docs_content(client):
+def test_docs_category_page_is_served_from_existing_docs_content(client):
     with patch("docs.views.render", return_value=HttpResponse("ok")):
-        response = client.get("/api/docs/getting-started/introduction/")
+        response = client.get("/docs/getting-started/introduction/")
 
     assert response.status_code == 200
 
 
-def test_docs_markdown_internal_links_use_api_docs_paths():
+def test_docs_markdown_internal_links_use_docs_paths():
     markdown_link_pattern = re.compile(r"(?<!\!)\[[^\]]+\]\(([^)]+)\)")
     docs_content_root = Path(__file__).resolve().parent / "content"
     validation_errors = []
@@ -307,16 +307,16 @@ def test_docs_markdown_internal_links_use_api_docs_paths():
             if not link_target or link_target.startswith(("http://", "https://", "#", "mailto:")):
                 continue
 
-            if link_target.startswith("/docs/"):
+            if link_target.startswith("/api/docs/"):
                 validation_errors.append(
-                    f"{markdown_file}: use '/api/docs/' paths instead of '{link_target}'"
+                    f"{markdown_file}: use '/docs/' paths instead of '{link_target}'"
                 )
                 continue
 
-            if not link_target.startswith("/api/docs/"):
+            if not link_target.startswith("/docs/"):
                 continue
 
-            path_without_prefix = link_target.removeprefix("/api/docs/").strip("/")
+            path_without_prefix = link_target.removeprefix("/docs/").strip("/")
             path_parts = path_without_prefix.split("/")
             if len(path_parts) != 2:
                 validation_errors.append(

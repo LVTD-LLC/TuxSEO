@@ -80,7 +80,7 @@ def get_docs_navigation():  # noqa: C901
                 {
                     "slug": page_slug,
                     "title": page_title,
-                    "url": f"/api/docs/{category_slug}/{page_slug}/",
+                    "url": f"/docs/{category_slug}/{page_slug}/",
                 }
             )
 

@@ -60,7 +60,7 @@ Now edit the `.env` file to add your credentials:
 nano .env
 ```
 
-You need to configure several environment variables for TuxSEO to work properly. See the [Environment Variables](/api/docs/deployment/environment-variables/) guide for complete details on all available options.
+You need to configure several environment variables for TuxSEO to work properly. See the [Environment Variables](/docs/deployment/environment-variables/) guide for complete details on all available options.
 
 At minimum, update these required values:
 
