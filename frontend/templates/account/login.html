@@ -23,8 +23,8 @@
                 <div class="-space-y-px rounded-md shadow-sm">
                     <div>
                         {{ form.login.errors | safe }}
-                        <label for="username" class="sr-only">Username</label>
-                        {% render_field form.login placeholder="Username" id="username" name="username" type="text" autocomplete="username" required=True class="block relative px-3 py-2 w-full placeholder-gray-500 text-gray-900 rounded-none rounded-t-md border border-gray-300 appearance-none focus:outline-none focus:ring-gray-500 focus:border-gray-500 focus:z-10 sm:text-sm" %}
+                        <label for="email" class="sr-only">Email</label>
+                        {% render_field form.login placeholder="Email" id="email" name="username" type="text" autocomplete="email" required=True class="block relative px-3 py-2 w-full placeholder-gray-500 text-gray-900 rounded-none rounded-t-md border border-gray-300 appearance-none focus:outline-none focus:ring-gray-500 focus:border-gray-500 focus:z-10 sm:text-sm" %}
                     </div>
                     <div>
                         {{ form.password.errors | safe }}
