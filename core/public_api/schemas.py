@@ -258,6 +258,23 @@ class PublicProjectPageCreateOut(Schema):
     page: PublicProjectPageOut | None = None
 
 
+class PublicLinkAuditLogOut(Schema):
+    id: int
+    phase: str
+    decision: str
+    candidate_url: str
+    candidate_domain: str = ""
+    link_source: str = ""
+    relevance_score: float | None = None
+    relevance_threshold: float | None = None
+    proposed_anchor: str = ""
+    final_anchor: str = ""
+    relation: str = ""
+    policy_flags: list[str] = []
+    reasons: list[str] = []
+    created_at: str
+
+
 class PublicBlogPostOut(Schema):
     id: int
     title: str
@@ -268,6 +285,7 @@ class PublicBlogPostOut(Schema):
     date_posted: str | None = None
     title_suggestion_id: int | None = None
     content: str | None = None
+    link_audit_logs: list[PublicLinkAuditLogOut] = []
 
 
 class PublicBlogPostListOut(Schema):

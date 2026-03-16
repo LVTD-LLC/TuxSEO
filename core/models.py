@@ -1,4 +1,7 @@
+import re
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
+from urllib.parse import urlparse
 from urllib.request import urlopen
 
 import replicate
@@ -1294,6 +1297,181 @@ class GeneratedBlogPost(BaseModel):
 
         return list(unique_pages_by_project.values())
 
+    @staticmethod
+    def _extract_domain(url: str) -> str:
+        return (urlparse(url).netloc or "").lower()
+
+    @staticmethod
+    def _normalize_anchor(text: str) -> str:
+        return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+    @classmethod
+    def _build_default_anchor_for_page(cls, page) -> str:
+        return cls._normalize_anchor(page.title or page.description or page.url)
+
+    def _evaluate_link_opportunity(self, *, page, link_source: str, now):
+        """Apply hard safety controls to a candidate link page and return (allowed, details)."""
+        relevance_threshold = 0.78 if link_source == "internal" else 0.74
+        domain_window_days = 7
+        max_domain_placements_per_window = 3
+        max_source_target_domain_placements_per_window = 1
+        max_identical_anchor_per_window = 1
+
+        candidate_domain = self._extract_domain(page.url)
+        source_domain = self._extract_domain(self.project.url)
+        proposed_anchor = self._build_default_anchor_for_page(page)
+
+        reasons = []
+        flags = []
+        relation = ""
+
+        if link_source == "external":
+            if not self.project.particiate_in_link_exchange:
+                reasons.append("source_project_not_opted_in")
+            if not page.project or not page.project.particiate_in_link_exchange:
+                reasons.append("target_project_not_opted_in")
+            relation = "nofollow"
+            flags.extend(["external", "nofollow_supported"])
+        else:
+            flags.append("internal")
+
+        relevance_score = None
+        if self.title_suggestion and page.embedding and self.title_suggestion.suggested_meta_description:
+            query_embedding = get_jina_embedding(self.title_suggestion.suggested_meta_description)
+            if query_embedding:
+                dot_product = sum(a * b for a, b in zip(page.embedding, query_embedding))
+                magnitude_page = sum(a * a for a in page.embedding) ** 0.5
+                magnitude_query = sum(b * b for b in query_embedding) ** 0.5
+                if magnitude_page > 0 and magnitude_query > 0:
+                    relevance_score = dot_product / (magnitude_page * magnitude_query)
+                    if relevance_score < relevance_threshold:
+                        reasons.append("below_relevance_threshold")
+                else:
+                    reasons.append("missing_relevance_signal")
+            else:
+                reasons.append("missing_relevance_signal")
+        else:
+            reasons.append("missing_relevance_signal")
+
+        window_start = now - timedelta(days=domain_window_days)
+        recent_placements = LinkOpportunityAuditLog.objects.filter(
+            phase=LinkOpportunityAuditLog.Phase.PLACEMENT,
+            decision=LinkOpportunityAuditLog.Decision.PLACED,
+            created_at__gte=window_start,
+        )
+
+        domain_placement_count = recent_placements.filter(candidate_domain=candidate_domain).count()
+        if domain_placement_count >= max_domain_placements_per_window:
+            reasons.append("domain_velocity_cap_exceeded")
+
+        source_target_placement_count = recent_placements.filter(
+            source_domain=source_domain,
+            candidate_domain=candidate_domain,
+        ).count()
+        if source_target_placement_count >= max_source_target_domain_placements_per_window:
+            reasons.append("source_target_velocity_cap_exceeded")
+
+        identical_anchor_count = recent_placements.filter(
+            candidate_domain=candidate_domain,
+            final_anchor=proposed_anchor,
+        ).count()
+        if proposed_anchor and identical_anchor_count >= max_identical_anchor_per_window:
+            reasons.append("anchor_diversity_cap_exceeded")
+
+        allowed = len(reasons) == 0
+
+        details = {
+            "phase": LinkOpportunityAuditLog.Phase.SUGGESTION,
+            "decision": (
+                LinkOpportunityAuditLog.Decision.ALLOWED
+                if allowed
+                else LinkOpportunityAuditLog.Decision.BLOCKED
+            ),
+            "source_project": self.project,
+            "target_project": page.project if link_source == "external" else self.project,
+            "generated_blog_post": self,
+            "candidate_page": page,
+            "candidate_url": page.url,
+            "candidate_domain": candidate_domain,
+            "source_domain": source_domain,
+            "link_source": link_source,
+            "relevance_score": relevance_score,
+            "relevance_threshold": relevance_threshold,
+            "proposed_anchor": proposed_anchor,
+            "final_anchor": "",
+            "relation": relation,
+            "policy_flags": flags,
+            "reasons": reasons,
+        }
+        return allowed, details
+
+    def _evaluate_safe_link_opportunities(self, *, internal_pages, external_pages):
+        now = timezone.now()
+        safe_internal_pages = []
+        safe_external_pages = []
+        audit_logs = []
+
+        for page in internal_pages:
+            allowed, details = self._evaluate_link_opportunity(
+                page=page,
+                link_source="internal",
+                now=now,
+            )
+            audit_logs.append(LinkOpportunityAuditLog(**details))
+            if allowed:
+                safe_internal_pages.append(page)
+
+        for page in external_pages:
+            allowed, details = self._evaluate_link_opportunity(
+                page=page,
+                link_source="external",
+                now=now,
+            )
+            audit_logs.append(LinkOpportunityAuditLog(**details))
+            if allowed:
+                safe_external_pages.append(page)
+
+        if audit_logs:
+            LinkOpportunityAuditLog.objects.bulk_create(audit_logs)
+
+        return safe_internal_pages, safe_external_pages
+
+    def _record_link_placement_audit_logs(self, *, candidate_pages, content_with_links):
+        links = re.findall(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", content_with_links)
+        final_anchor_by_url = {url: self._normalize_anchor(anchor) for anchor, url in links}
+
+        placement_logs = []
+        for page in candidate_pages:
+            final_anchor = final_anchor_by_url.get(page.url, "")
+            placement_logs.append(
+                LinkOpportunityAuditLog(
+                    phase=LinkOpportunityAuditLog.Phase.PLACEMENT,
+                    decision=(
+                        LinkOpportunityAuditLog.Decision.PLACED
+                        if final_anchor
+                        else LinkOpportunityAuditLog.Decision.NOT_PLACED
+                    ),
+                    source_project=self.project,
+                    target_project=page.project if page.project_id != self.project_id else self.project,
+                    generated_blog_post=self,
+                    candidate_page=page,
+                    candidate_url=page.url,
+                    candidate_domain=self._extract_domain(page.url),
+                    source_domain=self._extract_domain(self.project.url),
+                    link_source="external" if page.project_id != self.project_id else "internal",
+                    relevance_score=None,
+                    relevance_threshold=None,
+                    proposed_anchor=self._build_default_anchor_for_page(page),
+                    final_anchor=final_anchor,
+                    relation="nofollow" if page.project_id != self.project_id else "",
+                    policy_flags=["placed"] if final_anchor else ["not_placed"],
+                    reasons=[] if final_anchor else ["agent_did_not_place_link"],
+                )
+            )
+
+        if placement_logs:
+            LinkOpportunityAuditLog.objects.bulk_create(placement_logs)
+
     def _get_link_candidate_pages(self, max_pages=4, max_external_pages=3):
         manually_selected_project_pages = list(self.project.project_pages.filter(always_use=True))
         relevant_project_pages = list(
@@ -1384,25 +1562,30 @@ class GeneratedBlogPost(BaseModel):
             max_external_pages=max_external_pages,
         )
 
-        all_pages_to_link = internal_project_pages + external_project_pages
+        safe_internal_pages, safe_external_pages = self._evaluate_safe_link_opportunities(
+            internal_pages=internal_project_pages,
+            external_pages=external_project_pages,
+        )
+
+        all_pages_to_link = safe_internal_pages + safe_external_pages
 
         if not all_pages_to_link:
             logger.info(
-                "[InsertLinksIntoPost] No pages found for link insertion",
+                "[InsertLinksIntoPost] No pages passed safety checks for link insertion",
                 blog_post_id=self.id,
                 project_id=self.project_id,
             )
             return self.content
 
         project_page_contexts = self._build_page_contexts(
-            internal_pages=internal_project_pages,
-            external_pages=external_project_pages,
+            internal_pages=safe_internal_pages,
+            external_pages=safe_external_pages,
         )
 
         # Extract URLs for logging
         urls_to_insert = [page.url for page in all_pages_to_link]
-        internal_urls = [page.url for page in internal_project_pages]
-        external_urls = [page.url for page in external_project_pages]
+        internal_urls = [page.url for page in safe_internal_pages]
+        external_urls = [page.url for page in safe_external_pages]
 
         link_insertion_context = LinkInsertionContext(
             blog_post_content=self.content,
@@ -1418,8 +1601,8 @@ class GeneratedBlogPost(BaseModel):
             blog_post_id=self.id,
             project_id=self.project_id,
             num_total_pages=len(project_page_contexts),
-            num_internal_pages=len(internal_project_pages),
-            num_external_pages=len(external_project_pages),
+            num_internal_pages=len(safe_internal_pages),
+            num_external_pages=len(safe_external_pages),
             num_always_use_pages=len(manually_selected_project_pages),
             participate_in_link_exchange=self.project.particiate_in_link_exchange,
             urls_to_insert=urls_to_insert,
@@ -1439,6 +1622,10 @@ class GeneratedBlogPost(BaseModel):
 
         self.content = content_with_links
         self.save(update_fields=["content"])
+        self._record_link_placement_audit_logs(
+            candidate_pages=all_pages_to_link,
+            content_with_links=content_with_links,
+        )
 
         logger.info(
             "[InsertLinksIntoPost] Links inserted successfully",
@@ -1930,6 +2117,67 @@ class AgentExecutionJob(BaseModel):
 
     def __str__(self):
         return f"Job {self.id} {self.operation} ({self.status})"
+
+
+class LinkOpportunityAuditLog(BaseModel):
+    class Phase(models.TextChoices):
+        SUGGESTION = "SUGGESTION", "Suggestion"
+        PLACEMENT = "PLACEMENT", "Placement"
+
+    class Decision(models.TextChoices):
+        ALLOWED = "ALLOWED", "Allowed"
+        BLOCKED = "BLOCKED", "Blocked"
+        PLACED = "PLACED", "Placed"
+        NOT_PLACED = "NOT_PLACED", "Not Placed"
+
+    phase = models.CharField(max_length=20, choices=Phase.choices)
+    decision = models.CharField(max_length=20, choices=Decision.choices)
+    source_project = models.ForeignKey(
+        Project,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="link_opportunity_logs_as_source",
+    )
+    target_project = models.ForeignKey(
+        Project,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="link_opportunity_logs_as_target",
+    )
+    generated_blog_post = models.ForeignKey(
+        GeneratedBlogPost,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="link_opportunity_audit_logs",
+    )
+    candidate_page = models.ForeignKey(
+        ProjectPage,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="link_opportunity_audit_logs",
+    )
+    candidate_url = models.URLField(max_length=500)
+    candidate_domain = models.CharField(max_length=255, blank=True, default="")
+    source_domain = models.CharField(max_length=255, blank=True, default="")
+    link_source = models.CharField(max_length=20, blank=True, default="")
+    relevance_score = models.FloatField(null=True, blank=True)
+    relevance_threshold = models.FloatField(null=True, blank=True)
+    proposed_anchor = models.CharField(max_length=255, blank=True, default="")
+    final_anchor = models.CharField(max_length=255, blank=True, default="")
+    relation = models.CharField(max_length=32, blank=True, default="")
+    policy_flags = models.JSONField(default=list, blank=True)
+    reasons = models.JSONField(default=list, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["source_project", "phase", "created_at"]),
+            models.Index(fields=["candidate_domain", "phase", "created_at"]),
+            models.Index(fields=["decision", "phase", "created_at"]),
+        ]
 
 
 class Keyword(BaseModel):
