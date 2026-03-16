@@ -154,6 +154,34 @@ Responses:
 - `GET /public-api/projects/{project_id}/blog-posts/{blog_post_id}`
 - `POST /public-api/projects/{project_id}/blog-posts/{blog_post_id}/publish`
 
+## Plan-Based Access Rules
+
+### Free-allowed endpoints/actions
+
+- Read account/projects/resources (`GET` endpoints)
+- Create first project (`POST /public-api/projects`) within free project limit
+- Create title suggestions (`POST /title-suggestions`) within free monthly limit
+- Generate blog posts (`POST /blog-posts/generate`) within free monthly limit
+- Add competitors/pages within free limits
+
+### Pro-gated or upgrade-required actions
+
+- Creating projects beyond free limit (`FREE_PLAN_PROJECT_LIMIT_REACHED`)
+- Keyword additions (`PRO_PLAN_REQUIRED_KEYWORD_ADDITION`)
+- Content automation configuration (`PRO_PLAN_REQUIRED_CONTENT_AUTOMATION`)
+- Hitting free usage caps for title/blog generation and competitors (`*_LIMIT_REACHED`)
+
+When a plan gate blocks a request, API returns deterministic `403` with machine-readable error code:
+
+```json
+{
+  "status": "error",
+  "code": "PRO_PLAN_REQUIRED_KEYWORD_ADDITION",
+  "message": "Keyword additions are not available on the Free plan. Upgrade to Pro to add custom keywords.",
+  "upgrade_url": "https://tuxseo.com/pricing"
+}
+```
+
 ## Request Examples
 
 ### Get account
