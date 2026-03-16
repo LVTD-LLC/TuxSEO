@@ -38,9 +38,90 @@ Legacy paths (`/public-api/docs`, `/public-api/openapi.json`) redirect to these 
 
 ### Projects
 
-- `POST /public-api/projects`
-- `GET /public-api/projects/{project_id}`
-- `PATCH /public-api/projects/{project_id}`
+#### `GET /public-api/projects` (List projects)
+
+Returns projects owned by the API key account.
+
+Query params:
+
+- `page` (optional, default `1`, min `1`)
+- `page_size` (optional, default `20`, min `1`, max `100`)
+
+Success (`200`):
+
+```json
+{
+  "status": "success",
+  "projects": [
+    {
+      "project_id": 123,
+      "name": "TuxSEO",
+      "type": "SaaS",
+      "url": "https://tuxseo.com",
+      "summary": "AI-powered SEO content automation",
+      "blog_theme": "",
+      "founders": "",
+      "key_features": "",
+      "target_audience_summary": "",
+      "pain_points": "",
+      "product_usage": "",
+      "links": "",
+      "language": "english",
+      "location": "Global"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "page_size": 20,
+    "total": 1
+  }
+}
+```
+
+#### `POST /public-api/projects` (Create project)
+
+Creates a project and triggers initial content analysis.
+
+Request body:
+
+```json
+{
+  "url": "https://example.com",
+  "source": "public_api"
+}
+```
+
+Success (`200`) response uses the same `project` object shape as above.
+
+Common errors:
+
+- `400` invalid input (`Project URL must start with http:// or https://`, duplicates, plan limits, unverified email gate)
+- `500` unexpected creation/analysis failures
+
+#### `GET /public-api/projects/{project_id}` (Get project)
+
+Returns a single owned project.
+
+Responses:
+
+- `200` with project payload
+- `404` if project is not found for this account
+
+#### `PATCH /public-api/projects/{project_id}` (Update project)
+
+Partially updates project fields.
+
+Updatable fields:
+
+- `name`, `summary`, `blog_theme`, `founders`, `key_features`
+- `target_audience_summary`, `pain_points`, `product_usage`
+- `links`, `language`, `location`
+
+Responses:
+
+- `200` updated project
+- `400` no fields provided or invalid values (for example empty `name`)
+- `404` project not found
 
 ### Content Automation
 
@@ -84,6 +165,46 @@ Legacy paths (`/public-api/docs`, `/public-api/openapi.json`) redirect to these 
 ```bash
 curl -X GET "https://tuxseo.com/public-api/account" \
   -H "X-API-Key: $TUXSEO_API_KEY"
+```
+
+### List projects
+
+```bash
+curl -X GET "https://tuxseo.com/public-api/projects?page=1&page_size=20" \
+  -H "X-API-Key: $TUXSEO_API_KEY"
+```
+
+### Get project details
+
+```bash
+curl -X GET "https://tuxseo.com/public-api/projects/123" \
+  -H "X-API-Key: $TUXSEO_API_KEY"
+```
+
+### Create project
+
+```bash
+curl -X POST "https://tuxseo.com/public-api/projects" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $TUXSEO_API_KEY" \
+  -d '{
+    "url": "https://example.com",
+    "source": "public_api"
+  }'
+```
+
+### Update project metadata
+
+```bash
+curl -X PATCH "https://tuxseo.com/public-api/projects/123" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $TUXSEO_API_KEY" \
+  -d '{
+    "name": "TuxSEO",
+    "summary": "SEO automation platform for founders",
+    "language": "english",
+    "location": "Global"
+  }'
 ```
 
 ### Create title suggestions

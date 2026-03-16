@@ -34,6 +34,7 @@ from core.public_api.views import (
     list_public_competitors,
     list_public_keywords,
     list_public_project_pages,
+    list_public_projects,
     list_public_title_suggestions,
     publish_public_blog_post,
     public_api,
@@ -166,6 +167,55 @@ def test_create_public_project_returns_success():
         project_mock.id,
         group="Discover Sitemap",
     )
+
+
+def test_list_public_projects_supports_pagination():
+    request = SimpleNamespace(auth=build_profile())
+
+    first_project = Mock()
+    first_project.id = 10
+    first_project.name = "Project One"
+    first_project.url = "https://one.example.com"
+    first_project.summary = "Summary one"
+    first_project.get_type_display.return_value = "SaaS"
+    first_project.blog_theme = ""
+    first_project.founders = ""
+    first_project.key_features = ""
+    first_project.target_audience_summary = ""
+    first_project.pain_points = ""
+    first_project.product_usage = ""
+    first_project.links = ""
+    first_project.language = ""
+    first_project.location = ""
+
+    second_project = Mock()
+    second_project.id = 11
+    second_project.name = "Project Two"
+    second_project.url = "https://two.example.com"
+    second_project.summary = "Summary two"
+    second_project.get_type_display.return_value = "SaaS"
+    second_project.blog_theme = ""
+    second_project.founders = ""
+    second_project.key_features = ""
+    second_project.target_audience_summary = ""
+    second_project.pain_points = ""
+    second_project.product_usage = ""
+    second_project.links = ""
+    second_project.language = ""
+    second_project.location = ""
+
+    projects_query = MagicMock()
+    projects_query.order_by.return_value = projects_query
+    projects_query.count.return_value = 2
+    projects_query.__getitem__.return_value = [first_project]
+
+    with patch("core.public_api.views.Project.objects.filter", return_value=projects_query):
+        response_data = list_public_projects(request, page=1, page_size=1)
+
+    assert response_data["status"] == "success"
+    assert response_data["pagination"]["total"] == 2
+    assert len(response_data["projects"]) == 1
+    assert response_data["projects"][0]["project_id"] == 10
 
 
 def test_get_public_project_returns_not_found_for_missing_project():
@@ -1077,6 +1127,8 @@ def test_public_openapi_includes_public_routes_only():
     assert "/public-api/projects/{project_id}/blog-posts" in schema_paths
     assert "/public-api/projects/{project_id}/blog-posts/{blog_post_id}" in schema_paths
     assert "/public-api/projects/{project_id}/blog-posts/{blog_post_id}/publish" in schema_paths
+    assert "get" in schema_paths["/public-api/projects"]
+    assert "post" in schema_paths["/public-api/projects"]
     assert "/public-api/validate-url" not in schema_paths
 
 
@@ -1085,6 +1137,7 @@ def test_public_openapi_groups_endpoints_by_functional_tags():
     paths = openapi_schema["paths"]
 
     assert paths["/public-api/account"]["get"]["tags"] == ["Account"]
+    assert paths["/public-api/projects"]["get"]["tags"] == ["Projects"]
     assert paths["/public-api/projects"]["post"]["tags"] == ["Projects"]
     assert paths["/public-api/projects/{project_id}/content-automation"]["post"]["tags"] == [
         "Content Automation"

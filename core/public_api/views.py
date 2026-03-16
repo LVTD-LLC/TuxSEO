@@ -37,6 +37,7 @@ from core.public_api.schemas import (
     PublicProjectCreateOut,
     PublicProjectGetOut,
     PublicProjectIn,
+    PublicProjectListOut,
     PublicProjectPageCreateIn,
     PublicProjectPageCreateOut,
     PublicProjectPageGetOut,
@@ -204,6 +205,31 @@ def get_public_account(request: HttpRequest):
         "is_on_pro_plan": profile.is_on_pro_plan,
         "project_limit": profile.project_limit,
         "active_project_count": profile.number_of_active_projects,
+    }
+
+
+@public_api.get(
+    "/projects",
+    response=PublicProjectListOut,
+    auth=[public_api_key_auth],
+    tags=["Projects"],
+)
+def list_public_projects(request: HttpRequest, page: int = 1, page_size: int = 20):
+    profile = request.auth
+
+    page = max(page, 1)
+    page_size = min(max(page_size, 1), 100)
+
+    projects_query = Project.objects.filter(profile=profile).order_by("-updated_at", "-created_at")
+    total = projects_query.count()
+    start_index = (page - 1) * page_size
+    end_index = start_index + page_size
+    projects = list(projects_query[start_index:end_index])
+
+    return {
+        "status": "success",
+        "projects": [serialize_public_project(project) for project in projects],
+        "pagination": {"page": page, "page_size": page_size, "total": total},
     }
 
 
