@@ -7,6 +7,7 @@ from django_q.tasks import async_task
 from ninja import NinjaAPI
 
 from core.abuse_prevention import enforce_verified_email_for_expensive_action
+from core.api_error_semantics import PlanEntitlement, error_payload, evaluate_plan_entitlement
 from core.choices import ContentType, ExecutionJobOperation, ExecutionJobStatus
 from core.models import (
     AgentExecutionJob,
@@ -74,12 +75,15 @@ def get_public_pricing_url() -> str:
 def plan_gate_error(code: str, message: str, *, status_code: int = 403) -> tuple[int, dict]:
     return (
         status_code,
-        {
-            "status": "error",
-            "code": code,
-            "message": message,
-            "upgrade_url": get_public_pricing_url(),
-        },
+        error_payload(code=code, message=message, upgrade_url=get_public_pricing_url()),
+    )
+
+
+def get_public_entitlement_error(profile, entitlement: PlanEntitlement) -> dict | None:
+    return evaluate_plan_entitlement(
+        profile,
+        entitlement,
+        upgrade_url=get_public_pricing_url(),
     )
 
 
@@ -860,14 +864,9 @@ def create_public_competitor(request: HttpRequest, project_id: int, data: Public
     if project is None:
         return 404, {"message": "Project not found"}
 
-    if not profile.can_add_competitors:
-        return plan_gate_error(
-            "PLAN_COMPETITOR_LIMIT_REACHED",
-            (
-                f"You have reached the competitor limit for your {profile.product_name} "
-                "plan. Please upgrade to add more competitors."
-            ),
-        )
+    entitlement_error = get_public_entitlement_error(profile, PlanEntitlement.COMPETITOR_ADD)
+    if entitlement_error:
+        return 403, entitlement_error
 
     competitor_url = data.url.strip()
     if not competitor_url:
@@ -1323,15 +1322,9 @@ def generate_public_blog_post(request: HttpRequest, project_id: int, data: Publi
     if project is None:
         return 404, {"message": "Project not found"}
 
-    if not getattr(profile, "can_generate_blog_posts", True):
-        limit = getattr(profile, "blog_post_generation_limit", None)
-        current_count = getattr(profile, "number_of_generated_blog_posts_this_month", None)
-        usage_text = f" ({current_count}/{limit} this month)" if limit is not None and current_count is not None else ""
-        return plan_gate_error(
-            "FREE_PLAN_BLOG_POST_LIMIT_REACHED",
-            "Blog post generation limit reached on your current plan"
-            f"{usage_text}. Upgrade to Pro for higher limits.",
-        )
+    entitlement_error = get_public_entitlement_error(profile, PlanEntitlement.CONTENT_GENERATION)
+    if entitlement_error:
+        return 403, entitlement_error
 
     suggestion = BlogPostTitleSuggestion.objects.filter(
         id=data.title_suggestion_id, project=project

@@ -62,6 +62,7 @@ from core.api.schemas import (
     ValidateUrlIn,
     ValidateUrlOut,
 )
+from core.api_error_semantics import PlanEntitlement, evaluate_plan_entitlement, ownership_not_found_payload
 from core.choices import CompetitorPostGenerationStatus, ContentType, ProjectPageType
 from core.models import (
     BlogPost,
@@ -90,6 +91,14 @@ def pro_monthly_checkout_url() -> str:
 
 def get_verified_email_gate_error(profile, action_name: str) -> dict | None:
     return enforce_verified_email_for_expensive_action(profile=profile, action_name=action_name)
+
+
+def get_entitlement_error(profile, entitlement: PlanEntitlement) -> dict | None:
+    return evaluate_plan_entitlement(
+        profile,
+        entitlement,
+        upgrade_url=pro_monthly_checkout_url(),
+    )
 
 
 def should_allow_unverified_first_onboarding_project(profile, project_source: str) -> bool:
@@ -229,16 +238,9 @@ def create_project(request: HttpRequest, data: ProjectScanIn):
             "message": "You already added this project URL",
         }
 
-    if not profile.can_create_project:
-        limit = profile.project_limit
-        if profile.is_on_free_plan:
-            message = f"Project creation limit reached ({limit} project on Free plan). Upgrade to Pro to create more projects."  # noqa: E501
-        else:
-            message = "Project creation limit reached. Contact support for assistance."
-        return {
-            "status": "error",
-            "message": message,
-        }
+    entitlement_error = get_entitlement_error(profile, PlanEntitlement.PROJECT_CREATE)
+    if entitlement_error:
+        return entitlement_error
 
     project = profile.get_or_create_project(url=data.url, source=data.source)
 
@@ -353,15 +355,12 @@ def generate_title_suggestions(request: HttpRequest, data: GenerateTitleSuggesti
             "message": f"Invalid content type: {data.content_type}",
         }
 
-    if not profile.can_generate_title_suggestions:
-        limit = profile.title_suggestion_limit
-        current_count = profile.number_of_title_suggestions_this_month
-        message = f"Title generation limit reached ({current_count}/{limit} suggestions this month on Free plan). <a class='underline' href='{pro_monthly_checkout_url()}'>Upgrade to Pro</a> for unlimited suggestions."  # noqa: E501
+    entitlement_error = get_entitlement_error(profile, PlanEntitlement.TITLE_GENERATION)
+    if entitlement_error:
         return {
             "suggestions": [],
             "suggestions_html": [],
-            "status": "error",
-            "message": message,
+            **entitlement_error,
         }
 
     titles_to_generate = data.num_titles
@@ -423,14 +422,9 @@ def generate_title_from_idea(request: HttpRequest, data: GenerateTitleSuggestion
 
     project = get_object_or_404(Project, id=data.project_id, profile=profile)
 
-    if profile.reached_title_generation_limit:
-        limit = profile.title_suggestion_limit
-        current_count = profile.number_of_title_suggestions_this_month
-        message = f"Title generation limit reached ({current_count}/{limit} suggestions this month on Free plan). <a class='underline' href='{pro_monthly_checkout_url()}'>Upgrade to Pro</a> for unlimited suggestions."  # noqa: E501
-        return {
-            "status": "error",
-            "message": message,
-        }
+    entitlement_error = get_entitlement_error(profile, PlanEntitlement.TITLE_GENERATION)
+    if entitlement_error:
+        return entitlement_error
 
     try:
         try:
@@ -515,14 +509,11 @@ def generate_blog_content(request: HttpRequest, suggestion_id: int):
         BlogPostTitleSuggestion, id=suggestion_id, project__profile=profile
     )
 
-    if profile.reached_content_generation_limit:
-        limit = profile.blog_post_generation_limit
-        current_count = profile.number_of_generated_blog_posts_this_month
-        message = f"Content generation limit reached ({current_count}/{limit} blog posts this month on Free plan). <a class='underline' href='{pro_monthly_checkout_url()}'>Upgrade to Pro</a> for unlimited content."  # noqa: E501
+    entitlement_error = get_entitlement_error(profile, PlanEntitlement.CONTENT_GENERATION)
+    if entitlement_error:
         return {
-            "status": "error",
             "task_id": None,
-            "message": message,
+            **entitlement_error,
         }
 
     try:
@@ -765,12 +756,9 @@ def toggle_link_exchange(request: HttpRequest, project_id: int):
     profile = request.auth
     project = get_object_or_404(Project, id=project_id, profile=profile)
 
-    if not profile.is_on_pro_plan:
-        return {
-            "status": "error",
-            "enabled": False,
-            "message": "Link Exchange is only available on the Pro plan. Please upgrade to access this feature.",  # noqa: E501
-        }
+    entitlement_error = get_entitlement_error(profile, PlanEntitlement.PRO_LINK_EXCHANGE)
+    if entitlement_error:
+        return {"enabled": False, **entitlement_error}
 
     project.particiate_in_link_exchange = not project.particiate_in_link_exchange
     project.save(update_fields=["particiate_in_link_exchange"])
@@ -931,7 +919,9 @@ def add_pricing_page(request: HttpRequest, data: AddPricingPageIn):
     if gate_error:
         return gate_error
 
-    project = Project.objects.get(id=data.project_id, profile=profile)
+    project = Project.objects.filter(id=data.project_id, profile=profile).first()
+    if project is None:
+        return ownership_not_found_payload("Project")
 
     project_page = ProjectPage.objects.create(
         project=project, url=data.url, type=ProjectPageType.PRICING
@@ -953,12 +943,9 @@ def add_competitor(request: HttpRequest, data: AddCompetitorIn):
 
     project = get_object_or_404(Project, id=data.project_id, profile=profile)
 
-    # Check if user has reached competitor limit
-    if not profile.can_add_competitors:
-        return {
-            "status": "error",
-            "message": f"You have reached the competitor limit for your {profile.product_name} plan. Please upgrade to add more competitors.",  # noqa: E501
-        }
+    entitlement_error = get_entitlement_error(profile, PlanEntitlement.COMPETITOR_ADD)
+    if entitlement_error:
+        return entitlement_error
 
     try:
         if Competitor.objects.filter(project=project, url=data.url).exists():
@@ -1025,14 +1012,14 @@ def generate_competitor_vs_title(request: HttpRequest, data: GenerateCompetitorV
     if gate_error:
         return gate_error
 
-    competitor = get_object_or_404(Competitor.objects.select_related("project"), id=data.competitor_id)
-    project = competitor.project
+    competitor = Competitor.objects.select_related("project").filter(
+        id=data.competitor_id,
+        project__profile=profile,
+    ).first()
+    if competitor is None:
+        return ownership_not_found_payload("Competitor")
 
-    if project.profile != profile:
-        return {
-            "status": "error",
-            "message": "You do not have permission to access this competitor",
-        }
+    project = competitor.project
 
     if competitor.blog_post:
         return {
@@ -1041,22 +1028,24 @@ def generate_competitor_vs_title(request: HttpRequest, data: GenerateCompetitorV
             "competitor_id": competitor.id,
         }
 
-    # Check if user has reached competitor posts generation limit
-    if not profile.can_generate_competitor_posts:
-        return {
-            "status": "error",
-            "message": f"You have reached the competitor post generation limit for your {profile.product_name} plan. Please upgrade to generate more competitor comparison posts.",  # noqa: E501
-        }
+    entitlement_error = get_entitlement_error(
+        profile,
+        PlanEntitlement.COMPETITOR_POST_GENERATION,
+    )
+    if entitlement_error:
+        return entitlement_error
 
-    if not profile.can_generate_blog_posts:
-        return {
-            "status": "error",
-            "message": f"You have reached the content generation limit for your {profile.product_name} plan",  # noqa: E501
-        }
+    entitlement_error = get_entitlement_error(profile, PlanEntitlement.CONTENT_GENERATION)
+    if entitlement_error:
+        return entitlement_error
 
     try:
         with transaction.atomic():
-            competitor = Competitor.objects.select_for_update().get(id=data.competitor_id)
+            competitor = (
+                Competitor.objects.select_for_update()
+                .select_related("project")
+                .get(id=data.competitor_id, project__profile=profile)
+            )
 
             if competitor.blog_post_generation_status == CompetitorPostGenerationStatus.PROCESSING:
                 return {
@@ -1231,12 +1220,9 @@ def add_keyword_to_project(request: HttpRequest, data: AddKeywordIn):
 
     project = get_object_or_404(Project, id=data.project_id, profile=profile)
 
-    if not profile.can_add_keywords:
-        if profile.is_on_free_plan:
-            message = f"Keyword additions are not available on the Free plan. <a class='underline' href='{pro_monthly_checkout_url()}'>Upgrade to Pro</a> to add custom keywords."  # noqa: E501
-        else:
-            message = "Keyword limit reached. <a class='underline' href='/settings'>Contact support</a> for assistance."  # noqa: E501
-        return {"status": "error", "message": message}
+    entitlement_error = get_entitlement_error(profile, PlanEntitlement.KEYWORD_ADD)
+    if entitlement_error:
+        return entitlement_error
 
     keyword_text_cleaned = data.keyword_text.strip().lower()
     if not keyword_text_cleaned:
@@ -1646,9 +1632,12 @@ def post_generated_blog_post(request: HttpRequest, data: PostGeneratedBlogPostIn
     if not blog_post_id:
         return {"status": "error", "message": "Missing generated blog post id."}
     try:
-        generated_post = GeneratedBlogPost.objects.get(id=blog_post_id)
-        if generated_post.project and generated_post.project.profile != profile:
-            return {"status": "error", "message": "Forbidden: You do not have access to this post."}
+        generated_post = GeneratedBlogPost.objects.filter(
+            id=blog_post_id,
+            project__profile=profile,
+        ).first()
+        if generated_post is None:
+            return ownership_not_found_payload("Generated blog post")
 
         if generated_post.publish_approval_status != GeneratedBlogPost.ApprovalStatus.APPROVED:
             generated_post.create_workflow_audit_event(
@@ -1727,8 +1716,6 @@ def post_generated_blog_post(request: HttpRequest, data: PostGeneratedBlogPostIn
                 reason="endpoint_submission_failed",
             )
             return {"status": "error", "message": "Failed to post blog."}
-    except GeneratedBlogPost.DoesNotExist:
-        return {"status": "error", "message": "Generated blog post not found."}
     except Exception as e:
         logger.error(
             "Failed to post generated blog post",
@@ -1748,14 +1735,15 @@ def fix_generated_blog_post(request: HttpRequest, data: FixGeneratedBlogPostIn):
         return {"status": "error", "message": "Missing generated blog post id."}
 
     try:
-        generated_post = GeneratedBlogPost.objects.get(id=blog_post_id)
-        if generated_post.project and generated_post.project.profile != profile:
-            return {"status": "error", "message": "Forbidden: You do not have access to this post."}
+        generated_post = GeneratedBlogPost.objects.filter(
+            id=blog_post_id,
+            project__profile=profile,
+        ).first()
+        if generated_post is None:
+            return ownership_not_found_payload("Generated blog post")
 
         return {"status": "success", "message": "Blog post issues have been fixed successfully."}
 
-    except GeneratedBlogPost.DoesNotExist:
-        return {"status": "error", "message": "Generated blog post not found."}
     except Exception as e:
         logger.error(
             "Failed to fix generated blog post",
