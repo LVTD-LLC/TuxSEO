@@ -8,6 +8,7 @@ def test_dashboard_specs_cover_required_surfaces():
     assert "TuxSEO – Operational Health (Logs + Failures)" in names
     assert "TuxSEO – Product Funnel Health" in names
     assert "TuxSEO – LLM Analytics Health" in names
+    assert "TuxSEO – Paid Acquisition Attribution" in names
 
 
 def test_has_ingestion_health_tile_and_llm_cost_token_tiles():
@@ -17,3 +18,5 @@ def test_has_ingestion_health_tile_and_llm_cost_token_tiles():
     assert "Ingestion heartbeat: key event volume (daily)" in all_insight_names
     assert "LLM token trend (sum of $ai_total_tokens)" in all_insight_names
     assert "LLM estimated cost trend (sum of $ai_total_cost_usd)" in all_insight_names
+    assert "Channel performance: paid conversions by channel (daily)" in all_insight_names
+    assert "Copy/creative variant performance (paid_conversion)" in all_insight_names

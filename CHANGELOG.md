@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - PostHog LLM analytics instrumentation for PydanticAI generation flows via `$ai_generation` events, including latency/token metrics, feature-path context, and failure diagnostics
   - PostHog product analytics taxonomy v2 with required-property validation, P1 funnel coverage matrix, and server-side event instrumentation for login, integrations, keywords, page analysis, title/content generation, publish outcomes, link-exchange toggles, and plan lifecycle events
   - idempotent PostHog dashboard bootstrap script + published first-pass dashboard pack for operational health, product funnel health, and LLM reliability/cost health (`scripts/posthog_dashboard_bootstrap.py`, `docs/posthog-dashboards.md`)
+  - paid-acquisition attribution foundation (Meta/Google/Reddit/X): first-touch/latest-touch persistence on Profile+Project, UTM/click-id ingestion, canonical campaign/ad/creative/copy schema, and server-side attribution enrichment for funnel/revenue events
+  - new PostHog canonical events for activation/revenue attribution coverage: `onboarding_completed`, `first_content_generated`, `subscription_started`, `paid_conversion`
+  - paid acquisition dashboard pack extension with channel, campaign/adset/ad, copy/creative, and signup→paid conversion timing tiles
 - Posts
   - custom post types per project with validated name + prompt guidance, CRUD management UI, and Posts navigation integration
   - custom post types can be selected in navigation and applied as generation guidance for title suggestions

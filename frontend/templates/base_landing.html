@@ -44,6 +44,33 @@
           defaults: '2025-05-24',
           person_profiles: 'always',
       })
+
+      ;(() => {
+        const params = new URLSearchParams(window.location.search);
+        const attributionKeys = [
+          'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term',
+          'gclid', 'fbclid', 'ttclid', 'twclid', 'xclid', 'msclkid', 'li_fat_id', 'rdt_cid',
+          'campaign_id', 'campaign_name', 'adset_id', 'adset_name', 'ad_id',
+          'creative_id', 'creative_key', 'copy_variant', 'variant', 'channel', 'platform',
+          'offer', 'geo', 'device'
+        ];
+
+        const eventProps = { path: window.location.pathname };
+        let hasAttributionParam = false;
+
+        attributionKeys.forEach((key) => {
+          const value = params.get(key);
+          if (!value) {
+            return;
+          }
+          hasAttributionParam = true;
+          eventProps[key] = String(value).slice(0, 200);
+        });
+
+        if (hasAttributionParam) {
+          window.posthog.capture('site_visited', eventProps);
+        }
+      })();
   </script>
   {% endif %}
 

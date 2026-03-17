@@ -172,6 +172,22 @@
       "stage": "revenue",
       "description": "Subscription created in Stripe."
     },
+    "onboarding_completed": {
+      "stage": "activation",
+      "description": "User completed onboarding baseline by creating the first project."
+    },
+    "first_content_generated": {
+      "stage": "activation",
+      "description": "First content generation event completed for the account."
+    },
+    "subscription_started": {
+      "stage": "revenue",
+      "description": "Billing subscription officially started."
+    },
+    "paid_conversion": {
+      "stage": "revenue",
+      "description": "Paid conversion recorded from Stripe subscription creation."
+    },
     "plan_upgraded": {
       "stage": "revenue",
       "description": "A plan upgrade was completed.",

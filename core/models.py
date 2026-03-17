@@ -43,6 +43,7 @@ from core.agents.schemas import (
     TitleSuggestionContext,
     WebPageContent,
 )
+from core.acquisition import sync_project_attribution_from_profile
 from core.analytics import ANALYTICS_EVENTS
 from core.base_models import BaseModel
 from core.choices import (
@@ -114,6 +115,8 @@ class Profile(BaseModel):
         default=ProfileStates.STRANGER,
         help_text="The current state of the user's profile",
     )
+    first_touch_attribution = models.JSONField(default=dict, blank=True)
+    latest_touch_attribution = models.JSONField(default=dict, blank=True)
 
     def __str__(self):
         return f"{self.user.username}"
@@ -335,6 +338,7 @@ class Profile(BaseModel):
         return not self.reached_competitor_posts_limit
 
     def get_or_create_project(self, url: str, source: str = None) -> "Project":
+        existing_project_count = self.projects.count()
         project, created = Project.objects.get_or_create(profile=self, url=url)
 
         project_metadata = {
@@ -347,6 +351,8 @@ class Profile(BaseModel):
             "result_status": "succeeded",
         }
 
+        sync_project_attribution_from_profile(project=project, profile=self)
+
         if created:
             async_task(
                 "core.tasks.track_event",
@@ -356,6 +362,17 @@ class Profile(BaseModel):
                 source_function="Profile.get_or_create_project",
                 group="Track Event",
             )
+
+            if existing_project_count == 0:
+                async_task(
+                    "core.tasks.track_event",
+                    profile_id=self.id,
+                    event_name=ANALYTICS_EVENTS.ONBOARDING_COMPLETED,
+                    properties=project_metadata,
+                    source_function="Profile.get_or_create_project",
+                    group="Track Event",
+                )
+
             logger.info("[Get or Create Project] Project created", **project_metadata)
         else:
             logger.info("[Get or Create Project] Got existing project", **project_metadata)
@@ -403,6 +420,8 @@ class Project(BaseModel):
     name = models.CharField(max_length=255)
     type = models.CharField(max_length=50, choices=ProjectType.choices, default=ProjectType.SAAS)
     summary = models.TextField(blank=True)
+    first_touch_attribution = models.JSONField(default=dict, blank=True)
+    latest_touch_attribution = models.JSONField(default=dict, blank=True)
 
     # Agent Settings
     enable_automatic_post_submission = models.BooleanField(default=False)
@@ -1239,16 +1258,26 @@ class BlogPostTitleSuggestion(BaseModel):
             )
 
         if GeneratedBlogPost.objects.filter(project__profile=self.project.profile).count() == 1:
+            first_content_properties = {
+                "project_id": self.project_id,
+                "blog_post_id": blog_post.id,
+                "title_suggestion_id": self.id,
+                "content_type": content_type,
+            }
+
             async_task(
                 "core.tasks.track_event",
                 profile_id=self.project.profile.id,
                 event_name=ANALYTICS_EVENTS.FIRST_BLOG_GENERATED,
-                properties={
-                    "project_id": self.project.id,
-                    "blog_post_id": blog_post.id,
-                    "title_suggestion_id": self.id,
-                    "content_type": content_type,
-                },
+                properties=first_content_properties,
+                source_function="BlogPostTitleSuggestion.generate_content",
+                group="Track Event",
+            )
+            async_task(
+                "core.tasks.track_event",
+                profile_id=self.project.profile.id,
+                event_name=ANALYTICS_EVENTS.FIRST_CONTENT_GENERATED,
+                properties=first_content_properties,
                 source_function="BlogPostTitleSuggestion.generate_content",
                 group="Track Event",
             )
