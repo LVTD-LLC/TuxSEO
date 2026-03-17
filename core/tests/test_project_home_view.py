@@ -306,6 +306,19 @@ def test_project_home_view_renders_analytics_metrics_and_opportunities(client):
         ctr=0.012,
         avg_position=11.2,
     )
+    AnalyticsFactDaily.objects.create(
+        project=project,
+        provider=AnalyticsFactDaily.Provider.GSC,
+        metric_date=today - timedelta(days=1),
+        dimension_scope=AnalyticsFactDaily.DimensionScope.PAGE_QUERY,
+        page_url="https://analytics-data.example.com/pricing",
+        search_query="seo pricing",
+        dimension_fingerprint="gsc-opportunity-day-2",
+        clicks=2,
+        impressions=200,
+        ctr=0.01,
+        avg_position=10.6,
+    )
 
     AnalyticsFactDaily.objects.create(
         project=project,
@@ -340,12 +353,14 @@ def test_project_home_view_renders_analytics_metrics_and_opportunities(client):
     assert response.status_code == 200
     analytics_snapshot = response.context["analytics_snapshot_state"]
     assert analytics_snapshot["has_data"] is True
-    assert analytics_snapshot["totals"]["clicks"] == 32
-    assert analytics_snapshot["totals"]["impressions"] == 820
+    assert analytics_snapshot["totals"]["clicks"] == 34
+    assert analytics_snapshot["totals"]["impressions"] == 1020
     assert analytics_snapshot["totals"]["sessions"] == 80
     assert analytics_snapshot["totals"]["users"] == 60
     assert analytics_snapshot["totals"]["conversions"] == 5.0
     assert analytics_snapshot["opportunities"]
+    assert analytics_snapshot["opportunities"][0]["target"] == "seo pricing"
+    assert analytics_snapshot["opportunities"][0]["impressions"] == 600
 
     content = response.content.decode()
     assert "Analytics (GA4/GSC/Plausible)" in content

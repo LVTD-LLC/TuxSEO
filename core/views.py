@@ -18,7 +18,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.messages.views import SuccessMessageMixin
 from django.core import signing
-from django.db.models import Avg, Count, Prefetch, Q, Sum
+from django.db.models import Count, F, FloatField, Prefetch, Q, Sum
 from django.http import Http404, HttpResponse, HttpResponseRedirect
 from django.shortcuts import redirect, render
 from django.template.loader import render_to_string
@@ -900,8 +900,17 @@ class ProjectHomeView(LoginRequiredMixin, DetailView):
         gsc_position_data = facts_qs.filter(
             provider=AnalyticsFactDaily.Provider.GSC,
             avg_position__isnull=False,
-        ).aggregate(avg_position=Avg("avg_position"))
-        avg_position = round(float(gsc_position_data.get("avg_position") or 0), 2)
+            impressions__gt=0,
+        ).aggregate(
+            weighted_position_sum=Sum(
+                F("avg_position") * F("impressions"),
+                output_field=FloatField(),
+            ),
+            total_impressions=Sum("impressions"),
+        )
+        weighted_position_sum = float(gsc_position_data.get("weighted_position_sum") or 0)
+        total_impressions = float(gsc_position_data.get("total_impressions") or 0)
+        avg_position = round(weighted_position_sum / total_impressions, 2) if total_impressions else 0.0
 
         recent_start = today - timedelta(days=6)
         previous_start = recent_start - timedelta(days=7)
@@ -925,30 +934,43 @@ class ProjectHomeView(LoginRequiredMixin, DetailView):
         previous = {k: (v or 0) for k, v in previous.items()}
 
         opportunities = []
-        opportunities_qs = (
+        opportunities_grouped = list(
             facts_qs.filter(
                 provider=AnalyticsFactDaily.Provider.GSC,
                 dimension_scope__in=[
                     AnalyticsFactDaily.DimensionScope.PAGE,
                     AnalyticsFactDaily.DimensionScope.PAGE_QUERY,
                 ],
-                impressions__gte=100,
-                ctr__isnull=False,
-                ctr__lte=0.04,
+                impressions__isnull=False,
+                impressions__gt=0,
             )
-            .order_by("ctr", "-impressions")[:3]
+            .values("search_query", "page_url")
+            .annotate(
+                total_impressions=Sum("impressions"),
+                total_clicks=Sum("clicks"),
+            )
         )
-        for row in opportunities_qs:
-            ctr_value = float(row.ctr or 0)
-            page_or_query = row.search_query or row.page_url or "Untitled page"
-            opportunities.append(
+
+        ranked_opportunities = []
+        for row in opportunities_grouped:
+            impressions = int(row.get("total_impressions") or 0)
+            if impressions < 100:
+                continue
+            clicks = float(row.get("total_clicks") or 0)
+            ctr_value = clicks / impressions if impressions else 0
+            if ctr_value > 0.04:
+                continue
+            ranked_opportunities.append(
                 {
-                    "target": page_or_query,
-                    "impressions": int(row.impressions or 0),
+                    "target": row.get("search_query") or row.get("page_url") or "Untitled page",
+                    "impressions": impressions,
                     "ctr_pct": round(ctr_value * 100, 2),
                     "suggestion": "Improve title/meta match and add internal links from related pages.",
                 }
             )
+
+        ranked_opportunities.sort(key=lambda item: (item["ctr_pct"], -item["impressions"]))
+        opportunities = ranked_opportunities[:3]
 
         has_analytics_data = facts_qs.exists()
 
