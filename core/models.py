@@ -2028,6 +2028,151 @@ class ProjectIntegration(BaseModel):
         return self.status == self.Status.CONNECTED
 
 
+class AnalyticsSourceSnapshot(BaseModel):
+    class Provider(models.TextChoices):
+        GA4 = "ga4", "GA4"
+        GSC = "gsc", "Google Search Console"
+        PLAUSIBLE = "plausible", "Plausible"
+
+    class FetchStatus(models.TextChoices):
+        SUCCESS = "success", "Success"
+        PARTIAL = "partial", "Partial"
+        FAILED = "failed", "Failed"
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="analytics_source_snapshots")
+    integration = models.ForeignKey(
+        ProjectIntegration,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="analytics_source_snapshots",
+    )
+
+    provider = models.CharField(max_length=32, choices=Provider.choices)
+    source_account_ref = models.CharField(max_length=255)
+    request_fingerprint = models.CharField(max_length=64)
+
+    window_start_date = models.DateField()
+    window_end_date = models.DateField()
+
+    payload_json = models.JSONField(default=dict, blank=True)
+    rows_count = models.IntegerField(default=0)
+    fetched_at = models.DateTimeField(default=timezone.now)
+
+    status = models.CharField(max_length=32, choices=FetchStatus.choices, default=FetchStatus.SUCCESS)
+    error_code = models.CharField(max_length=64, blank=True, default="")
+    error_message = models.TextField(blank=True, default="")
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["project", "provider", "window_start_date", "window_end_date", "-fetched_at"]
+            ),
+            models.Index(fields=["request_fingerprint"]),
+        ]
+
+
+class AnalyticsFactDaily(BaseModel):
+    class Provider(models.TextChoices):
+        GA4 = "ga4", "GA4"
+        GSC = "gsc", "Google Search Console"
+        PLAUSIBLE = "plausible", "Plausible"
+
+    class DimensionScope(models.TextChoices):
+        SITE = "site", "Site"
+        PAGE = "page", "Page"
+        QUERY = "query", "Query"
+        PAGE_QUERY = "page_query", "Page + Query"
+        COUNTRY = "country", "Country"
+        DEVICE = "device", "Device"
+        CHANNEL = "channel", "Channel"
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="analytics_facts_daily")
+    provider = models.CharField(max_length=32, choices=Provider.choices)
+    metric_date = models.DateField()
+    dimension_scope = models.CharField(max_length=32, choices=DimensionScope.choices)
+
+    page_url = models.CharField(max_length=1024, blank=True, default="")
+    page_url_key = models.CharField(max_length=64, blank=True, default="")
+    search_query = models.CharField(max_length=512, blank=True, default="")
+    search_query_key = models.CharField(max_length=64, blank=True, default="")
+    country_code = models.CharField(max_length=2, blank=True, default="")
+    device_type = models.CharField(max_length=32, blank=True, default="")
+    channel_group = models.CharField(max_length=64, blank=True, default="")
+    dimension_fingerprint = models.CharField(max_length=64, default="")
+
+    clicks = models.BigIntegerField(null=True, blank=True)
+    impressions = models.BigIntegerField(null=True, blank=True)
+    ctr = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
+    avg_position = models.DecimalField(max_digits=8, decimal_places=3, null=True, blank=True)
+    sessions = models.BigIntegerField(null=True, blank=True)
+    users = models.BigIntegerField(null=True, blank=True)
+    engaged_sessions = models.BigIntegerField(null=True, blank=True)
+    bounce_rate = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
+    conversions = models.DecimalField(max_digits=18, decimal_places=6, null=True, blank=True)
+    conversion_rate = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
+
+    provider_payload_meta = models.JSONField(default=dict, blank=True)
+    source_snapshot = models.ForeignKey(
+        AnalyticsSourceSnapshot,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="normalized_rows",
+    )
+    ingested_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "provider", "metric_date", "dimension_scope", "dimension_fingerprint"],
+                name="analytics_fact_daily_unique_dimension",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["project", "-metric_date"]),
+            models.Index(fields=["project", "provider", "-metric_date"]),
+            models.Index(fields=["project", "dimension_scope", "-metric_date"]),
+            models.Index(fields=["page_url_key"]),
+            models.Index(fields=["search_query_key"]),
+        ]
+
+
+class AnalyticsSyncCursor(BaseModel):
+    class Provider(models.TextChoices):
+        GOOGLE_ANALYTICS = ProjectIntegration.Provider.GOOGLE_ANALYTICS
+        GOOGLE_SEARCH_CONSOLE = ProjectIntegration.Provider.GOOGLE_SEARCH_CONSOLE
+        PLAUSIBLE = ProjectIntegration.Provider.PLAUSIBLE
+
+    class SyncStatus(models.TextChoices):
+        PENDING = "pending", "Pending"
+        RUNNING = "running", "Running"
+        SUCCESS = "success", "Success"
+        PARTIAL = "partial", "Partial"
+        FAILED = "failed", "Failed"
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="analytics_sync_cursors")
+    provider = models.CharField(max_length=64, choices=Provider.choices)
+    source_account_ref = models.CharField(max_length=255)
+
+    last_successful_date = models.DateField(null=True, blank=True)
+    backfill_start_date = models.DateField(null=True, blank=True)
+    backfill_end_date = models.DateField(null=True, blank=True)
+
+    last_run_started_at = models.DateTimeField(null=True, blank=True)
+    last_run_finished_at = models.DateTimeField(null=True, blank=True)
+    last_status = models.CharField(max_length=32, choices=SyncStatus.choices, default=SyncStatus.PENDING)
+    last_error = models.TextField(blank=True, default="")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "provider", "source_account_ref"],
+                name="analytics_sync_cursor_unique_source",
+            )
+        ]
+
+
 class ProjectPage(BaseModel):
     project = models.ForeignKey(
         Project, null=True, blank=True, on_delete=models.CASCADE, related_name="project_pages"

@@ -9,6 +9,7 @@ from django.utils import timezone
 from django_q.tasks import async_task
 
 from core.choices import EmailType, ProjectPageSource
+from core.integration_analytics import schedule_all_connected_project_analytics_syncs
 from core.models import Competitor, EmailSent, Profile, Project, ProjectPage
 from core.utils import get_jina_embedding
 from tuxseo.utils import get_tuxseo_logger
@@ -330,6 +331,15 @@ def schedule_create_project_reminder_emails():
 
     return f"""Create project reminder email scheduling completed:
     Profiles scheduled: {scheduled_count}"""
+
+
+def schedule_project_analytics_syncs():
+    """Schedule background analytics sync tasks for all connected GA4/GSC/Plausible integrations."""
+    result = schedule_all_connected_project_analytics_syncs()
+    return (
+        "Analytics sync scheduling completed: "
+        f"scheduled={result.get('scheduled', 0)}"
+    )
 
 
 def schedule_project_feedback_checkin_emails():

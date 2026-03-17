@@ -138,6 +138,26 @@ What this does:
 
 If this fails, fix locally before pushing.
 
+### Analytics ingestion jobs (GA4, GSC, Plausible)
+
+TuxSEO now ships background ingestion for connected analytics providers:
+- Google Analytics 4 (GA4)
+- Google Search Console (GSC)
+- Plausible
+
+Implementation highlights:
+- Incremental sync cursor per `(project, provider, source_account_ref)` with a rolling lookback window.
+- Raw source snapshots (`AnalyticsSourceSnapshot`) + normalized daily facts (`AnalyticsFactDaily`).
+- Idempotent upsert semantics for safe retries.
+- Provider-aware retry/backoff behavior with observable cursor status and sanitized errors.
+- Missing/disconnected integrations are skipped without failing the whole scheduling run.
+
+Scheduled entrypoint:
+- `core.scheduled_tasks.schedule_project_analytics_syncs`
+
+Worker task entrypoint:
+- `core.tasks.sync_project_integration_analytics(project_id, provider)`
+
 ### Deterministic content quality evaluation
 
 Run the deterministic rubric evaluation locally:
