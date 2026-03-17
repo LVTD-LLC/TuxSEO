@@ -37,6 +37,11 @@ urlpatterns = [
         name="project_seo_posts",
     ),
     path(
+        "project/<int:pk>/integrations/",
+        views.ProjectIntegrationsView.as_view(),
+        name="project_integrations",
+    ),
+    path(
         "project/<int:pk>/settings/", views.ProjectSettingsView.as_view(), name="project_settings"
     ),
     path(

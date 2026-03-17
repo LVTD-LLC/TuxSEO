@@ -96,6 +96,18 @@
 
       <li class="pt-4 mt-4 border-t border-gray-200">
         <a
+          href="{% url 'project_integrations' project.id %}"
+          class="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors {% if request.resolver_match.url_name == 'project_integrations' %}bg-gray-100 text-gray-900{% else %}text-gray-700 hover:bg-gray-50 hover:text-gray-900{% endif %}"
+        >
+          <svg class="mr-3 w-5 h-5 {% if request.resolver_match.url_name == 'project_integrations' %}text-gray-900{% else %}text-gray-400{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7.5 8.25h9m-9 3.75h9M4.5 18h15a2.25 2.25 0 002.25-2.25V8.25A2.25 2.25 0 0019.5 6h-15A2.25 2.25 0 002.25 8.25v7.5A2.25 2.25 0 004.5 18z" />
+          </svg>
+          Integrations
+        </a>
+      </li>
+
+      <li>
+        <a
           href="{% url 'project_settings' project.id %}"
           class="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors {% if request.resolver_match.url_name == 'project_settings' %}bg-gray-100 text-gray-900{% else %}text-gray-700 hover:bg-gray-50 hover:text-gray-900{% endif %}"
         >
