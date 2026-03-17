@@ -1,5 +1,6 @@
 import time
 
+from core.acquisition import capture_request_attribution
 from tuxseo.logging_context import bind_log_context, get_request_correlation_ids
 from tuxseo.utils import get_tuxseo_logger
 
@@ -14,6 +15,7 @@ class RequestLogContextMiddleware:
 
     def __call__(self, request):
         start = time.monotonic()
+        capture_request_attribution(request)
         correlation = get_request_correlation_ids(request)
 
         user_id = None

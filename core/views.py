@@ -31,6 +31,7 @@ from django_q.tasks import async_task
 from djstripe import models as djstripe_models
 from weasyprint import HTML
 
+from core.acquisition import sync_profile_attribution_from_request
 from core.analytics import ANALYTICS_EVENTS
 from core.choices import BlogPostStatus, ContentType, Language, OGImageStyle, ProfileStates
 from core.forms import (
@@ -287,6 +288,8 @@ class AccountSignupView(SignupView):
 
         user = self.user
         profile = user.profile
+
+        sync_profile_attribution_from_request(profile=profile, request=self.request)
 
         if settings.POSTHOG_API_KEY:
             async_task(

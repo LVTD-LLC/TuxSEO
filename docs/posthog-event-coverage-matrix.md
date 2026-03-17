@@ -23,6 +23,9 @@ Critical P1 funnel and product actions requested for reliable conversion/product
 | Link exchange toggle | `link_exchange_toggled` | Server (`toggle_link_exchange`) | `project_id`, `enabled`, `result_status` |
 | Plan upgrade | `plan_upgraded` | Server webhook (`handle_updated_subscription`) | `plan`, `result_status` |
 | Plan cancel | `plan_cancelled` | Server webhook (`handle_updated_subscription`) | `plan`, `result_status` |
+| Onboarding complete | `onboarding_completed` | Server (`Profile.get_or_create_project`, first project only) | (taxonomy optional) |
+| First content generated | `first_content_generated` | Server (`BlogPostTitleSuggestion.generate_content`, first generated post) | (taxonomy optional) |
+| Subscription start | `subscription_created`, `subscription_started`, `paid_conversion` | Server webhook (`handle_created_subscription`) | (taxonomy optional) |
 
 ## Audit summary (before this change)
 
@@ -43,4 +46,5 @@ Gaps that were closed:
 ## Regression guardrails
 
 - Taxonomy-based required-property validation in `track_event`
-- Test coverage in `core/tests/test_posthog_event_coverage.py`
+- Attribution schema enrichment + malformed-payload guardrails in `track_event`
+- Test coverage in `core/tests/test_posthog_event_coverage.py` and `core/tests/test_paid_acquisition_attribution.py`

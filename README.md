@@ -173,13 +173,20 @@ TuxSEO maintains a canonical event taxonomy and coverage matrix for funnel-safe 
 
 `core/analytics/event_taxonomy.json` is the source of truth for canonical event names + required properties.
 
-### PostHog dashboard pack (ops + funnel + LLM)
+### PostHog dashboard pack (ops + funnel + LLM + paid attribution)
 
-The first-pass operational + product + LLM dashboard set is documented (with live links) in:
+The first-pass operational + product + LLM + paid acquisition dashboard set is documented (with live links) in:
 
 - `docs/posthog-dashboards.md`
 
 Use `scripts/posthog_dashboard_bootstrap.py` to create/update all dashboard tiles idempotently.
+
+### Paid acquisition attribution foundation (Meta/Google/Reddit/X)
+
+TuxSEO now persists first-touch/latest-touch attribution and enriches server-side conversion events with normalized acquisition fields.
+
+- canonical schema + guardrails: `docs/acquisition-attribution-v1.md`
+- source of truth for event names: `core/analytics/event_taxonomy.json`
 
 ### Analytics ingestion jobs (GA4, GSC, Plausible)
 

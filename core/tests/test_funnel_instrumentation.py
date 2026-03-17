@@ -79,8 +79,12 @@ def test_create_project_emits_project_create_succeeded_event():
         if call.args and call.args[0] == "core.tasks.track_event"
     ]
 
-    assert len(track_event_calls) == 1
-    assert track_event_calls[0].kwargs["event_name"] == ANALYTICS_EVENTS.PROJECT_CREATE_SUCCEEDED
+    assert len(track_event_calls) == 2
+
+    emitted_event_names = {call.kwargs["event_name"] for call in track_event_calls}
+    assert ANALYTICS_EVENTS.PROJECT_CREATE_SUCCEEDED in emitted_event_names
+    assert ANALYTICS_EVENTS.ONBOARDING_COMPLETED in emitted_event_names
+
     assert track_event_calls[0].kwargs["properties"]["source"] == "unit-test"
 
 

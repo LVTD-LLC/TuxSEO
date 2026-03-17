@@ -1,4 +1,4 @@
-# PostHog dashboard pack (Ops + Funnel + LLM health)
+# PostHog dashboard pack (Ops + Funnel + LLM + Paid attribution)
 
 This document defines and links the first-pass TuxSEO dashboard set requested for operational + product + LLM analytics visibility.
 
@@ -10,6 +10,8 @@ This document defines and links the first-pass TuxSEO dashboard set requested fo
   https://us.posthog.com/project/105300/dashboard/1371381
 - **LLM analytics health**  
   https://us.posthog.com/project/105300/dashboard/1371382
+- **Paid acquisition attribution**  
+  https://us.posthog.com/project/105300/dashboard/1371507
 
 > These dashboards are managed by code (script below). Re-run the script to safely update/repair tiles. Dashboards stay private to project members (not public-link shared).
 
@@ -44,6 +46,15 @@ Tiles:
 4. `LLM token trend (sum of $ai_total_tokens)`
 5. `LLM estimated cost trend (sum of $ai_total_cost_usd)`
 
+### 4) Paid acquisition attribution
+Primary question: **"Which paid channel/campaign/creative/copy variant converts best?"**
+
+Tiles:
+1. `Channel performance: paid conversions by channel (daily)`
+2. `Campaign/adset/ad performance (paid_conversion)`
+3. `Copy/creative variant performance (paid_conversion)`
+4. `Time to paid conversion by channel`
+
 ## Filtering conventions (project/account/time)
 
 For all three dashboards:
@@ -68,7 +79,7 @@ python scripts/posthog_dashboard_bootstrap.py
 ```
 
 What it does:
-- upserts 3 dashboards by name
+- upserts 4 dashboards by name
 - upserts all insights by name under each dashboard
 - prints resulting dashboard URLs/IDs for auditability
 

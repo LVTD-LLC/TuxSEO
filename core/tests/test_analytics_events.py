@@ -24,6 +24,8 @@ def test_event_taxonomy_exposes_expected_canonical_events():
     assert ANALYTICS_EVENTS.EMAIL_VERIFIED == "email_verified"
     assert ANALYTICS_EVENTS.PROJECT_CREATE_SUCCEEDED == "project_create_succeeded"
     assert ANALYTICS_EVENTS.FIRST_BLOG_GENERATED == "first_blog_generated"
+    assert ANALYTICS_EVENTS.ONBOARDING_COMPLETED == "onboarding_completed"
+    assert ANALYTICS_EVENTS.FIRST_CONTENT_GENERATED == "first_content_generated"
     assert ANALYTICS_EVENTS.CHECKOUT_STARTED == "checkout_started"
     assert ANALYTICS_EVENTS.CHECKOUT_SUCCEEDED == "checkout_succeeded"
     assert ANALYTICS_EVENTS.PROJECT_DELETED == "project_deleted"

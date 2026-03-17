@@ -253,6 +253,72 @@ def dashboard_specs() -> tuple[DashboardSpec, ...]:
                 ),
             ),
         ),
+        DashboardSpec(
+            name="TuxSEO – Paid Acquisition Attribution",
+            description=(
+                "Compare paid acquisition performance across channels, campaigns, creatives, "
+                "and copy variants. Use dashboard-level date range and plan filters."
+            ),
+            tags=("tuxseo", "paid", "attribution", "posthog"),
+            insights=(
+                InsightSpec(
+                    name="Channel performance: paid conversions by channel (daily)",
+                    filters={
+                        "insight": "TRENDS",
+                        "display": "ActionsLineGraph",
+                        "interval": "day",
+                        "date_from": "-30d",
+                        "breakdown": "channel",
+                        "breakdown_type": "event",
+                        "events": [
+                            {"id": "paid_conversion", "type": "events", "order": 0, "math": "total"}
+                        ],
+                    },
+                ),
+                InsightSpec(
+                    name="Campaign/adset/ad performance (paid_conversion)",
+                    filters={
+                        "insight": "TRENDS",
+                        "display": "ActionsTable",
+                        "date_from": "-30d",
+                        "breakdown": "campaign_name",
+                        "breakdown_type": "event",
+                        "breakdowns": ["campaign_name", "adset_name", "ad_id"],
+                        "events": [
+                            {"id": "paid_conversion", "type": "events", "order": 0, "math": "total"}
+                        ],
+                    },
+                ),
+                InsightSpec(
+                    name="Copy/creative variant performance (paid_conversion)",
+                    filters={
+                        "insight": "TRENDS",
+                        "display": "ActionsTable",
+                        "date_from": "-30d",
+                        "breakdown": "copy_variant",
+                        "breakdown_type": "event",
+                        "breakdowns": ["copy_variant", "creative_key", "creative_id"],
+                        "events": [
+                            {"id": "paid_conversion", "type": "events", "order": 0, "math": "total"}
+                        ],
+                    },
+                ),
+                InsightSpec(
+                    name="Time to paid conversion by channel",
+                    filters={
+                        "insight": "FUNNELS",
+                        "date_from": "-30d",
+                        "layout": "horizontal",
+                        "breakdown": "channel",
+                        "breakdown_type": "event",
+                        "events": [
+                            {"id": "signup_completed", "type": "events", "order": 0},
+                            {"id": "paid_conversion", "type": "events", "order": 1},
+                        ],
+                    },
+                ),
+            ),
+        ),
     )
 
 

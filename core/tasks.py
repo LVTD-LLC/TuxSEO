@@ -10,6 +10,7 @@ from django.db import transaction
 from django.utils import timezone
 from django_q.tasks import async_task
 
+from core.acquisition import AttributionValidationError, build_attribution_event_properties
 from core.analytics import (
     ANALYTICS_EVENTS,
     EVENT_TAXONOMY_VERSION,
@@ -847,6 +848,22 @@ def track_event(
     profile_product = getattr(profile, "product", None)
     profile_plan = profile_product.name if profile_product else "free"
 
+    project = None
+    project_id = properties.get("project_id")
+    if project_id is not None:
+        project = Project.objects.filter(id=project_id, profile=profile).first()
+
+    try:
+        attribution_properties = build_attribution_event_properties(profile=profile, project=project)
+    except AttributionValidationError as error:
+        logger.warning(
+            "[TrackEvent] Dropping malformed attribution properties",
+            profile_id=profile_id,
+            event_name=canonical_event_name,
+            error=str(error),
+        )
+        attribution_properties = {}
+
     if settings.POSTHOG_API_KEY:
         posthog.capture(
             profile.user.email,
@@ -860,6 +877,7 @@ def track_event(
                 "actor_id": str(profile.id),
                 "event_schema_version": EVENT_TAXONOMY_VERSION,
                 "event_stage": event_definition["stage"],
+                **attribution_properties,
                 **properties,
             },
         )

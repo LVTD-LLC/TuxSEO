@@ -52,6 +52,39 @@ def handle_created_subscription(**kwargs):
             },
         )
 
+        revenue_properties = {
+            "subscription_id": subscription_id,
+            "product_id": product_id,
+            "plan": product.name,
+            "result_status": "succeeded",
+            "stripe_event_id": event.id,
+        }
+
+        async_task(
+            "core.tasks.track_event",
+            profile_id=profile.id,
+            event_name=ANALYTICS_EVENTS.SUBSCRIPTION_CREATED,
+            properties=revenue_properties,
+            source_function="webhooks.handle_created_subscription",
+            group="Track Event",
+        )
+        async_task(
+            "core.tasks.track_event",
+            profile_id=profile.id,
+            event_name=ANALYTICS_EVENTS.SUBSCRIPTION_STARTED,
+            properties=revenue_properties,
+            source_function="webhooks.handle_created_subscription",
+            group="Track Event",
+        )
+        async_task(
+            "core.tasks.track_event",
+            profile_id=profile.id,
+            event_name=ANALYTICS_EVENTS.PAID_CONVERSION,
+            properties=revenue_properties,
+            source_function="webhooks.handle_created_subscription",
+            group="Track Event",
+        )
+
         logger.info(
             "[SubscriptionCreated] Success",
             profile_id=profile.id,
