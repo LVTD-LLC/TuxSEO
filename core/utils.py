@@ -15,6 +15,8 @@ from tuxseo.utils import get_tuxseo_logger
 
 logger = get_tuxseo_logger(__name__)
 
+_AUTHORITY_MIN_SCORE = 0.15
+_AUTHORITY_MIN_OVERLAP_RATIO = 0.12
 
 class DivErrorList(ErrorList):
     def __str__(self):
@@ -664,14 +666,18 @@ def _passes_authority_relevance_gate(*, query: str, title: str, text_snippet: st
         except (TypeError, ValueError):
             parsed_score = None
 
-    if parsed_score is not None and parsed_score < 0.15:
+    if parsed_score is not None and parsed_score < _AUTHORITY_MIN_SCORE:
         return False
 
-    return overlap_ratio >= 0.12
+    return overlap_ratio >= _AUTHORITY_MIN_OVERLAP_RATIO
 
 
 def get_external_authority_link_candidates(meta_description: str, max_links: int = 2):
-    """Fetch relevance-gated external authority links for generation planning."""
+    """Fetch relevance-gated external authority links for generation planning.
+
+    `max_links` is defensively clamped here as this helper may be called outside
+    generation context with unsanitized input.
+    """
     max_links = max(1, min(3, int(max_links or 1)))
 
     if not meta_description or not meta_description.strip():
@@ -705,6 +711,7 @@ def get_external_authority_link_candidates(meta_description: str, max_links: int
         logger.warning(
             "[ExternalAuthorityLinks] Exa lookup failed",
             error=str(error),
+            exc_info=True,
             max_links=max_links,
         )
         return []
