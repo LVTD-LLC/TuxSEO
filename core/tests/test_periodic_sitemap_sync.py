@@ -130,10 +130,16 @@ def test_sync_all_projects_with_sitemaps_skips_disabled_profile_and_invalid_urls
         sitemap_url="https://disabled.example/sitemap.xml",
     )
 
-    def fake_parse(project_id):
+    def fake_parse(project_id, return_summary=False):
         if project_id == valid_project.id:
-            return "Sitemap sync completed for Valid"
-        return "No valid sitemap URL found for project Invalid."
+            return {
+                "status": "success",
+                "message": "Sitemap sync completed for Valid",
+            }
+        return {
+            "status": "skipped",
+            "message": "No valid sitemap URL found for project Invalid.",
+        }
 
     monkeypatch.setattr("core.tasks.parse_sitemap_and_save_urls", fake_parse)
 
