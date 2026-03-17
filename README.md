@@ -164,6 +164,16 @@ Scheduled entrypoint:
 Worker task entrypoint:
 - `core.tasks.sync_project_integration_analytics(project_id, provider)`
 
+### Custom post types for blog idea generation
+
+Projects can now define reusable **custom post types** under the Posts sidebar:
+- open **Posts → Manage Types** (or click the `+` action next to Posts)
+- create a type with:
+  - a unique, clean name (validated per project)
+  - prompt guidance (required, max length enforced)
+- each custom type appears directly in Posts navigation
+- selecting a custom type opens a dedicated idea-generation page that applies its guidance automatically when generating suggestions
+
 ### Deterministic content quality evaluation
 
 Run the deterministic rubric evaluation locally:

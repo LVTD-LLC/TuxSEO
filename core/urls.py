@@ -37,6 +37,26 @@ urlpatterns = [
         name="project_seo_posts",
     ),
     path(
+        "project/<int:pk>/posts/custom/",
+        views.ProjectCustomPostTypesView.as_view(),
+        name="project_custom_post_types",
+    ),
+    path(
+        "project/<int:pk>/posts/custom/<int:post_type_pk>/",
+        views.ProjectCustomPostTypePostsView.as_view(),
+        name="project_custom_post_type_posts",
+    ),
+    path(
+        "project/<int:pk>/posts/custom/<int:post_type_pk>/update/",
+        views.ProjectCustomPostTypeUpdateView.as_view(),
+        name="project_custom_post_type_update",
+    ),
+    path(
+        "project/<int:pk>/posts/custom/<int:post_type_pk>/delete/",
+        views.ProjectCustomPostTypeDeleteView.as_view(),
+        name="project_custom_post_type_delete",
+    ),
+    path(
         "project/<int:pk>/integrations/",
         views.ProjectIntegrationsView.as_view(),
         name="project_integrations",

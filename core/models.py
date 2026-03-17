@@ -8,7 +8,9 @@ import replicate
 import requests
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
+from django.core.validators import MaxLengthValidator
 from django.db import models, transaction
 from django.urls import reverse
 from django.utils import timezone
@@ -738,6 +740,63 @@ class Project(BaseModel):
         unique_together = ("profile", "url")
 
 
+
+
+class ProjectCustomPostType(BaseModel):
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="custom_post_types",
+    )
+    name = models.CharField(max_length=80)
+    normalized_name = models.CharField(max_length=80, editable=False)
+    prompt_guidance = models.TextField(validators=[MaxLengthValidator(1200)])
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "normalized_name"],
+                name="project_custom_post_type_unique_normalized_name",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.project.name}: {self.name}"
+
+    @staticmethod
+    def normalize_name(name: str) -> str:
+        return " ".join((name or "").split()).strip().lower()
+
+    def clean(self):
+        self.name = " ".join((self.name or "").split()).strip()
+        self.normalized_name = self.normalize_name(self.name)
+
+        if not self.name:
+            raise ValidationError({"name": "Name cannot be empty."})
+
+        if len(self.name) < 2:
+            raise ValidationError({"name": "Name must be at least 2 characters long."})
+
+        if not re.match(r"^[A-Za-z0-9][A-Za-z0-9\s\-/&()]*$", self.name):
+            raise ValidationError({
+                "name": "Use only letters, numbers, spaces, and - / & ( ) characters.",
+            })
+
+        prompt_guidance = (self.prompt_guidance or "").strip()
+        if not prompt_guidance:
+            raise ValidationError({"prompt_guidance": "Prompt guidance cannot be empty."})
+
+        if len(prompt_guidance) > 1200:
+            raise ValidationError({"prompt_guidance": "Prompt guidance must be 1200 characters or less."})
+
+        self.prompt_guidance = prompt_guidance
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+
 class BlogPostTitleSuggestion(BaseModel):
     project = models.ForeignKey(
         Project,
@@ -745,6 +804,14 @@ class BlogPostTitleSuggestion(BaseModel):
         blank=True,
         on_delete=models.CASCADE,
         related_name="blog_post_title_suggestions",
+    )
+
+    custom_post_type = models.ForeignKey(
+        "ProjectCustomPostType",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="title_suggestions",
     )
 
     title = models.CharField(max_length=255)

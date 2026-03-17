@@ -3,7 +3,8 @@ import { showMessage } from "../utils/messages";
 
 export default class extends Controller {
   static values = {
-    projectId: Number
+    projectId: Number,
+    postTypeId: Number
   };
 
   static targets = ["suggestionsList", "suggestionsContainer", "activeSuggestionsList"];
@@ -32,7 +33,8 @@ export default class extends Controller {
         },
         body: JSON.stringify({
           project_id: this.projectIdValue,
-          content_type: contentType
+          content_type: contentType,
+          post_type_id: this.hasPostTypeIdValue ? this.postTypeIdValue : null
         })
       });
 

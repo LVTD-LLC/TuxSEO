@@ -9,7 +9,7 @@ from core.abuse_prevention import (
     is_disposable_email_domain,
     is_signup_rate_limited,
 )
-from core.models import AutoSubmissionSetting, Profile, Project
+from core.models import AutoSubmissionSetting, Profile, Project, ProjectCustomPostType
 from core.turnstile import get_turnstile_secret_key, get_turnstile_site_key
 from core.utils import DivErrorList
 from tuxseo.utils import get_tuxseo_logger
@@ -334,3 +334,32 @@ class AutoSubmissionSettingForm(forms.ModelForm):
             return json.loads(data) if data else {}
         except Exception:
             raise
+
+
+class ProjectCustomPostTypeForm(forms.ModelForm):
+    class Meta:
+        model = ProjectCustomPostType
+        fields = ["name", "prompt_guidance"]
+        widgets = {
+            "name": forms.TextInput(
+                attrs={
+                    "class": "block px-3 py-2 w-full text-sm text-gray-900 bg-white rounded-md border border-gray-300 focus:ring-gray-500 focus:border-gray-500",
+                    "placeholder": "Technical",
+                    "maxlength": "80",
+                }
+            ),
+            "prompt_guidance": forms.Textarea(
+                attrs={
+                    "class": "block px-3 py-2 w-full text-sm text-gray-900 bg-white rounded-md border border-gray-300 focus:ring-gray-500 focus:border-gray-500",
+                    "rows": 4,
+                    "placeholder": "Describe style, depth, and audience for this post type.",
+                    "maxlength": "1200",
+                }
+            ),
+        }
+
+    def clean_name(self):
+        return " ".join((self.cleaned_data.get("name") or "").split()).strip()
+
+    def clean_prompt_guidance(self):
+        return (self.cleaned_data.get("prompt_guidance") or "").strip()

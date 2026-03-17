@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - features to the pro plan on pricing page
 - Monitoring
   - Sentry Agent Monitoring
+- Posts
+  - custom post types per project with validated name + prompt guidance, CRUD management UI, and Posts navigation integration
+  - custom post types can be selected in navigation and applied as generation guidance for title suggestions
 - Emails
   - Feedback email (for profiles with one product)
   - create project reminder for signed up users without project
