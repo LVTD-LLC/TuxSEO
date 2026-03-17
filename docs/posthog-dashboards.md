@@ -11,7 +11,7 @@ This document defines and links the first-pass TuxSEO dashboard set requested fo
 - **LLM analytics health**  
   https://us.posthog.com/project/105300/dashboard/1371382
 
-> These dashboards are managed by code (script below). Re-run the script to safely update/repair tiles.
+> These dashboards are managed by code (script below). Re-run the script to safely update/repair tiles. Dashboards stay private to project members (not public-link shared).
 
 ## What each dashboard answers
 

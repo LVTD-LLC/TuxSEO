@@ -258,6 +258,10 @@ def dashboard_specs() -> tuple[DashboardSpec, ...]:
 
 class PostHogClient:
     def __init__(self, *, host: str, project_id: str, api_key: str):
+        parsed = parse.urlparse(host)
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError(f"Unsupported POSTHOG host scheme: {parsed.scheme or '<missing>'}")
+
         self.host = host.rstrip("/")
         self.project_id = str(project_id)
         self.api_key = api_key
@@ -293,12 +297,40 @@ class PostHogClient:
                     continue
                 detail = exc.read().decode("utf-8", "ignore")
                 raise RuntimeError(f"PostHog API {method} {path} failed ({exc.code}): {detail}") from exc
+            except error.URLError as exc:
+                if attempt < 4:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise RuntimeError(
+                    f"PostHog API {method} {path} network error: {getattr(exc, 'reason', str(exc))}"
+                ) from exc
 
         raise RuntimeError(f"PostHog API {method} {path} failed after retries")
 
     def list_dashboards(self) -> list[dict[str, Any]]:
-        data = self.request("GET", f"/api/projects/{self.project_id}/dashboards/", params={"limit": 100})
-        return [d for d in data.get("results", []) if not d.get("deleted")]
+        all_results: list[dict[str, Any]] = []
+        offset = 0
+        limit = 100
+
+        while True:
+            data = self.request(
+                "GET",
+                f"/api/projects/{self.project_id}/dashboards/",
+                params={"limit": limit, "offset": offset},
+            )
+            chunk = data.get("results", [])
+            if not chunk:
+                break
+
+            all_results.extend(chunk)
+
+            next_url = data.get("next")
+            if not next_url:
+                break
+
+            offset += limit
+
+        return [d for d in all_results if not d.get("deleted")]
 
     def create_dashboard(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.request("POST", f"/api/projects/{self.project_id}/dashboards/", payload)
@@ -316,14 +348,18 @@ class PostHogClient:
         return self.request("PATCH", f"/api/projects/{self.project_id}/insights/{insight_id}/", payload)
 
 
-def upsert_dashboard(client: PostHogClient, spec: DashboardSpec) -> tuple[dict[str, Any], bool]:
-    existing = next((d for d in client.list_dashboards() if d["name"] == spec.name), None)
+def upsert_dashboard(
+    client: PostHogClient,
+    spec: DashboardSpec,
+    existing_dashboards_by_name: dict[str, dict[str, Any]],
+) -> tuple[dict[str, Any], bool]:
+    existing = existing_dashboards_by_name.get(spec.name)
 
     payload = {
         "name": spec.name,
         "description": spec.description,
         "pinned": True,
-        "is_shared": True,
+        "is_shared": False,
         "tags": list(spec.tags),
     }
 
@@ -378,8 +414,10 @@ def main() -> int:
     client = PostHogClient(host=args.host, project_id=args.project_id, api_key=args.api_key)
 
     summary: list[dict[str, Any]] = []
+    existing_dashboards_by_name = {d["name"]: d for d in client.list_dashboards()}
+
     for spec in dashboard_specs():
-        dashboard, was_created = upsert_dashboard(client, spec)
+        dashboard, was_created = upsert_dashboard(client, spec, existing_dashboards_by_name)
         created, updated = upsert_insights(client, dashboard_id=dashboard["id"], specs=spec.insights)
         summary.append(
             {
