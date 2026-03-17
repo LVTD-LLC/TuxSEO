@@ -122,6 +122,38 @@ def test_sync_records_failure_and_cursor_status(monkeypatch):
     assert snapshot.error_code == "rate_limited"
 
 
+def test_fetch_plausible_rows_uses_provider_dates(monkeypatch):
+    class DummyResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "results": [
+                    {
+                        "dimensions": ["2026-03-01", "/blog"],
+                        "metrics": [5, 7, 54.3],
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(analytics, "_request_with_backoff", lambda **kwargs: DummyResponse())
+
+    class Integration:
+        plausible_api_key = "k"
+        plausible_site_id = "example.com"
+        plausible_base_url = "https://plausible.io"
+
+    rows, _, _ = analytics._fetch_plausible_rows(
+        integration=Integration(),
+        start_date=timezone.datetime(2026, 3, 1).date(),
+        end_date=timezone.datetime(2026, 3, 1).date(),
+    )
+
+    assert len(rows) == 1
+    assert rows[0].metric_date.isoformat() == "2026-03-01"
+    assert rows[0].bounce_rate == Decimal("0.543")
+
+
 def test_request_with_backoff_retries_429_then_succeeds(monkeypatch):
     class DummyResponse:
         def __init__(self, status_code, headers=None, text="", payload=None):

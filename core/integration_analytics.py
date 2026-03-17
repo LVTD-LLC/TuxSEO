@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 import requests
 from django.conf import settings
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from core.models import (
@@ -161,13 +161,38 @@ def _project_domain(project: Project) -> str:
     return parsed.netloc.lower().replace("www.", "")
 
 
-def _ga4_source_account_ref(integration: ProjectIntegration) -> str:
-    # We do not store property ids yet. Try extracting from scope if present, else email.
+def _ga4_source_account_ref(integration: ProjectIntegration) -> str | None:
+    # We do not store property ids yet. Try extracting from scope first.
     scope = integration.scope or ""
     for token in scope.split():
         if token.startswith("properties/"):
             return token.split("/", 1)[1]
-    return integration.external_account_email or "unknown"
+    return None
+
+
+def _discover_ga4_property_id(access_token: str, project: Project) -> str | None:
+    response = _request_with_backoff(
+        method="GET",
+        url="https://analyticsadmin.googleapis.com/v1beta/accountSummaries",
+        headers={"Authorization": f"Bearer {access_token}"},
+        params={"pageSize": 200},
+        timeout=30,
+    )
+    payload = response.json()
+
+    domain = _project_domain(project)
+    candidates: list[str] = []
+    for account in payload.get("accountSummaries", []):
+        for prop in account.get("propertySummaries", []):
+            prop_name = prop.get("property", "")
+            display_name = (prop.get("displayName") or "").lower()
+            if prop_name.startswith("properties/"):
+                property_id = prop_name.split("/", 1)[1]
+                candidates.append(property_id)
+                if domain and domain in display_name:
+                    return property_id
+
+    return candidates[0] if candidates else None
 
 
 def _refresh_google_access_token(integration: ProjectIntegration) -> str:
@@ -219,11 +244,12 @@ def _fetch_ga4_rows(
         raise ProviderAPIError("Google Analytics integration is missing access token")
 
     source_account_ref = _ga4_source_account_ref(integration)
-    if source_account_ref == "unknown":
-        logger.warning(
-            "[AnalyticsSync] GA4 source account ref missing; using fallback",
-            project_id=project.id,
-            integration_id=integration.id,
+    if not source_account_ref:
+        source_account_ref = _discover_ga4_property_id(access_token, project)
+
+    if not source_account_ref:
+        raise ProviderAPIError(
+            "GA4 property id is missing. Reconnect integration with GA4 property access."
         )
 
     endpoint = f"https://analyticsdata.googleapis.com/v1beta/properties/{source_account_ref}:runReport"
@@ -379,39 +405,84 @@ def _fetch_plausible_rows(
     source_account_ref = integration.plausible_site_id
     base_url = (integration.plausible_base_url or "https://plausible.io").rstrip("/")
 
-    endpoint = f"{base_url}/api/v1/stats/breakdown"
-    params = {
+    endpoint = f"{base_url}/api/v2/query"
+    body = {
         "site_id": integration.plausible_site_id,
-        "period": "custom",
-        "date": f"{start_date.isoformat()},{end_date.isoformat()}",
-        "property": "event:page",
-        "metrics": "visitors,visits,bounce_rate",
+        "date_range": [start_date.isoformat(), end_date.isoformat()],
+        "metrics": ["visitors", "visits", "bounce_rate"],
+        "dimensions": ["time:day", "event:page"],
     }
 
     response = _request_with_backoff(
-        method="GET",
+        method="POST",
         url=endpoint,
         headers={"Authorization": f"Bearer {integration.plausible_api_key}"},
-        params=params,
+        json=body,
         timeout=45,
     )
 
     payload = response.json()
-    now_date = timezone.now().date()
     rows: list[CanonicalFactRow] = []
 
+    def _parse_metric_date(item: dict[str, Any]) -> date | None:
+        if item.get("date"):
+            return timezone.datetime.strptime(item["date"], "%Y-%m-%d").date()
+        dimensions = item.get("dimensions") or []
+        if dimensions:
+            candidate = str(dimensions[0])
+            try:
+                return timezone.datetime.strptime(candidate[:10], "%Y-%m-%d").date()
+            except ValueError:
+                return None
+        if item.get("time:day"):
+            try:
+                return timezone.datetime.strptime(str(item["time:day"])[:10], "%Y-%m-%d").date()
+            except ValueError:
+                return None
+        return None
+
     for item in payload.get("results", []):
-        page_path = item.get("page") or item.get("name") or "/"
-        page_url = page_path if str(page_path).startswith("http") else f"https://{source_account_ref}{page_path}"
+        metric_date = _parse_metric_date(item)
+        if not metric_date:
+            continue
+
+        page_path = item.get("event:page") or item.get("page") or item.get("name")
+        if not page_path:
+            dimensions = item.get("dimensions") or []
+            if len(dimensions) > 1:
+                page_path = dimensions[1]
+        page_path = page_path or "/"
+
+        metrics = item.get("metrics") or []
+        visitors = item.get("visitors") if item.get("visitors") is not None else (
+            metrics[0] if len(metrics) > 0 else None
+        )
+        visits = item.get("visits") if item.get("visits") is not None else (
+            metrics[1] if len(metrics) > 1 else None
+        )
+        bounce_rate = item.get("bounce_rate") if item.get("bounce_rate") is not None else (
+            metrics[2] if len(metrics) > 2 else None
+        )
+
+        page_url = (
+            page_path if str(page_path).startswith("http") else f"https://{source_account_ref}{page_path}"
+        )
+
+        divide_percent = False
+        if bounce_rate not in (None, ""):
+            try:
+                divide_percent = Decimal(str(bounce_rate)) > 1
+            except (InvalidOperation, TypeError, ValueError):
+                divide_percent = False
 
         rows.append(
             CanonicalFactRow(
-                metric_date=now_date,
+                metric_date=metric_date,
                 dimension_scope=AnalyticsFactDaily.DimensionScope.PAGE,
                 page_url=str(page_url)[:1024],
-                sessions=_to_int(item.get("visits")),
-                users=_to_int(item.get("visitors")),
-                bounce_rate=_normalize_ratio(item.get("bounce_rate"), divide_percent=True),
+                sessions=_to_int(visits),
+                users=_to_int(visitors),
+                bounce_rate=_normalize_ratio(bounce_rate, divide_percent=divide_percent),
             )
         )
 
@@ -591,12 +662,19 @@ def sync_project_provider_analytics(project_id: int, provider: str) -> dict[str,
         .first()
     )
     if not cursor:
-        cursor = AnalyticsSyncCursor.objects.create(
-            project=project,
-            provider=provider,
-            source_account_ref="pending",
-            last_status=AnalyticsSyncCursor.SyncStatus.PENDING,
-        )
+        try:
+            cursor, _ = AnalyticsSyncCursor.objects.get_or_create(
+                project=project,
+                provider=provider,
+                source_account_ref="pending",
+                defaults={"last_status": AnalyticsSyncCursor.SyncStatus.PENDING},
+            )
+        except IntegrityError:
+            cursor = (
+                AnalyticsSyncCursor.objects.filter(project=project, provider=provider)
+                .order_by("-updated_at")
+                .first()
+            )
 
     start_date, end_date = _determine_sync_window(cursor)
     cursor.last_run_started_at = timezone.now()
@@ -745,7 +823,23 @@ def schedule_all_connected_project_analytics_syncs() -> dict[str, Any]:
         project__deleted_at__isnull=True,
     ).select_related("project")
 
+    running_cutoff = timezone.now() - timedelta(hours=2)
+
     for integration in connected_integrations:
+        running_cursor_exists = AnalyticsSyncCursor.objects.filter(
+            project_id=integration.project_id,
+            provider=integration.provider,
+            last_status=AnalyticsSyncCursor.SyncStatus.RUNNING,
+            last_run_started_at__gte=running_cutoff,
+        ).exists()
+        if running_cursor_exists:
+            logger.info(
+                "[AnalyticsSync] Skip scheduling duplicate running task",
+                project_id=integration.project_id,
+                provider=integration.provider,
+            )
+            continue
+
         async_task(
             "core.tasks.sync_project_integration_analytics",
             integration.project_id,
