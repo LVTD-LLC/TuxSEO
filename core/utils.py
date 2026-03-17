@@ -45,6 +45,13 @@ def _safe_number(value):
         return None
 
 
+def _first_non_none(*values):
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
 def _extract_usage_metrics(result):
     usage = None
 
@@ -58,14 +65,18 @@ def _extract_usage_metrics(result):
         return {}
 
     input_tokens = _safe_number(
-        getattr(usage, "input_tokens", None)
-        or getattr(usage, "request_tokens", None)
-        or getattr(usage, "prompt_tokens", None)
+        _first_non_none(
+            getattr(usage, "input_tokens", None),
+            getattr(usage, "request_tokens", None),
+            getattr(usage, "prompt_tokens", None),
+        )
     )
     output_tokens = _safe_number(
-        getattr(usage, "output_tokens", None)
-        or getattr(usage, "response_tokens", None)
-        or getattr(usage, "completion_tokens", None)
+        _first_non_none(
+            getattr(usage, "output_tokens", None),
+            getattr(usage, "response_tokens", None),
+            getattr(usage, "completion_tokens", None),
+        )
     )
     total_tokens = _safe_number(getattr(usage, "total_tokens", None))
     if total_tokens is None and (input_tokens is not None or output_tokens is not None):
@@ -87,8 +98,7 @@ def _resolve_distinct_id_from_deps(deps):
         return "tuxseo-agent"
 
     candidates = []
-    for attr in ("distinct_id", "user_id", "profile_id", "id"):
-        candidates.append(getattr(deps, attr, None))
+    candidates.append(getattr(deps, "distinct_id", None))
 
     user = getattr(deps, "user", None)
     if user is not None:
@@ -98,13 +108,18 @@ def _resolve_distinct_id_from_deps(deps):
     profile = getattr(deps, "profile", None)
     if profile is not None:
         profile_user = getattr(profile, "user", None)
-        candidates.append(getattr(profile, "id", None))
         candidates.append(getattr(profile_user, "email", None) if profile_user else None)
         candidates.append(getattr(profile_user, "id", None) if profile_user else None)
+        candidates.append(getattr(profile, "id", None))
+
+    candidates.append(getattr(deps, "user_id", None))
+    candidates.append(getattr(deps, "profile_id", None))
 
     project = getattr(deps, "project", None)
     if project is not None:
         candidates.append(getattr(project, "id", None))
+
+    candidates.append(getattr(deps, "id", None))
 
     for value in candidates:
         if value is None:
@@ -188,7 +203,7 @@ def _emit_posthog_llm_generation(
             event=LLM_ANALYTICS_EVENT,
             properties=cleaned_properties,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - telemetry should never interrupt generation flows
         logger.warning(
             "[Run Agent Synchronously] Failed to emit PostHog LLM analytics event",
             exc_info=True,
