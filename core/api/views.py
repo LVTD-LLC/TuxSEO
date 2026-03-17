@@ -1796,7 +1796,7 @@ def post_generated_blog_post(request: HttpRequest, data: PostGeneratedBlogPostIn
             properties={
                 "project_id": getattr(generated_post, "project_id", None),
                 "blog_post_id": generated_post.id,
-                "result_status": "attempted",
+                "result_status": "succeeded",
             },
             source_function="api.post_generated_blog_post",
         )

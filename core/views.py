@@ -1480,7 +1480,7 @@ class ProjectIntegrationsView(LoginRequiredMixin, DetailView):
         integration.save()
 
         async_task(
-            track_event,
+            "core.tasks.track_event",
             profile_id=self.object.profile_id,
             event_name=ANALYTICS_EVENTS.INTEGRATION_DISCONNECTED,
             properties={
@@ -1527,7 +1527,7 @@ class ProjectIntegrationsView(LoginRequiredMixin, DetailView):
         integration.save()
 
         async_task(
-            track_event,
+            "core.tasks.track_event",
             profile_id=self.object.profile_id,
             event_name=ANALYTICS_EVENTS.INTEGRATION_CONNECTED,
             properties={
@@ -1553,7 +1553,7 @@ class ProjectIntegrationsView(LoginRequiredMixin, DetailView):
         integration.save()
 
         async_task(
-            track_event,
+            "core.tasks.track_event",
             profile_id=self.object.profile_id,
             event_name=ANALYTICS_EVENTS.INTEGRATION_DISCONNECTED,
             properties={
@@ -1669,7 +1669,7 @@ class ProjectIntegrationsGoogleCallbackView(LoginRequiredMixin, View):
         integration.save()
 
         async_task(
-            track_event,
+            "core.tasks.track_event",
             profile_id=project.profile_id,
             event_name=ANALYTICS_EVENTS.INTEGRATION_CONNECTED,
             properties={

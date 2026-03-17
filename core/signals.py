@@ -86,7 +86,8 @@ def capture_login_succeeded(sender, request, user, **kwargs):
         return
 
     auth_provider = "password"
-    if kwargs.get("sociallogin"):
+    request_path = getattr(request, "path", "") or ""
+    if "/accounts/" in request_path and "callback" in request_path:
         auth_provider = "social"
 
     async_task(
