@@ -1,9 +1,11 @@
 import asyncio
 import re
 import secrets
+import time
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
+import posthog
 import requests
 from django.conf import settings
 from django.core.files.base import ContentFile
@@ -17,6 +19,198 @@ logger = get_tuxseo_logger(__name__)
 
 _AUTHORITY_MIN_SCORE = 0.15
 _AUTHORITY_MIN_OVERLAP_RATIO = 0.12
+LLM_ANALYTICS_EVENT = "$ai_generation"
+_LLM_INPUT_PREVIEW_LIMIT = 500
+_LLM_OUTPUT_PREVIEW_LIMIT = 1000
+
+
+def _preview_text(value, limit=500):
+    if value is None:
+        return ""
+    text = str(value)
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}..."
+
+
+def _safe_number(value):
+    try:
+        if value is None:
+            return None
+        number = float(value)
+        if number < 0:
+            return None
+        return number
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_non_none(*values):
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _extract_usage_metrics(result):
+    usage = None
+
+    usage_getter = getattr(result, "usage", None)
+    if callable(usage_getter):
+        usage = usage_getter()
+    elif usage_getter is not None:
+        usage = usage_getter
+
+    if usage is None:
+        return {}
+
+    input_tokens = _safe_number(
+        _first_non_none(
+            getattr(usage, "input_tokens", None),
+            getattr(usage, "request_tokens", None),
+            getattr(usage, "prompt_tokens", None),
+        )
+    )
+    output_tokens = _safe_number(
+        _first_non_none(
+            getattr(usage, "output_tokens", None),
+            getattr(usage, "response_tokens", None),
+            getattr(usage, "completion_tokens", None),
+        )
+    )
+    total_tokens = _safe_number(getattr(usage, "total_tokens", None))
+    if total_tokens is None and (input_tokens is not None or output_tokens is not None):
+        total_tokens = (input_tokens or 0) + (output_tokens or 0)
+
+    metrics = {}
+    if input_tokens is not None:
+        metrics["$ai_input_tokens"] = int(input_tokens)
+    if output_tokens is not None:
+        metrics["$ai_output_tokens"] = int(output_tokens)
+    if total_tokens is not None:
+        metrics["$ai_total_tokens"] = int(total_tokens)
+
+    return metrics
+
+
+def _resolve_distinct_id_from_deps(deps):
+    if deps is None:
+        return "tuxseo-agent"
+
+    candidates = []
+    candidates.append(getattr(deps, "distinct_id", None))
+
+    user = getattr(deps, "user", None)
+    if user is not None:
+        candidates.append(getattr(user, "email", None))
+        candidates.append(getattr(user, "id", None))
+
+    profile = getattr(deps, "profile", None)
+    if profile is not None:
+        profile_user = getattr(profile, "user", None)
+        candidates.append(getattr(profile_user, "email", None) if profile_user else None)
+        candidates.append(getattr(profile_user, "id", None) if profile_user else None)
+        candidates.append(getattr(profile, "id", None))
+
+    candidates.append(getattr(deps, "user_id", None))
+    candidates.append(getattr(deps, "profile_id", None))
+
+    project = getattr(deps, "project", None)
+    if project is not None:
+        candidates.append(getattr(project, "id", None))
+
+    candidates.append(getattr(deps, "id", None))
+
+    for value in candidates:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+
+    return "tuxseo-agent"
+
+
+def _resolve_agent_model_name(agent, fallback_model_name=""):
+    model = getattr(agent, "model", None)
+    if model is None:
+        return fallback_model_name or "unknown"
+
+    for attr in ("model_name", "model", "name"):
+        value = getattr(model, attr, None)
+        if isinstance(value, str) and value.strip():
+            return value
+
+    return fallback_model_name or str(model)
+
+
+def _emit_posthog_llm_generation(
+    *,
+    agent,
+    input_string,
+    result,
+    deps,
+    function_name,
+    model_name,
+    latency_seconds,
+    error=None,
+):
+    if not settings.POSTHOG_API_KEY:
+        return
+
+    resolved_model = _resolve_agent_model_name(agent, fallback_model_name=model_name)
+    feature_path = f"{model_name or 'unknown'}.{function_name or 'unknown'}"
+    status = "failed" if error else "succeeded"
+
+    properties = {
+        "$ai_model": resolved_model,
+        "$ai_input": [
+            {
+                "role": "user",
+                "content": _preview_text(input_string, limit=_LLM_INPUT_PREVIEW_LIMIT),
+            }
+        ],
+        "$ai_latency": round(max(latency_seconds, 0), 4),
+        "feature_path": feature_path,
+        "function_name": function_name,
+        "model_name": model_name,
+        "deps_type": deps.__class__.__name__ if deps is not None else None,
+        "result_status": status,
+    }
+
+    if result is not None:
+        properties["$ai_output_choices"] = [
+            {
+                "message": {
+                    "content": _preview_text(
+                        getattr(result, "output", ""),
+                        limit=_LLM_OUTPUT_PREVIEW_LIMIT,
+                    )
+                }
+            }
+        ]
+        properties.update(_extract_usage_metrics(result))
+
+    if error is not None:
+        properties["error_type"] = error.__class__.__name__
+        properties["error_message"] = _preview_text(error, limit=300)
+
+    cleaned_properties = {key: value for key, value in properties.items() if value is not None}
+
+    try:
+        posthog.capture(
+            _resolve_distinct_id_from_deps(deps),
+            event=LLM_ANALYTICS_EVENT,
+            properties=cleaned_properties,
+        )
+    except Exception:  # noqa: BLE001 - telemetry should never interrupt generation flows
+        logger.warning(
+            "[Run Agent Synchronously] Failed to emit PostHog LLM analytics event",
+            exc_info=True,
+            function_name=function_name,
+            model_name=model_name,
+        )
+
 
 class DivErrorList(ErrorList):
     def __str__(self):
@@ -280,6 +474,7 @@ def run_agent_synchronously(agent, input_string, deps=None, function_name="", mo
         asyncio.set_event_loop(loop)
 
     with capture_run_messages() as messages:
+        started_at = time.perf_counter()
         try:
             logger.info(
                 "[Run Agent Synchronously] Running agent",
@@ -294,22 +489,46 @@ def run_agent_synchronously(agent, input_string, deps=None, function_name="", mo
             else:
                 result = loop.run_until_complete(agent.run(input_string))
 
+            elapsed = time.perf_counter() - started_at
+            _emit_posthog_llm_generation(
+                agent=agent,
+                input_string=input_string,
+                result=result,
+                deps=deps,
+                function_name=function_name,
+                model_name=model_name,
+                latency_seconds=elapsed,
+            )
+
             logger.info(
                 "[Run Agent Synchronously] Agent run successfully",
                 messages=messages,
                 input_string=input_string,
                 deps=deps,
                 result=result,
+                latency_seconds=elapsed,
                 function_name=function_name,
                 model_name=model_name,
             )
             return result
         except Exception as e:
+            elapsed = time.perf_counter() - started_at
+            _emit_posthog_llm_generation(
+                agent=agent,
+                input_string=input_string,
+                result=None,
+                deps=deps,
+                function_name=function_name,
+                model_name=model_name,
+                latency_seconds=elapsed,
+                error=e,
+            )
             logger.error(
                 "[Run Agent Synchronously] Failed execution",
                 messages=messages,
                 exc_info=True,
                 error=str(e),
+                latency_seconds=elapsed,
                 function_name=function_name,
                 model_name=model_name,
             )

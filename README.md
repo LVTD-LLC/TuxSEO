@@ -155,6 +155,15 @@ Quick setup:
 
 See `docs/posthog-logs.md` for full configuration and field-level behavior.
 
+### PostHog LLM analytics (PydanticAI flows)
+
+TuxSEO emits `$ai_generation` events from key PydanticAI generation flows via `run_agent_synchronously(...)`.
+
+- Includes model, latency, token usage (when available), flow path, and failure context.
+- Designed for PostHog LLM analytics views to compare performance/cost by feature path.
+
+See `docs/posthog-llm-analytics.md` for event schema and verification steps.
+
 ### Product analytics event taxonomy (PostHog)
 
 TuxSEO maintains a canonical event taxonomy and coverage matrix for funnel-safe product analytics:
