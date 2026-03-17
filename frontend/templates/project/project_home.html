@@ -191,9 +191,9 @@ TuxSEO API key: {{ request.user.profile.key }}</textarea>
           <div class="mt-4">
             <p class="text-xs font-semibold tracking-wide text-gray-600 uppercase">Trend deltas (recent 7d vs prior 7d)</p>
             <ul class="mt-2 text-sm text-gray-700 list-disc list-inside">
-              <li>Clicks: {{ analytics_snapshot_state.deltas.clicks_pct|floatformat:2 }}%</li>
-              <li>Sessions: {{ analytics_snapshot_state.deltas.sessions_pct|floatformat:2 }}%</li>
-              <li>Conversions: {{ analytics_snapshot_state.deltas.conversions_pct|floatformat:2 }}%</li>
+              <li>Clicks: {% if analytics_snapshot_state.deltas.clicks_pct is None %}N/A (no prior-period baseline){% else %}{{ analytics_snapshot_state.deltas.clicks_pct|floatformat:2 }}%{% endif %}</li>
+              <li>Sessions: {% if analytics_snapshot_state.deltas.sessions_pct is None %}N/A (no prior-period baseline){% else %}{{ analytics_snapshot_state.deltas.sessions_pct|floatformat:2 }}%{% endif %}</li>
+              <li>Conversions: {% if analytics_snapshot_state.deltas.conversions_pct is None %}N/A (no prior-period baseline){% else %}{{ analytics_snapshot_state.deltas.conversions_pct|floatformat:2 }}%{% endif %}</li>
             </ul>
           </div>
 

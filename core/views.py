@@ -844,9 +844,9 @@ class ProjectHomeView(LoginRequiredMixin, DetailView):
         return round((float(numerator) / float(denominator)) * 100, 2)
 
     @staticmethod
-    def _safe_delta(recent: float | int, previous: float | int) -> float:
+    def _safe_delta(recent: float | int, previous: float | int) -> float | None:
         if not previous:
-            return 0.0 if not recent else 100.0
+            return 0.0 if not recent else None
         return round(((float(recent) - float(previous)) / float(previous)) * 100, 2)
 
     def get_analytics_snapshot_state(self, *, project: Project) -> dict:
@@ -855,17 +855,17 @@ class ProjectHomeView(LoginRequiredMixin, DetailView):
 
         providers = [
             {
-                "key": "google_analytics",
+                "key": ProjectIntegration.Provider.GOOGLE_ANALYTICS,
                 "label": "GA4",
                 "integration_label": "Google Analytics",
             },
             {
-                "key": "google_search_console",
+                "key": ProjectIntegration.Provider.GOOGLE_SEARCH_CONSOLE,
                 "label": "GSC",
                 "integration_label": "Google Search Console",
             },
             {
-                "key": "plausible",
+                "key": ProjectIntegration.Provider.PLAUSIBLE,
                 "label": "Plausible",
                 "integration_label": "Plausible",
             },
@@ -934,13 +934,12 @@ class ProjectHomeView(LoginRequiredMixin, DetailView):
                 ],
                 impressions__gte=100,
                 ctr__isnull=False,
+                ctr__lte=0.04,
             )
-            .order_by("ctr", "-impressions")[:20]
+            .order_by("ctr", "-impressions")[:3]
         )
         for row in opportunities_qs:
             ctr_value = float(row.ctr or 0)
-            if ctr_value > 0.04:
-                continue
             page_or_query = row.search_query or row.page_url or "Untitled page"
             opportunities.append(
                 {
@@ -950,8 +949,6 @@ class ProjectHomeView(LoginRequiredMixin, DetailView):
                     "suggestion": "Improve title/meta match and add internal links from related pages.",
                 }
             )
-            if len(opportunities) >= 3:
-                break
 
         has_analytics_data = facts_qs.exists()
 

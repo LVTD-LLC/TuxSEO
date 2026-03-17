@@ -320,14 +320,28 @@ def test_project_home_view_renders_analytics_metrics_and_opportunities(client):
         avg_position=14.0,
     )
 
+    AnalyticsFactDaily.objects.create(
+        project=project,
+        provider=AnalyticsFactDaily.Provider.GSC,
+        metric_date=today,
+        dimension_scope=AnalyticsFactDaily.DimensionScope.PAGE_QUERY,
+        page_url="https://analytics-data.example.com/features",
+        search_query="seo features",
+        dimension_fingerprint="gsc-excluded-high-ctr",
+        clicks=15,
+        impressions=120,
+        ctr=0.15,
+        avg_position=6.1,
+    )
+
     client.force_login(user)
     response = client.get(reverse("project_home", kwargs={"pk": project.id}))
 
     assert response.status_code == 200
     analytics_snapshot = response.context["analytics_snapshot_state"]
     assert analytics_snapshot["has_data"] is True
-    assert analytics_snapshot["totals"]["clicks"] == 17
-    assert analytics_snapshot["totals"]["impressions"] == 700
+    assert analytics_snapshot["totals"]["clicks"] == 32
+    assert analytics_snapshot["totals"]["impressions"] == 820
     assert analytics_snapshot["totals"]["sessions"] == 80
     assert analytics_snapshot["totals"]["users"] == 60
     assert analytics_snapshot["totals"]["conversions"] == 5.0
@@ -337,4 +351,8 @@ def test_project_home_view_renders_analytics_metrics_and_opportunities(client):
     assert "Analytics (GA4/GSC/Plausible)" in content
     assert "Top opportunities" in content
     assert "seo pricing" in content
+    assert "seo features" not in content
+    assert "GA4 Connected" in content
+    assert "GSC Connected" in content
+    assert "Plausible Not connected" in content
     assert "Trend deltas (recent 7d vs prior 7d)" in content
