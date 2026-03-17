@@ -822,21 +822,22 @@ def get_relevant_external_pages_for_blog_post(
 
     eligible_external_pages = eligible_external_pages_query.select_related("project__profile")
 
-    if not eligible_external_pages.exists():
+    relevant_external_pages = list(
+        eligible_external_pages.order_by(CosineDistance("embedding", meta_description_embedding))[
+            :max_pages
+        ]
+    )
+
+    if not relevant_external_pages:
         logger.info(
             "[GetRelevantExternalPages] No pages with embeddings found from link-exchange projects"
         )
         return ProjectPage.objects.none()
 
-    relevant_external_pages = eligible_external_pages.order_by(
-        CosineDistance("embedding", meta_description_embedding)
-    )[:max_pages]
-
     logger.info(
         "[GetRelevantExternalPages] Successfully found relevant external pages",
         num_relevant_pages=len(relevant_external_pages),
         max_pages=max_pages,
-        total_pages_with_embeddings=eligible_external_pages.count(),
         meta_description_preview=meta_description[:100],
     )
 

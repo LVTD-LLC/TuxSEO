@@ -79,6 +79,36 @@ def test_get_link_candidate_pages_builds_balanced_internal_external_mix(monkeypa
     ]
 
 
+def test_get_link_candidate_pages_uses_external_oversampling(monkeypatch):
+    fake_blog_post = SimpleNamespace(
+        project=SimpleNamespace(
+            particiate_in_link_exchange=True,
+            project_pages=_FakeProjectPagesManager([]),
+        ),
+        title_suggestion=SimpleNamespace(suggested_meta_description="SEO links"),
+        _dedupe_pages_by_url=GeneratedBlogPost._dedupe_pages_by_url,
+        _dedupe_external_pages_by_project=GeneratedBlogPost._dedupe_external_pages_by_project,
+    )
+
+    captured = {}
+
+    monkeypatch.setattr("core.models.get_relevant_pages_for_blog_post", lambda *_args, **_kwargs: [])
+
+    def _fake_external(*_args, **kwargs):
+        captured["max_pages"] = kwargs["max_pages"]
+        return []
+
+    monkeypatch.setattr("core.models.get_relevant_external_pages_for_blog_post", _fake_external)
+
+    GeneratedBlogPost._get_link_candidate_pages(
+        fake_blog_post,
+        max_pages=4,
+        max_external_pages=3,
+    )
+
+    assert captured["max_pages"] == 12
+
+
 def test_build_page_contexts_includes_link_source_tags():
     internal_page = _page("https://owner.example.com/internal")
     external_page = _page("https://external.example.com/external", project_id=2)

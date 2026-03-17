@@ -132,8 +132,8 @@ def test_paid_source_blocks_free_external_project_from_promotion(
         candidate_page=free_target_page,
     )
     assert suggestion_log.decision == LinkOpportunityAuditLog.Decision.BLOCKED
-    assert "target_project_not_paid_for_promotion" in suggestion_log.reasons
     assert "free_project_cannot_be_promoted_into_paid_post" in suggestion_log.reasons
+    assert "target_project_not_paid_for_promotion" not in suggestion_log.reasons
 
 
 @pytest.mark.django_db
@@ -237,6 +237,9 @@ def test_velocity_and_anchor_diversity_caps_block_candidate(monkeypatch, blog_po
     assert "domain_velocity_cap_exceeded" in suggestion_log.reasons
     assert "source_target_velocity_cap_exceeded" in suggestion_log.reasons
     assert "anchor_diversity_cap_exceeded" in suggestion_log.reasons
+    assert "policy_guardrail_failed" in suggestion_log.policy_flags
+    assert "eligibility_passed" in suggestion_log.policy_flags
+    assert "relevance_passed" in suggestion_log.policy_flags
 
 
 @pytest.mark.django_db

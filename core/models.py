@@ -1586,9 +1586,10 @@ class GeneratedBlogPost(BaseModel):
             # - only paid projects are eligible to be promoted cross-project
             # - free projects must never be promoted into paid-project posts
             if not target_is_paid:
-                reasons.append("target_project_not_paid_for_promotion")
-            if source_is_paid and not target_is_paid:
-                reasons.append("free_project_cannot_be_promoted_into_paid_post")
+                if source_is_paid:
+                    reasons.append("free_project_cannot_be_promoted_into_paid_post")
+                else:
+                    reasons.append("target_project_not_paid_for_promotion")
 
             relation = "nofollow"
             flags.extend(
@@ -1645,11 +1646,31 @@ class GeneratedBlogPost(BaseModel):
         if proposed_anchor and identical_anchor_count >= max_identical_anchor_per_window:
             reasons.append("anchor_diversity_cap_exceeded")
 
-        has_eligibility_rejection = any("paid" in reason or "opted_in" in reason for reason in reasons)
-        has_relevance_rejection = any("relevance" in reason for reason in reasons)
+        eligibility_reasons = {
+            "source_project_not_opted_in",
+            "target_project_not_opted_in",
+            "target_project_not_paid_for_promotion",
+            "free_project_cannot_be_promoted_into_paid_post",
+        }
+        relevance_reasons = {
+            "below_relevance_threshold",
+            "missing_relevance_signal",
+        }
 
-        flags.append("eligibility_passed" if not has_eligibility_rejection else "eligibility_failed")
-        flags.append("relevance_passed" if not has_relevance_rejection else "relevance_failed")
+        has_eligibility_rejection = any(reason in eligibility_reasons for reason in reasons)
+        has_relevance_rejection = any(reason in relevance_reasons for reason in reasons)
+        has_other_policy_rejection = any(
+            reason not in eligibility_reasons and reason not in relevance_reasons for reason in reasons
+        )
+
+        if link_source == "external":
+            flags.append("eligibility_failed" if has_eligibility_rejection else "eligibility_passed")
+        else:
+            flags.append("eligibility_not_applicable")
+
+        flags.append("relevance_failed" if has_relevance_rejection else "relevance_passed")
+        if has_other_policy_rejection:
+            flags.append("policy_guardrail_failed")
 
         allowed = len(reasons) == 0
 
@@ -1761,11 +1782,12 @@ class GeneratedBlogPost(BaseModel):
 
         external_project_pages = []
         if self.project.particiate_in_link_exchange:
+            external_candidate_pool_size = max(max_external_pages * 4, max_external_pages)
             external_candidates = list(
                 get_relevant_external_pages_for_blog_post(
                     meta_description=self.title_suggestion.suggested_meta_description,
                     exclude_project=self.project,
-                    max_pages=max_external_pages,
+                    max_pages=external_candidate_pool_size,
                 )
             )
 
@@ -1872,6 +1894,7 @@ class GeneratedBlogPost(BaseModel):
             internal_pages=internal_project_pages,
             external_pages=external_project_pages,
         )
+        safe_external_pages = safe_external_pages[:max_external_pages]
 
         all_pages_to_link = safe_internal_pages + safe_external_pages
 
