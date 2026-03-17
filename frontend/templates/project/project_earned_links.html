@@ -41,7 +41,17 @@
             <tr>
               <td class="px-4 py-3 text-sm text-gray-900">{{ link.source_project.name }}</td>
               <td class="px-4 py-3 text-sm text-gray-700">
-                {% if link.source_page_title %}
+                {% if link.source_page_url %}
+                  <a href="{{ link.source_page_url }}" target="_blank" rel="noopener noreferrer" class="text-gray-900 underline">
+                    {% if link.source_page_title %}
+                      {{ link.source_page_title }}
+                    {% elif link.source_generated_blog_post %}
+                      {{ link.source_generated_blog_post.title }}
+                    {% else %}
+                      Generated content
+                    {% endif %}
+                  </a>
+                {% elif link.source_page_title %}
                   {{ link.source_page_title }}
                 {% elif link.source_generated_blog_post %}
                   {{ link.source_generated_blog_post.title }}

@@ -1489,7 +1489,7 @@ class ProjectEarnedLinksView(LoginRequiredMixin, DetailView):
         context = super().get_context_data(**kwargs)
         project = self.object
 
-        earned_links = (
+        earned_links = list(
             ProjectEarnedLink.objects.filter(target_project=project)
             .select_related(
                 "source_project",
@@ -1500,9 +1500,9 @@ class ProjectEarnedLinksView(LoginRequiredMixin, DetailView):
         )
 
         context["earned_links"] = earned_links
-        context["total_earned_links_count"] = earned_links.count()
-        context["unique_source_projects_count"] = (
-            earned_links.values_list("source_project_id", flat=True).distinct().count()
+        context["total_earned_links_count"] = len(earned_links)
+        context["unique_source_projects_count"] = len(
+            {link.source_project_id for link in earned_links}
         )
 
         return context

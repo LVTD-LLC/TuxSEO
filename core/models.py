@@ -1775,12 +1775,14 @@ class GeneratedBlogPost(BaseModel):
             if not final_anchor:
                 continue
 
+            source_page_url = f"{self.project.url.rstrip('/')}/{self.slug.lstrip('/')}"
             ProjectEarnedLink.objects.update_or_create(
                 source_project=self.project,
                 target_project=page.project,
-                source_generated_blog_post=self,
+                source_page_url=source_page_url,
                 target_page_url=page.url,
                 defaults={
+                    "source_generated_blog_post": self,
                     "source_page_title": self.title,
                     "target_page": page,
                     "last_anchor": final_anchor,
@@ -2545,7 +2547,7 @@ class ProjectEarnedLink(BaseModel):
         unique_together = (
             "source_project",
             "target_project",
-            "source_generated_blog_post",
+            "source_page_url",
             "target_page_url",
         )
         indexes = [

@@ -34,7 +34,7 @@ class Migration(migrations.Migration):
             ],
             options={
                 'indexes': [models.Index(fields=['target_project', 'last_seen_at'], name='core_projec_target__563404_idx'), models.Index(fields=['source_project', 'last_seen_at'], name='core_projec_source__2a2611_idx'), models.Index(fields=['target_page_url'], name='core_projec_target__d2bbd0_idx')],
-                'unique_together': {('source_project', 'target_project', 'source_generated_blog_post', 'target_page_url')},
+                'unique_together': {('source_project', 'target_project', 'source_page_url', 'target_page_url')},
             },
         ),
     ]

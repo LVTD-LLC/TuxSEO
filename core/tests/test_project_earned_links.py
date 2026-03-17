@@ -24,7 +24,6 @@ def create_user_with_project(username: str, project_url: str) -> tuple[User, Pro
     return user, project
 
 
-@pytest.mark.django_db
 def test_project_navigation_includes_earned_links_route():
     content = PROJECT_NAVIGATION_TEMPLATE_PATH.read_text(encoding="utf-8")
 
@@ -126,7 +125,7 @@ def test_record_link_placement_creates_deduped_earned_link_entry():
     links = ProjectEarnedLink.objects.filter(
         source_project=source_project,
         target_project=target_project,
-        source_generated_blog_post=source_post,
+        source_page_url="https://source3.example.com/how-to-do-seo",
         target_page_url=target_page.url,
     )
 
