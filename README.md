@@ -151,6 +151,12 @@ Implementation highlights:
 - Idempotent upsert semantics for safe retries.
 - Provider-aware retry/backoff behavior with observable cursor status and sanitized errors.
 - Missing/disconnected integrations are skipped without failing the whole scheduling run.
+- Project Home includes an **Analytics (GA4/GSC/Plausible)** section that surfaces:
+  - connected-source status badges
+  - 30-day KPI rollups (clicks, impressions, sessions, users, conversions)
+  - derived rates (CTR, engagement, conversion) and avg GSC position
+  - trend deltas (recent 7d vs prior 7d)
+  - top low-CTR/high-impression opportunities with actionable on-page SEO suggestions
 
 Scheduled entrypoint:
 - `core.scheduled_tasks.schedule_project_analytics_syncs`

@@ -18,7 +18,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.messages.views import SuccessMessageMixin
 from django.core import signing
-from django.db.models import Count, Prefetch, Q
+from django.db.models import Avg, Count, Prefetch, Q, Sum
 from django.http import Http404, HttpResponse, HttpResponseRedirect
 from django.shortcuts import redirect, render
 from django.template.loader import render_to_string
@@ -39,6 +39,7 @@ from core.forms import (
     ProjectScanForm,
 )
 from core.models import (
+    AnalyticsFactDaily,
     AutoSubmissionSetting,
     BlogPost,
     Competitor,
@@ -836,6 +837,149 @@ class ProjectHomeView(LoginRequiredMixin, DetailView):
             "is_empty": snapshot["event_count"] == 0,
         }
 
+    @staticmethod
+    def _safe_pct(numerator: float | int, denominator: float | int) -> float:
+        if not denominator:
+            return 0.0
+        return round((float(numerator) / float(denominator)) * 100, 2)
+
+    @staticmethod
+    def _safe_delta(recent: float | int, previous: float | int) -> float:
+        if not previous:
+            return 0.0 if not recent else 100.0
+        return round(((float(recent) - float(previous)) / float(previous)) * 100, 2)
+
+    def get_analytics_snapshot_state(self, *, project: Project) -> dict:
+        today = timezone.now().date()
+        window_start = today - timedelta(days=29)
+
+        providers = [
+            {
+                "key": "google_analytics",
+                "label": "GA4",
+                "integration_label": "Google Analytics",
+            },
+            {
+                "key": "google_search_console",
+                "label": "GSC",
+                "integration_label": "Google Search Console",
+            },
+            {
+                "key": "plausible",
+                "label": "Plausible",
+                "integration_label": "Plausible",
+            },
+        ]
+
+        connected_provider_keys = set(
+            ProjectIntegration.objects.filter(
+                project=project,
+                status=ProjectIntegration.Status.CONNECTED,
+            ).values_list("provider", flat=True)
+        )
+        for provider in providers:
+            provider["is_connected"] = provider["key"] in connected_provider_keys
+
+        facts_qs = AnalyticsFactDaily.objects.filter(
+            project=project,
+            metric_date__gte=window_start,
+            metric_date__lte=today,
+        )
+
+        totals = facts_qs.aggregate(
+            clicks=Sum("clicks"),
+            impressions=Sum("impressions"),
+            sessions=Sum("sessions"),
+            users=Sum("users"),
+            conversions=Sum("conversions"),
+            engaged_sessions=Sum("engaged_sessions"),
+        )
+
+        totals = {k: (v or 0) for k, v in totals.items()}
+
+        gsc_position_data = facts_qs.filter(
+            provider=AnalyticsFactDaily.Provider.GSC,
+            avg_position__isnull=False,
+        ).aggregate(avg_position=Avg("avg_position"))
+        avg_position = round(float(gsc_position_data.get("avg_position") or 0), 2)
+
+        recent_start = today - timedelta(days=6)
+        previous_start = recent_start - timedelta(days=7)
+        previous_end = recent_start - timedelta(days=1)
+
+        recent = facts_qs.filter(metric_date__gte=recent_start, metric_date__lte=today).aggregate(
+            clicks=Sum("clicks"),
+            sessions=Sum("sessions"),
+            conversions=Sum("conversions"),
+        )
+        previous = facts_qs.filter(
+            metric_date__gte=previous_start,
+            metric_date__lte=previous_end,
+        ).aggregate(
+            clicks=Sum("clicks"),
+            sessions=Sum("sessions"),
+            conversions=Sum("conversions"),
+        )
+
+        recent = {k: (v or 0) for k, v in recent.items()}
+        previous = {k: (v or 0) for k, v in previous.items()}
+
+        opportunities = []
+        opportunities_qs = (
+            facts_qs.filter(
+                provider=AnalyticsFactDaily.Provider.GSC,
+                dimension_scope__in=[
+                    AnalyticsFactDaily.DimensionScope.PAGE,
+                    AnalyticsFactDaily.DimensionScope.PAGE_QUERY,
+                ],
+                impressions__gte=100,
+                ctr__isnull=False,
+            )
+            .order_by("ctr", "-impressions")[:20]
+        )
+        for row in opportunities_qs:
+            ctr_value = float(row.ctr or 0)
+            if ctr_value > 0.04:
+                continue
+            page_or_query = row.search_query or row.page_url or "Untitled page"
+            opportunities.append(
+                {
+                    "target": page_or_query,
+                    "impressions": int(row.impressions or 0),
+                    "ctr_pct": round(ctr_value * 100, 2),
+                    "suggestion": "Improve title/meta match and add internal links from related pages.",
+                }
+            )
+            if len(opportunities) >= 3:
+                break
+
+        has_analytics_data = facts_qs.exists()
+
+        return {
+            "window_days": 30,
+            "providers": providers,
+            "has_data": has_analytics_data,
+            "totals": {
+                "clicks": int(totals["clicks"]),
+                "impressions": int(totals["impressions"]),
+                "sessions": int(totals["sessions"]),
+                "users": int(totals["users"]),
+                "conversions": float(totals["conversions"]),
+            },
+            "derived": {
+                "ctr_pct": self._safe_pct(totals["clicks"], totals["impressions"]),
+                "avg_position": avg_position,
+                "engagement_rate_pct": self._safe_pct(totals["engaged_sessions"], totals["sessions"]),
+                "conversion_rate_pct": self._safe_pct(totals["conversions"], totals["sessions"]),
+            },
+            "deltas": {
+                "clicks_pct": self._safe_delta(recent["clicks"], previous["clicks"]),
+                "sessions_pct": self._safe_delta(recent["sessions"], previous["sessions"]),
+                "conversions_pct": self._safe_delta(recent["conversions"], previous["conversions"]),
+            },
+            "opportunities": opportunities,
+        }
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         project = self.object
@@ -886,6 +1030,7 @@ class ProjectHomeView(LoginRequiredMixin, DetailView):
         context["has_loading_generation_state"] = has_loading_generation_state
         context["has_empty_generation_state"] = has_empty_generation_state
         context["reporting_snapshot_state"] = self.get_reporting_snapshot_state(project=project)
+        context["analytics_snapshot_state"] = self.get_analytics_snapshot_state(project=project)
 
         return context
 

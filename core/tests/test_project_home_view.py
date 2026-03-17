@@ -6,12 +6,14 @@ from django.urls import reverse
 from django.utils import timezone
 
 from core.models import (
+    AnalyticsFactDaily,
     BlogPostTitleSuggestion,
     Competitor,
     GeneratedBlogPost,
     Keyword,
     OutcomeAttributionRollup,
     Project,
+    ProjectIntegration,
     ProjectKeyword,
     ProjectPage,
 )
@@ -237,3 +239,102 @@ def test_project_home_view_renders_reporting_snapshot_card(client):
     assert "AI Visibility + SEO Outcome Snapshot (30d)" in content
     assert "Contribution split" in content
     assert "Metric definitions" in content
+
+
+@pytest.mark.django_db
+def test_project_home_view_renders_analytics_section_empty_state(client):
+    user, project = create_user_with_project(
+        username="project-home-analytics-empty-user",
+        project_url="https://analytics-empty.example.com",
+    )
+    client.force_login(user)
+
+    response = client.get(reverse("project_home", kwargs={"pk": project.id}))
+
+    assert response.status_code == 200
+    assert "analytics_snapshot_state" in response.context
+    content = response.content.decode()
+    assert "Analytics (GA4/GSC/Plausible)" in content
+    assert "No analytics data synced yet." in content
+
+
+@pytest.mark.django_db
+def test_project_home_view_renders_analytics_metrics_and_opportunities(client):
+    user, project = create_user_with_project(
+        username="project-home-analytics-data-user",
+        project_url="https://analytics-data.example.com",
+    )
+
+    ProjectIntegration.objects.create(
+        project=project,
+        provider=ProjectIntegration.Provider.GOOGLE_ANALYTICS,
+        status=ProjectIntegration.Status.CONNECTED,
+    )
+    ProjectIntegration.objects.create(
+        project=project,
+        provider=ProjectIntegration.Provider.GOOGLE_SEARCH_CONSOLE,
+        status=ProjectIntegration.Status.CONNECTED,
+    )
+
+    today = timezone.now().date()
+
+    AnalyticsFactDaily.objects.create(
+        project=project,
+        provider=AnalyticsFactDaily.Provider.GA4,
+        metric_date=today,
+        dimension_scope=AnalyticsFactDaily.DimensionScope.PAGE,
+        page_url="https://analytics-data.example.com/page-a",
+        dimension_fingerprint="ga4-a",
+        clicks=10,
+        impressions=200,
+        sessions=80,
+        users=60,
+        engaged_sessions=50,
+        conversions=5,
+    )
+
+    AnalyticsFactDaily.objects.create(
+        project=project,
+        provider=AnalyticsFactDaily.Provider.GSC,
+        metric_date=today,
+        dimension_scope=AnalyticsFactDaily.DimensionScope.PAGE_QUERY,
+        page_url="https://analytics-data.example.com/pricing",
+        search_query="seo pricing",
+        dimension_fingerprint="gsc-opportunity",
+        clicks=5,
+        impressions=400,
+        ctr=0.012,
+        avg_position=11.2,
+    )
+
+    AnalyticsFactDaily.objects.create(
+        project=project,
+        provider=AnalyticsFactDaily.Provider.GSC,
+        metric_date=today - timedelta(days=8),
+        dimension_scope=AnalyticsFactDaily.DimensionScope.PAGE,
+        page_url="https://analytics-data.example.com/blog",
+        dimension_fingerprint="gsc-previous",
+        clicks=2,
+        impressions=100,
+        ctr=0.02,
+        avg_position=14.0,
+    )
+
+    client.force_login(user)
+    response = client.get(reverse("project_home", kwargs={"pk": project.id}))
+
+    assert response.status_code == 200
+    analytics_snapshot = response.context["analytics_snapshot_state"]
+    assert analytics_snapshot["has_data"] is True
+    assert analytics_snapshot["totals"]["clicks"] == 17
+    assert analytics_snapshot["totals"]["impressions"] == 700
+    assert analytics_snapshot["totals"]["sessions"] == 80
+    assert analytics_snapshot["totals"]["users"] == 60
+    assert analytics_snapshot["totals"]["conversions"] == 5.0
+    assert analytics_snapshot["opportunities"]
+
+    content = response.content.decode()
+    assert "Analytics (GA4/GSC/Plausible)" in content
+    assert "Top opportunities" in content
+    assert "seo pricing" in content
+    assert "Trend deltas (recent 7d vs prior 7d)" in content
