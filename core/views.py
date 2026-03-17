@@ -1,9 +1,11 @@
+import secrets
 import time
 from datetime import timedelta
 from pathlib import Path
 from urllib.parse import urlencode
 
 import markdown
+import requests
 import stripe
 from allauth.account import app_settings as account_app_settings
 from allauth.account.adapter import get_adapter
@@ -22,6 +24,7 @@ from django.shortcuts import redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
+from django.views import View
 from django.views.generic import DeleteView, DetailView, ListView, TemplateView, UpdateView
 from django_q.tasks import async_task
 from djstripe import models as djstripe_models
@@ -29,7 +32,12 @@ from weasyprint import HTML
 
 from core.analytics import ANALYTICS_EVENTS
 from core.choices import BlogPostStatus, ContentType, Language, OGImageStyle, ProfileStates
-from core.forms import AutoSubmissionSettingForm, ProfileUpdateForm, ProjectScanForm
+from core.forms import (
+    AutoSubmissionSettingForm,
+    PlausibleIntegrationForm,
+    ProfileUpdateForm,
+    ProjectScanForm,
+)
 from core.models import (
     AutoSubmissionSetting,
     BlogPost,
@@ -39,6 +47,7 @@ from core.models import (
     Profile,
     ProfileStateTransition,
     Project,
+    ProjectIntegration,
 )
 from core.outcome_attribution import get_project_reporting_snapshot
 from core.tasks import (
@@ -1004,8 +1013,297 @@ class ProjectIntegrationsView(LoginRequiredMixin, DetailView):
     template_name = "project/project_integrations.html"
     context_object_name = "project"
 
+    google_scope_map = {
+        ProjectIntegration.Provider.GOOGLE_ANALYTICS: [
+            "openid",
+            "email",
+            "profile",
+            "https://www.googleapis.com/auth/analytics.readonly",
+        ],
+        ProjectIntegration.Provider.GOOGLE_SEARCH_CONSOLE: [
+            "openid",
+            "email",
+            "profile",
+            "https://www.googleapis.com/auth/webmasters.readonly",
+        ],
+    }
+
     def get_queryset(self):
         return Project.objects.filter(profile=self.request.user.profile)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        project = self.object
+
+        integrations = {
+            integration.provider: integration for integration in project.integrations.all()
+        }
+
+        context["ga4_integration"] = integrations.get(
+            ProjectIntegration.Provider.GOOGLE_ANALYTICS
+        )
+        context["gsc_integration"] = integrations.get(
+            ProjectIntegration.Provider.GOOGLE_SEARCH_CONSOLE
+        )
+        context["plausible_integration"] = integrations.get(ProjectIntegration.Provider.PLAUSIBLE)
+
+        if "plausible_form" not in context:
+            plausible_integration = context["plausible_integration"]
+            initial = {}
+            if plausible_integration:
+                initial = {
+                    "site_id": plausible_integration.plausible_site_id,
+                    "api_key": plausible_integration.plausible_api_key,
+                    "base_url": plausible_integration.plausible_base_url,
+                }
+            context["plausible_form"] = PlausibleIntegrationForm(initial=initial)
+
+        return context
+
+    def post(self, request, *args, **kwargs):
+        self.object = self.get_object()
+        action = request.POST.get("action")
+
+        if action == "connect_google_analytics":
+            return self._start_google_oauth(ProjectIntegration.Provider.GOOGLE_ANALYTICS)
+
+        if action == "connect_google_search_console":
+            return self._start_google_oauth(ProjectIntegration.Provider.GOOGLE_SEARCH_CONSOLE)
+
+        if action == "disconnect_google_analytics":
+            self._disconnect_google_integration(ProjectIntegration.Provider.GOOGLE_ANALYTICS)
+            messages.success(request, "Google Analytics disconnected.")
+            return redirect("project_integrations", pk=self.object.pk)
+
+        if action == "disconnect_google_search_console":
+            self._disconnect_google_integration(ProjectIntegration.Provider.GOOGLE_SEARCH_CONSOLE)
+            messages.success(request, "Google Search Console disconnected.")
+            return redirect("project_integrations", pk=self.object.pk)
+
+        if action == "connect_plausible":
+            form = PlausibleIntegrationForm(request.POST)
+            if form.is_valid():
+                if self._connect_plausible(form.cleaned_data):
+                    messages.success(request, "Plausible connected.")
+                    return redirect("project_integrations", pk=self.object.pk)
+
+                messages.error(
+                    request,
+                    "Could not verify Plausible credentials. Check API key/site ID and retry.",
+                )
+            context = self.get_context_data()
+            context["plausible_form"] = form
+            return self.render_to_response(context)
+
+        if action == "disconnect_plausible":
+            self._disconnect_plausible()
+            messages.success(request, "Plausible disconnected.")
+            return redirect("project_integrations", pk=self.object.pk)
+
+        messages.error(request, "Unknown integration action.")
+        return redirect("project_integrations", pk=self.object.pk)
+
+    def _start_google_oauth(self, provider):
+        client_id = getattr(settings, "GOOGLE_CLIENT_ID", "")
+        client_secret = getattr(settings, "GOOGLE_CLIENT_SECRET", "")
+
+        if not client_id or not client_secret:
+            messages.error(
+                self.request,
+                "Google OAuth is not configured yet. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.",
+            )
+            return redirect("project_integrations", pk=self.object.pk)
+
+        nonce = secrets.token_urlsafe(24)
+        session_key = f"google_integration_oauth_state:{nonce}"
+        self.request.session[session_key] = {
+            "project_id": self.object.pk,
+            "provider": provider,
+        }
+        self.request.session.set_expiry(600)
+
+        callback_url = self.request.build_absolute_uri(
+            reverse("project_integrations_google_callback")
+        )
+        scope = self.google_scope_map[provider]
+
+        params = {
+            "client_id": client_id,
+            "redirect_uri": callback_url,
+            "response_type": "code",
+            "scope": " ".join(scope),
+            "access_type": "offline",
+            "include_granted_scopes": "true",
+            "prompt": "consent",
+            "state": nonce,
+        }
+
+        auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
+        return HttpResponseRedirect(auth_url)
+
+    def _disconnect_google_integration(self, provider):
+        integration, _ = ProjectIntegration.objects.get_or_create(
+            project=self.object,
+            provider=provider,
+        )
+        integration.status = ProjectIntegration.Status.DISCONNECTED
+        integration.access_token = ""
+        integration.refresh_token = ""
+        integration.scope = ""
+        integration.token_expires_at = None
+        integration.connected_at = None
+        integration.external_account_email = ""
+        integration.save()
+
+    def _connect_plausible(self, cleaned_data):
+        base_url = cleaned_data["base_url"]
+        site_id = cleaned_data["site_id"]
+        api_key = cleaned_data["api_key"]
+
+        verify_url = f"{base_url}/api/v1/stats/aggregate"
+        try:
+            response = requests.get(
+                verify_url,
+                params={
+                    "site_id": site_id,
+                    "period": "7d",
+                    "metrics": "visitors",
+                },
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=15,
+            )
+        except requests.RequestException:
+            return False
+
+        if response.status_code != 200:
+            return False
+
+        integration, _ = ProjectIntegration.objects.get_or_create(
+            project=self.object,
+            provider=ProjectIntegration.Provider.PLAUSIBLE,
+        )
+        integration.status = ProjectIntegration.Status.CONNECTED
+        integration.connected_at = timezone.now()
+        integration.plausible_api_key = api_key
+        integration.plausible_site_id = site_id
+        integration.plausible_base_url = base_url
+        integration.save()
+        return True
+
+    def _disconnect_plausible(self):
+        integration, _ = ProjectIntegration.objects.get_or_create(
+            project=self.object,
+            provider=ProjectIntegration.Provider.PLAUSIBLE,
+        )
+        integration.status = ProjectIntegration.Status.DISCONNECTED
+        integration.connected_at = None
+        integration.plausible_api_key = ""
+        integration.plausible_site_id = ""
+        integration.plausible_base_url = "https://plausible.io"
+        integration.save()
+
+
+class ProjectIntegrationsGoogleCallbackView(LoginRequiredMixin, View):
+    def get(self, request, *args, **kwargs):
+        state = request.GET.get("state", "")
+        oauth_error = request.GET.get("error")
+        session_key = f"google_integration_oauth_state:{state}"
+
+        oauth_state = request.session.pop(session_key, None)
+        if not state or not oauth_state:
+            messages.error(request, "Google integration session expired. Please retry.")
+            return redirect("home")
+
+        project = Project.objects.filter(
+            pk=oauth_state["project_id"],
+            profile=request.user.profile,
+        ).first()
+        if not project:
+            raise Http404("Project not found")
+
+        if oauth_error:
+            messages.error(request, f"Google connection cancelled: {oauth_error}.")
+            return redirect("project_integrations", pk=project.pk)
+
+        code = request.GET.get("code")
+        if not code:
+            messages.error(request, "Google did not return an authorization code.")
+            return redirect("project_integrations", pk=project.pk)
+
+        token_response = self._exchange_google_code_for_token(
+            request=request,
+            code=code,
+        )
+        if not token_response:
+            messages.error(request, "Could not complete Google OAuth token exchange.")
+            return redirect("project_integrations", pk=project.pk)
+
+        provider = oauth_state["provider"]
+        self._save_google_integration(project=project, provider=provider, token_response=token_response)
+
+        provider_label = dict(ProjectIntegration.Provider.choices).get(provider, "Google integration")
+        messages.success(request, f"{provider_label} connected.")
+        return redirect("project_integrations", pk=project.pk)
+
+    def _exchange_google_code_for_token(self, request, code):
+        callback_url = request.build_absolute_uri(reverse("project_integrations_google_callback"))
+        try:
+            response = requests.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "code": code,
+                    "client_id": settings.GOOGLE_CLIENT_ID,
+                    "client_secret": settings.GOOGLE_CLIENT_SECRET,
+                    "redirect_uri": callback_url,
+                    "grant_type": "authorization_code",
+                },
+                timeout=15,
+            )
+            response.raise_for_status()
+            token_response = response.json()
+            if not token_response.get("access_token"):
+                return None
+            return token_response
+        except (requests.RequestException, ValueError):
+            logger.exception("[ProjectIntegrationsGoogleCallbackView] Google token exchange failed")
+            return None
+
+    def _fetch_google_email(self, access_token):
+        try:
+            response = requests.get(
+                "https://openidconnect.googleapis.com/v1/userinfo",
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=10,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            return payload.get("email", "")
+        except (requests.RequestException, ValueError):
+            return ""
+
+    def _save_google_integration(self, *, project, provider, token_response):
+        integration, _ = ProjectIntegration.objects.get_or_create(
+            project=project,
+            provider=provider,
+        )
+
+        access_token = token_response.get("access_token", "")
+        refresh_token = token_response.get("refresh_token", "")
+        expires_in = token_response.get("expires_in")
+        scope = token_response.get("scope", "")
+
+        integration.status = ProjectIntegration.Status.CONNECTED
+        integration.access_token = access_token
+        if refresh_token:
+            integration.refresh_token = refresh_token
+        integration.scope = scope
+        integration.connected_at = timezone.now()
+        integration.external_account_email = self._fetch_google_email(access_token)
+
+        if expires_in:
+            integration.token_expires_at = timezone.now() + timedelta(seconds=int(expires_in))
+
+        integration.save()
 
 
 class ProjectSettingsView(LoginRequiredMixin, DetailView):

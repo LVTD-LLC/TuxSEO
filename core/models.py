@@ -1774,6 +1774,45 @@ class GeneratedBlogPost(BaseModel):
         return content_with_links
 
 
+class ProjectIntegration(BaseModel):
+    class Provider(models.TextChoices):
+        GOOGLE_ANALYTICS = "google_analytics", "Google Analytics (GA4)"
+        GOOGLE_SEARCH_CONSOLE = "google_search_console", "Google Search Console"
+        PLAUSIBLE = "plausible", "Plausible"
+
+    class Status(models.TextChoices):
+        DISCONNECTED = "disconnected", "Disconnected"
+        CONNECTED = "connected", "Connected"
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="integrations")
+    provider = models.CharField(max_length=64, choices=Provider.choices)
+    status = models.CharField(
+        max_length=32,
+        choices=Status.choices,
+        default=Status.DISCONNECTED,
+    )
+
+    external_account_email = models.EmailField(blank=True, default="")
+    scope = models.TextField(blank=True, default="")
+
+    access_token = models.TextField(blank=True, default="")
+    refresh_token = models.TextField(blank=True, default="")
+    token_expires_at = models.DateTimeField(null=True, blank=True)
+
+    plausible_api_key = models.CharField(max_length=255, blank=True, default="")
+    plausible_site_id = models.CharField(max_length=255, blank=True, default="")
+    plausible_base_url = models.URLField(max_length=255, blank=True, default="https://plausible.io")
+
+    connected_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        unique_together = ("project", "provider")
+
+    @property
+    def is_connected(self):
+        return self.status == self.Status.CONNECTED
+
+
 class ProjectPage(BaseModel):
     project = models.ForeignKey(
         Project, null=True, blank=True, on_delete=models.CASCADE, related_name="project_pages"

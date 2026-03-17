@@ -42,6 +42,11 @@ urlpatterns = [
         name="project_integrations",
     ),
     path(
+        "project/integrations/google/callback/",
+        views.ProjectIntegrationsGoogleCallbackView.as_view(),
+        name="project_integrations_google_callback",
+    ),
+    path(
         "project/<int:pk>/settings/", views.ProjectSettingsView.as_view(), name="project_settings"
     ),
     path(
