@@ -1,0 +1,74 @@
+{% extends "base_project.html" %}
+
+{% block meta %}
+  <title>TuxSEO - Integrations for {{ project.name }}</title>
+  <meta name="description" content="Manage data source integrations for {{ project.name }}." />
+{% endblock meta %}
+
+{% block project_content %}
+<div class="mb-6">
+  <h2 class="text-2xl font-bold text-gray-900">Integrations</h2>
+  <p class="mt-2 text-gray-600">
+    Connect analytics and search data sources for this project.
+  </p>
+</div>
+
+<div class="space-y-4">
+  <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm">
+    <div class="flex justify-between items-start gap-4">
+      <div>
+        <h3 class="text-lg font-semibold text-gray-900">Google Analytics (GA4)</h3>
+        <p class="mt-1 text-sm text-gray-600">
+          Pull traffic and engagement data from your GA4 property.
+        </p>
+      </div>
+      <span class="inline-flex items-center px-2.5 py-0.5 text-xs font-medium text-amber-800 bg-amber-100 rounded-full">
+        Coming soon
+      </span>
+    </div>
+    <div class="mt-4">
+      <button type="button" disabled class="inline-flex items-center px-4 py-2 text-sm font-medium text-gray-400 bg-gray-100 rounded-md border border-gray-200 cursor-not-allowed">
+        Connect Google Analytics
+      </button>
+    </div>
+  </div>
+
+  <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm">
+    <div class="flex justify-between items-start gap-4">
+      <div>
+        <h3 class="text-lg font-semibold text-gray-900">Google Search Console (GSC)</h3>
+        <p class="mt-1 text-sm text-gray-600">
+          Pull search queries, impressions, clicks, and position data.
+        </p>
+      </div>
+      <span class="inline-flex items-center px-2.5 py-0.5 text-xs font-medium text-amber-800 bg-amber-100 rounded-full">
+        Coming soon
+      </span>
+    </div>
+    <div class="mt-4">
+      <button type="button" disabled class="inline-flex items-center px-4 py-2 text-sm font-medium text-gray-400 bg-gray-100 rounded-md border border-gray-200 cursor-not-allowed">
+        Connect Search Console
+      </button>
+    </div>
+  </div>
+
+  <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm">
+    <div class="flex justify-between items-start gap-4">
+      <div>
+        <h3 class="text-lg font-semibold text-gray-900">Plausible</h3>
+        <p class="mt-1 text-sm text-gray-600">
+          Pull privacy-friendly web analytics from your Plausible site.
+        </p>
+      </div>
+      <span class="inline-flex items-center px-2.5 py-0.5 text-xs font-medium text-amber-800 bg-amber-100 rounded-full">
+        Coming soon
+      </span>
+    </div>
+    <div class="mt-4">
+      <button type="button" disabled class="inline-flex items-center px-4 py-2 text-sm font-medium text-gray-400 bg-gray-100 rounded-md border border-gray-200 cursor-not-allowed">
+        Connect Plausible
+      </button>
+    </div>
+  </div>
+</div>
+{% endblock project_content %}

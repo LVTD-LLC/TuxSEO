@@ -999,6 +999,15 @@ class ProjectSEOPostsView(LoginRequiredMixin, DetailView):
         return context
 
 
+class ProjectIntegrationsView(LoginRequiredMixin, DetailView):
+    model = Project
+    template_name = "project/project_integrations.html"
+    context_object_name = "project"
+
+    def get_queryset(self):
+        return Project.objects.filter(profile=self.request.user.profile)
+
+
 class ProjectSettingsView(LoginRequiredMixin, DetailView):
     model = Project
     template_name = "project/project_settings.html"
