@@ -138,6 +138,23 @@ What this does:
 
 If this fails, fix locally before pushing.
 
+### PostHog Logs (structured backend observability)
+
+TuxSEO can ship structured backend logs to **PostHog Logs** over OTLP HTTP.
+
+- Web request logs include correlation IDs (`request_id`, `trace_id`) via middleware.
+- Background and AI generation jobs bind `task_id`/`job_id` so failures can be traced end-to-end.
+- A redaction layer strips common secrets/tokens and emails before shipping.
+- Export is async + batched to avoid adding request latency.
+
+Quick setup:
+
+1. Set `POSTHOG_API_KEY`.
+2. Set `POSTHOG_LOGS_ENABLED=true` in production.
+3. Optionally override `POSTHOG_LOGS_ENDPOINT` (default: `https://us.i.posthog.com/v1/logs`).
+
+See `docs/posthog-logs.md` for full configuration and field-level behavior.
+
 ### Analytics ingestion jobs (GA4, GSC, Plausible)
 
 TuxSEO now ships background ingestion for connected analytics providers:

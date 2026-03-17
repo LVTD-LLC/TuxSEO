@@ -37,6 +37,7 @@ from core.models import (
     ProjectKeyword,
     ProjectPage,
 )
+from tuxseo.logging_context import bind_log_context
 from tuxseo.utils import get_tuxseo_logger
 
 logger = get_tuxseo_logger(__name__)
@@ -1998,54 +1999,59 @@ def generate_competitor_vs_blog_post(competitor_id: int):
         )
         return f"Competitor {competitor_id} not found"
 
-    logger.info(
-        "[Generate Competitor VS Blog Post] Starting generation",
-        competitor_id=competitor.id,
+    with bind_log_context(
+        task_id=f"generate_competitor_vs_blog_post:{competitor_id}",
         project_id=competitor.project_id,
-        profile_id=competitor.project.profile_id if competitor.project else None,
-    )
-
-    try:
-        competitor.generate_vs_blog_post()
-        competitor.blog_post_generation_status = CompetitorPostGenerationStatus.COMPLETED
-        competitor.blog_post_generation_completed_at = timezone.now()
-        competitor.blog_post_generation_error = ""
-        competitor.save(
-            update_fields=[
-                "blog_post_generation_status",
-                "blog_post_generation_completed_at",
-                "blog_post_generation_error",
-            ]
-        )
-
+        user_id=competitor.project.profile_id if competitor.project else None,
+    ):
         logger.info(
-            "[Generate Competitor VS Blog Post] Generation completed",
+            "[Generate Competitor VS Blog Post] Starting generation",
             competitor_id=competitor.id,
             project_id=competitor.project_id,
-        )
-        return f"Successfully generated competitor blog post for competitor {competitor.id}"
-
-    except Exception as error:
-        error_message = str(error)
-        competitor.blog_post_generation_status = CompetitorPostGenerationStatus.FAILED
-        competitor.blog_post_generation_completed_at = timezone.now()
-        competitor.blog_post_generation_error = error_message[:1000]
-        competitor.save(
-            update_fields=[
-                "blog_post_generation_status",
-                "blog_post_generation_completed_at",
-                "blog_post_generation_error",
-            ]
+            profile_id=competitor.project.profile_id if competitor.project else None,
         )
 
-        logger.error(
-            "[Generate Competitor VS Blog Post] Generation failed",
-            competitor_id=competitor.id,
-            project_id=competitor.project_id,
-            error=error_message,
-            exc_info=True,
-        )
-        return f"Failed to generate competitor blog post for competitor {competitor.id}: {error_message}"
+        try:
+            competitor.generate_vs_blog_post()
+            competitor.blog_post_generation_status = CompetitorPostGenerationStatus.COMPLETED
+            competitor.blog_post_generation_completed_at = timezone.now()
+            competitor.blog_post_generation_error = ""
+            competitor.save(
+                update_fields=[
+                    "blog_post_generation_status",
+                    "blog_post_generation_completed_at",
+                    "blog_post_generation_error",
+                ]
+            )
+
+            logger.info(
+                "[Generate Competitor VS Blog Post] Generation completed",
+                competitor_id=competitor.id,
+                project_id=competitor.project_id,
+            )
+            return f"Successfully generated competitor blog post for competitor {competitor.id}"
+
+        except Exception as error:
+            error_message = str(error)
+            competitor.blog_post_generation_status = CompetitorPostGenerationStatus.FAILED
+            competitor.blog_post_generation_completed_at = timezone.now()
+            competitor.blog_post_generation_error = error_message[:1000]
+            competitor.save(
+                update_fields=[
+                    "blog_post_generation_status",
+                    "blog_post_generation_completed_at",
+                    "blog_post_generation_error",
+                ]
+            )
+
+            logger.error(
+                "[Generate Competitor VS Blog Post] Generation failed",
+                competitor_id=competitor.id,
+                project_id=competitor.project_id,
+                error=error_message,
+                exc_info=True,
+            )
+            return f"Failed to generate competitor blog post for competitor {competitor.id}: {error_message}"
 
 
 def generate_blog_post_content(suggestion_id: int, send_email: bool = True):
@@ -2070,245 +2076,256 @@ def generate_blog_post_content(suggestion_id: int, send_email: bool = True):
         )
         return f"Title suggestion {suggestion_id} not found"
 
-    logger.info(
-        "[Generate Blog Post Content] Starting content generation",
-        suggestion_id=suggestion_id,
+    with bind_log_context(
+        task_id=f"generate_blog_post_content:{suggestion_id}",
         project_id=suggestion.project.id,
-        project_name=suggestion.project.name,
-        suggestion_title=suggestion.title,
-        send_email=send_email,
-    )
+        user_id=suggestion.project.profile_id if suggestion.project else None,
+    ):
+        logger.info(
+            "[Generate Blog Post Content] Starting content generation",
+            suggestion_id=suggestion_id,
+            project_id=suggestion.project.id,
+            project_name=suggestion.project.name,
+            suggestion_title=suggestion.title,
+            send_email=send_email,
+        )
 
-    try:
-        blog_post = suggestion.generate_content(content_type=suggestion.content_type)
+        try:
+            blog_post = suggestion.generate_content(content_type=suggestion.content_type)
 
-        if not blog_post or not blog_post.content:
+            if not blog_post or not blog_post.content:
+                logger.error(
+                    "[Generate Blog Post Content] Failed to generate content",
+                    suggestion_id=suggestion_id,
+                    project_id=suggestion.project.id,
+                )
+                return f"Failed to generate content for suggestion {suggestion_id}"
+
+            logger.info(
+                "[Generate Blog Post Content] Content generated successfully",
+                suggestion_id=suggestion_id,
+                project_id=suggestion.project.id,
+                blog_post_id=blog_post.id,
+                content_length=len(blog_post.content),
+            )
+
+            # Send email notification if requested (i.e., manually triggered, not auto-posting)
+            if send_email:
+                async_task(
+                    "core.tasks.send_blog_post_ready_email",
+                    blog_post.id,
+                    group="Send Blog Post Ready Email",
+                )
+                logger.info(
+                    "[Generate Blog Post Content] Email notification queued",
+                    blog_post_id=blog_post.id,
+                    suggestion_id=suggestion_id,
+                )
+
+            return f"Successfully generated blog post {blog_post.id} for {suggestion.project.name}"
+
+        except ValueError as error:
             logger.error(
-                "[Generate Blog Post Content] Failed to generate content",
+                "[Generate Blog Post Content] Validation error",
+                error=str(error),
+                exc_info=True,
                 suggestion_id=suggestion_id,
                 project_id=suggestion.project.id,
             )
-            return f"Failed to generate content for suggestion {suggestion_id}"
-
-        logger.info(
-            "[Generate Blog Post Content] Content generated successfully",
-            suggestion_id=suggestion_id,
-            project_id=suggestion.project.id,
-            blog_post_id=blog_post.id,
-            content_length=len(blog_post.content),
-        )
-
-        # Send email notification if requested (i.e., manually triggered, not auto-posting)
-        if send_email:
-            async_task(
-                "core.tasks.send_blog_post_ready_email",
-                blog_post.id,
-                group="Send Blog Post Ready Email",
-            )
-            logger.info(
-                "[Generate Blog Post Content] Email notification queued",
-                blog_post_id=blog_post.id,
+            return f"Validation error: {str(error)}"
+        except Exception as error:
+            logger.error(
+                "[Generate Blog Post Content] Unexpected error",
+                error=str(error),
+                exc_info=True,
                 suggestion_id=suggestion_id,
+                project_id=suggestion.project.id if suggestion.project else None,
             )
-
-        return f"Successfully generated blog post {blog_post.id} for {suggestion.project.name}"
-
-    except ValueError as error:
-        logger.error(
-            "[Generate Blog Post Content] Validation error",
-            error=str(error),
-            exc_info=True,
-            suggestion_id=suggestion_id,
-            project_id=suggestion.project.id,
-        )
-        return f"Validation error: {str(error)}"
-    except Exception as error:
-        logger.error(
-            "[Generate Blog Post Content] Unexpected error",
-            error=str(error),
-            exc_info=True,
-            suggestion_id=suggestion_id,
-            project_id=suggestion.project.id if suggestion.project else None,
-        )
-        return f"Unexpected error: {str(error)}"
+            return f"Unexpected error: {str(error)}"
 
 
 def run_agent_execution_job(job_id: int):
-    try:
-        with transaction.atomic():
-            job = AgentExecutionJob.objects.select_for_update().select_related("project", "profile").get(
-                id=job_id
-            )
-
-            if job.status == ExecutionJobStatus.CANCELED:
-                logger.info("[Execution Job] Skipping canceled job", job_id=job.id)
-                return f"Job {job.id} canceled before start"
-
-            if job.status in {ExecutionJobStatus.SUCCEEDED, ExecutionJobStatus.FAILED}:
-                logger.info(
-                    "[Execution Job] Job already terminal",
-                    job_id=job.id,
-                    status=job.status,
-                )
-                return f"Job {job.id} already {job.status}"
-
-            job.status = ExecutionJobStatus.RUNNING
-            job.started_at = job.started_at or timezone.now()
-            job.error_code = ""
-            job.error_message = ""
-            running_result = append_job_history(
-                job.result,
-                event="JOB_STARTED",
-                status=ExecutionJobStatus.RUNNING,
-                details={"operation": job.operation},
-                at=job.started_at,
-            )
-            running_result.pop("failure", None)
-            job.result = running_result
-            job.save(
-                update_fields=[
-                    "status",
-                    "started_at",
-                    "error_code",
-                    "error_message",
-                    "result",
-                    "updated_at",
-                ]
-            )
-
-        if job.operation == ExecutionJobOperation.GENERATE_BLOG_POST:
-            title_suggestion_id = int(job.payload.get("title_suggestion_id"))
-            suggestion = BlogPostTitleSuggestion.objects.select_related("project", "project__profile").get(
-                id=title_suggestion_id,
-                project=job.project,
-            )
-
-            blog_post = suggestion.generate_content(content_type=suggestion.content_type)
-
+    with bind_log_context(task_id=f"run_agent_execution_job:{job_id}", job_id=job_id):
+        try:
             with transaction.atomic():
-                latest_job = AgentExecutionJob.objects.select_for_update().get(id=job.id)
-                if latest_job.status == ExecutionJobStatus.CANCELED:
-                    logger.warning(
-                        "[Execution Job] Job canceled while running",
-                        job_id=latest_job.id,
-                    )
-                    return f"Job {latest_job.id} canceled while running"
-
-                latest_job.status = ExecutionJobStatus.SUCCEEDED
-                latest_job.completed_at = timezone.now()
-                success_result = {
-                    "blog_post_id": blog_post.id,
-                    "title_suggestion_id": suggestion.id,
-                }
-                success_result = append_job_history(
-                    success_result,
-                    event="JOB_SUCCEEDED",
-                    status=ExecutionJobStatus.SUCCEEDED,
-                    details={"blog_post_id": blog_post.id, "title_suggestion_id": suggestion.id},
-                    at=latest_job.completed_at,
+                job = AgentExecutionJob.objects.select_for_update().select_related("project", "profile").get(
+                    id=job_id
                 )
-                success_result["rollback"] = {
-                    "supported": True,
-                    "state": "available",
-                    "hook": f"/public-api/executions/{latest_job.id}/rollback",
-                    "summary": "Reverts generated draft blog post for this execution when possible.",
-                }
-                latest_job.result = success_result
-                latest_job.save(update_fields=["status", "completed_at", "result", "updated_at"])
 
-            return f"Job {job.id} succeeded"
+                if job.status == ExecutionJobStatus.CANCELED:
+                    logger.info("[Execution Job] Skipping canceled job", job_id=job.id)
+                    return f"Job {job.id} canceled before start"
 
-        with transaction.atomic():
-            latest_job = AgentExecutionJob.objects.select_for_update().get(id=job.id)
-            latest_job.status = ExecutionJobStatus.FAILED
-            latest_job.completed_at = timezone.now()
-            latest_job.error_code = "UNSUPPORTED_OPERATION"
-            latest_job.error_message = f"Unsupported operation: {job.operation}"
-            failed_result = append_job_history(
-                latest_job.result,
+                if job.status in {ExecutionJobStatus.SUCCEEDED, ExecutionJobStatus.FAILED}:
+                    logger.info(
+                        "[Execution Job] Job already terminal",
+                        job_id=job.id,
+                        status=job.status,
+                    )
+                    return f"Job {job.id} already {job.status}"
+
+                job.status = ExecutionJobStatus.RUNNING
+                job.started_at = job.started_at or timezone.now()
+                job.error_code = ""
+                job.error_message = ""
+                running_result = append_job_history(
+                    job.result,
+                    event="JOB_STARTED",
+                    status=ExecutionJobStatus.RUNNING,
+                    details={"operation": job.operation},
+                    at=job.started_at,
+                )
+                running_result.pop("failure", None)
+                job.result = running_result
+                job.save(
+                    update_fields=[
+                        "status",
+                        "started_at",
+                        "error_code",
+                        "error_message",
+                        "result",
+                        "updated_at",
+                    ]
+                )
+
+            with bind_log_context(project_id=job.project_id, user_id=job.profile_id):
+                if job.operation == ExecutionJobOperation.GENERATE_BLOG_POST:
+                    title_suggestion_id = int(job.payload.get("title_suggestion_id"))
+                    suggestion = BlogPostTitleSuggestion.objects.select_related("project", "project__profile").get(
+                        id=title_suggestion_id,
+                        project=job.project,
+                    )
+
+                    blog_post = suggestion.generate_content(content_type=suggestion.content_type)
+
+                    with transaction.atomic():
+                        latest_job = AgentExecutionJob.objects.select_for_update().get(id=job.id)
+                        if latest_job.status == ExecutionJobStatus.CANCELED:
+                            logger.warning(
+                                "[Execution Job] Job canceled while running",
+                                job_id=latest_job.id,
+                            )
+                            return f"Job {latest_job.id} canceled while running"
+
+                        latest_job.status = ExecutionJobStatus.SUCCEEDED
+                        latest_job.completed_at = timezone.now()
+                        success_result = {
+                            "blog_post_id": blog_post.id,
+                            "title_suggestion_id": suggestion.id,
+                        }
+                        success_result = append_job_history(
+                            success_result,
+                            event="JOB_SUCCEEDED",
+                            status=ExecutionJobStatus.SUCCEEDED,
+                            details={"blog_post_id": blog_post.id, "title_suggestion_id": suggestion.id},
+                            at=latest_job.completed_at,
+                        )
+                        success_result["rollback"] = {
+                            "supported": True,
+                            "state": "available",
+                            "hook": f"/public-api/executions/{latest_job.id}/rollback",
+                            "summary": "Reverts generated draft blog post for this execution when possible.",
+                        }
+                        latest_job.result = success_result
+                        latest_job.save(update_fields=["status", "completed_at", "result", "updated_at"])
+
+                    return f"Job {job.id} succeeded"
+
+                with transaction.atomic():
+                    latest_job = AgentExecutionJob.objects.select_for_update().get(id=job.id)
+                    latest_job.status = ExecutionJobStatus.FAILED
+                    latest_job.completed_at = timezone.now()
+                    latest_job.error_code = "UNSUPPORTED_OPERATION"
+                    latest_job.error_message = f"Unsupported operation: {job.operation}"
+                    failed_result = append_job_history(
+                        latest_job.result,
+                        event="JOB_FAILED",
+                        status=ExecutionJobStatus.FAILED,
+                        details={"operation": job.operation},
+                        at=latest_job.completed_at,
+                    )
+                    failed_result["failure"] = build_failure_payload(
+                        latest_job.error_code,
+                        latest_job.error_message,
+                    )
+                    latest_job.result = failed_result
+                    latest_job.save(
+                        update_fields=[
+                            "status",
+                            "completed_at",
+                            "error_code",
+                            "error_message",
+                            "result",
+                            "updated_at",
+                        ]
+                    )
+
+                return f"Job {job.id} failed: unsupported operation"
+
+        except BlogPostTitleSuggestion.DoesNotExist:
+            job = AgentExecutionJob.objects.filter(id=job_id).first()
+            result = append_job_history(
+                job.result if job else {},
                 event="JOB_FAILED",
                 status=ExecutionJobStatus.FAILED,
-                details={"operation": job.operation},
-                at=latest_job.completed_at,
+                details={"reason": "title_suggestion_not_found"},
+                at=timezone.now(),
             )
-            failed_result["failure"] = build_failure_payload(
-                latest_job.error_code,
-                latest_job.error_message,
+            result["failure"] = build_failure_payload(
+                "TITLE_SUGGESTION_NOT_FOUND",
+                "Title suggestion not found for this project",
             )
-            latest_job.result = failed_result
-            latest_job.save(
-                update_fields=[
-                    "status",
-                    "completed_at",
-                    "error_code",
-                    "error_message",
-                    "result",
-                    "updated_at",
-                ]
+            AgentExecutionJob.objects.filter(id=job_id).update(
+                status=ExecutionJobStatus.FAILED,
+                completed_at=timezone.now(),
+                error_code="TITLE_SUGGESTION_NOT_FOUND",
+                error_message="Title suggestion not found for this project",
+                result=result,
             )
+            return f"Job {job_id} failed: title suggestion missing"
+        except Exception as error:
+            error_message = str(error)[:2000]
+            job = AgentExecutionJob.objects.filter(id=job_id).first()
+            result = append_job_history(
+                job.result if job else {},
+                event="JOB_FAILED",
+                status=ExecutionJobStatus.FAILED,
+                details={"reason": "unexpected_error"},
+                at=timezone.now(),
+            )
+            result["failure"] = build_failure_payload("EXECUTION_FAILED", error_message)
 
-        return f"Job {job.id} failed: unsupported operation"
-
-    except BlogPostTitleSuggestion.DoesNotExist:
-        job = AgentExecutionJob.objects.filter(id=job_id).first()
-        result = append_job_history(
-            job.result if job else {},
-            event="JOB_FAILED",
-            status=ExecutionJobStatus.FAILED,
-            details={"reason": "title_suggestion_not_found"},
-            at=timezone.now(),
-        )
-        result["failure"] = build_failure_payload(
-            "TITLE_SUGGESTION_NOT_FOUND",
-            "Title suggestion not found for this project",
-        )
-        AgentExecutionJob.objects.filter(id=job_id).update(
-            status=ExecutionJobStatus.FAILED,
-            completed_at=timezone.now(),
-            error_code="TITLE_SUGGESTION_NOT_FOUND",
-            error_message="Title suggestion not found for this project",
-            result=result,
-        )
-        return f"Job {job_id} failed: title suggestion missing"
-    except Exception as error:
-        error_message = str(error)[:2000]
-        job = AgentExecutionJob.objects.filter(id=job_id).first()
-        result = append_job_history(
-            job.result if job else {},
-            event="JOB_FAILED",
-            status=ExecutionJobStatus.FAILED,
-            details={"reason": "unexpected_error"},
-            at=timezone.now(),
-        )
-        result["failure"] = build_failure_payload("EXECUTION_FAILED", error_message)
-
-        AgentExecutionJob.objects.filter(id=job_id).update(
-            status=ExecutionJobStatus.FAILED,
-            completed_at=timezone.now(),
-            error_code="EXECUTION_FAILED",
-            error_message=error_message,
-            result=result,
-        )
-        logger.error(
-            "[Execution Job] Failed",
-            job_id=job_id,
-            error=str(error),
-            exc_info=True,
-        )
-        return f"Job {job_id} failed: {str(error)}"
+            AgentExecutionJob.objects.filter(id=job_id).update(
+                status=ExecutionJobStatus.FAILED,
+                completed_at=timezone.now(),
+                error_code="EXECUTION_FAILED",
+                error_message=error_message,
+                result=result,
+            )
+            logger.error(
+                "[Execution Job] Failed",
+                job_id=job_id,
+                error=str(error),
+                exc_info=True,
+            )
+            return f"Job {job_id} failed: {str(error)}"
 
 
 def sync_project_integration_analytics(project_id: int, provider: str):
     """Sync one project's connected analytics provider with incremental cursor semantics."""
-    result = sync_project_provider_analytics(project_id=project_id, provider=provider)
-
-    logger.info(
-        "[AnalyticsSyncTask] Provider sync finished",
+    with bind_log_context(
+        task_id=f"sync_project_integration_analytics:{provider}:{project_id}",
         project_id=project_id,
-        provider=provider,
-        result_status=result.get("status"),
-        rows_fetched=result.get("rows_fetched"),
-        rows_upserted=result.get("rows_upserted"),
-    )
+    ):
+        result = sync_project_provider_analytics(project_id=project_id, provider=provider)
 
-    return result
+        logger.info(
+            "[AnalyticsSyncTask] Provider sync finished",
+            project_id=project_id,
+            provider=provider,
+            result_status=result.get("status"),
+            rows_fetched=result.get("rows_fetched"),
+            rows_upserted=result.get("rows_upserted"),
+        )
+
+        return result
