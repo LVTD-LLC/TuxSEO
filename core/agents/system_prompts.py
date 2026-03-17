@@ -106,7 +106,7 @@ def add_project_pages(ctx: RunContext) -> str:
                 instruction += f"""
               EXTERNAL AUTHORITY LINKING RULES:
               - Prefer external links only when they directly support a specific claim or statistic.
-              - Keep external links readable and sparse (target 1-{max_external_links} total external links).
+              - Keep external links readable and sparse (up to {max_external_links} external links total).
               - Never force an external link just to hit a quota; skip if relevance is weak.
                 """
 

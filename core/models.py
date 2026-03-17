@@ -836,12 +836,20 @@ class BlogPostTitleSuggestion(BaseModel):
 
         # Fallback to internal relevance retrieval when Exa is unavailable or sparse.
         if len(authority_links) < target_links:
-            fallback_pages = get_relevant_external_pages_for_blog_post(
-                meta_description=self.suggested_meta_description,
-                exclude_project=self.project,
-                max_pages=target_links,
-            )
             existing_urls = {link["url"] for link in authority_links}
+            try:
+                fallback_pages = get_relevant_external_pages_for_blog_post(
+                    meta_description=self.suggested_meta_description,
+                    exclude_project=self.project,
+                    max_pages=target_links,
+                )
+            except Exception as error:
+                logger.warning(
+                    "[ExternalAuthorityLinks] Fallback retrieval failed",
+                    title_suggestion_id=self.id,
+                    error=str(error),
+                )
+                fallback_pages = []
 
             for page in fallback_pages:
                 if page.url in existing_urls:

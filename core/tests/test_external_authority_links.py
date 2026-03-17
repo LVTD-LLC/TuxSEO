@@ -54,6 +54,33 @@ def test_get_external_authority_link_candidates_relevance_and_domain_filters(mon
     assert links[0]["url"].startswith("https://developers.google.com/")
 
 
+def test_get_external_authority_link_candidates_blocks_port_variants(monkeypatch, settings):
+    settings.EXA_API_KEY = "test-key"
+
+    def _fake_post(*_args, **_kwargs):
+        return _FakeResponse(
+            {
+                "results": [
+                    {
+                        "url": "https://reddit.com:8080/r/seo/comments/abc",
+                        "title": "SEO thread",
+                        "highlights": ["Technical SEO indexing best practices"],
+                        "score": 0.97,
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr("core.utils.requests.post", _fake_post)
+
+    links = get_external_authority_link_candidates(
+        meta_description="Technical SEO checklist and search indexing best practices",
+        max_links=2,
+    )
+
+    assert links == []
+
+
 def test_blog_post_generation_context_includes_external_authority_links(monkeypatch):
     suggestion = BlogPostTitleSuggestion(
         title="How to improve technical SEO",
@@ -108,3 +135,23 @@ def test_blog_post_generation_context_includes_external_authority_links(monkeypa
     assert len(context.project_pages) == 2
     assert [page.link_source for page in context.project_pages] == ["internal", "external"]
     assert context.project_pages[1].url == "https://developers.google.com/search/docs/fundamentals/seo-starter-guide"
+
+
+def test_external_authority_link_fallback_errors_are_non_fatal(monkeypatch):
+    suggestion = BlogPostTitleSuggestion(
+        title="How to improve technical SEO",
+        category="GENERAL_AUDIENCE",
+        description="A practical guide",
+        suggested_meta_description="Technical SEO improvements for indexing and rankings",
+    )
+    suggestion._state.fields_cache["project"] = SimpleNamespace(project_details={})
+
+    monkeypatch.setattr("core.models.get_external_authority_link_candidates", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        "core.models.get_relevant_external_pages_for_blog_post",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("db down")),
+    )
+
+    links = suggestion.get_external_authority_links(max_links=2)
+
+    assert links == []

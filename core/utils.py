@@ -722,7 +722,7 @@ def get_external_authority_link_candidates(meta_description: str, max_links: int
         if parsed_url.scheme not in {"http", "https"}:
             continue
 
-        domain = (parsed_url.netloc or "").lower()
+        domain = (parsed_url.hostname or "").lower()
         if not _is_likely_authority_domain(domain):
             continue
 
