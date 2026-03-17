@@ -31,6 +31,7 @@ def _validate_event_taxonomy(taxonomy: dict) -> None:
             )
         stage = event_definition.get("stage")
         description = event_definition.get("description")
+        required_properties = event_definition.get("required_properties", [])
         if not isinstance(stage, str) or not stage.strip():
             raise ValueError(
                 f"Invalid analytics event taxonomy: event `{event_name}` missing stage"
@@ -39,6 +40,15 @@ def _validate_event_taxonomy(taxonomy: dict) -> None:
             raise ValueError(
                 f"Invalid analytics event taxonomy: event `{event_name}` missing description"
             )
+        if not isinstance(required_properties, list):
+            raise ValueError(
+                f"Invalid analytics event taxonomy: event `{event_name}` required_properties must be a list"
+            )
+        for property_name in required_properties:
+            if not isinstance(property_name, str) or not property_name.strip():
+                raise ValueError(
+                    f"Invalid analytics event taxonomy: event `{event_name}` has invalid required property name"
+                )
 
     deprecated_aliases = taxonomy.get("deprecated_aliases", {})
     if not isinstance(deprecated_aliases, dict):

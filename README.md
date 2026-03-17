@@ -155,6 +155,15 @@ Quick setup:
 
 See `docs/posthog-logs.md` for full configuration and field-level behavior.
 
+### Product analytics event taxonomy (PostHog)
+
+TuxSEO maintains a canonical event taxonomy and coverage matrix for funnel-safe product analytics:
+
+- `docs/event-taxonomy.md`
+- `docs/posthog-event-coverage-matrix.md`
+
+`core/analytics/event_taxonomy.json` is the source of truth for canonical event names + required properties.
+
 ### Analytics ingestion jobs (GA4, GSC, Plausible)
 
 TuxSEO now ships background ingestion for connected analytics providers:

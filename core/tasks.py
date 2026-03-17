@@ -11,6 +11,7 @@ from django.utils import timezone
 from django_q.tasks import async_task
 
 from core.analytics import (
+    ANALYTICS_EVENTS,
     EVENT_TAXONOMY_VERSION,
     get_event_definition,
     is_known_event_name,
@@ -798,6 +799,7 @@ def track_event(
     profile_id: int, event_name: str, properties: dict, source_function: str = None
 ) -> str:
     canonical_event_name = normalize_event_name(event_name)
+    properties = properties or {}
 
     base_log_data = {
         "profile_id": profile_id,
@@ -825,6 +827,26 @@ def track_event(
         logger.warning("[TrackEvent] Missing event definition", **base_log_data)
         return f"Missing event definition for event: {canonical_event_name}"
 
+    required_properties = event_definition.get("required_properties", [])
+    missing_properties = [
+        property_name
+        for property_name in required_properties
+        if property_name not in properties or properties[property_name] in (None, "")
+    ]
+    if missing_properties:
+        logger.warning(
+            "[TrackEvent] Missing required event properties",
+            missing_properties=missing_properties,
+            **base_log_data,
+        )
+        return (
+            f"Missing required properties for {canonical_event_name}: "
+            + ", ".join(missing_properties)
+        )
+
+    profile_product = getattr(profile, "product", None)
+    profile_plan = profile_product.name if profile_product else "free"
+
     if settings.POSTHOG_API_KEY:
         posthog.capture(
             profile.user.email,
@@ -833,6 +855,9 @@ def track_event(
                 "profile_id": profile.id,
                 "email": profile.user.email,
                 "current_state": profile.state,
+                "plan": profile_plan,
+                "actor_id_type": "profile_id",
+                "actor_id": str(profile.id),
                 "event_schema_version": EVENT_TAXONOMY_VERSION,
                 "event_stage": event_definition["stage"],
                 **properties,
@@ -2099,6 +2124,20 @@ def generate_blog_post_content(suggestion_id: int, send_email: bool = True):
                     suggestion_id=suggestion_id,
                     project_id=suggestion.project.id,
                 )
+                async_task(
+                    "core.tasks.track_event",
+                    profile_id=suggestion.project.profile_id,
+                    event_name=ANALYTICS_EVENTS.CONTENT_GENERATION_FAILED,
+                    properties={
+                        "project_id": suggestion.project.id,
+                        "title_suggestion_id": suggestion.id,
+                        "content_type": suggestion.content_type,
+                        "result_status": "failed",
+                        "failure_reason": "empty_generation_result",
+                    },
+                    source_function="tasks.generate_blog_post_content",
+                    group="Track Event",
+                )
                 return f"Failed to generate content for suggestion {suggestion_id}"
 
             logger.info(
@@ -2107,6 +2146,21 @@ def generate_blog_post_content(suggestion_id: int, send_email: bool = True):
                 project_id=suggestion.project.id,
                 blog_post_id=blog_post.id,
                 content_length=len(blog_post.content),
+            )
+
+            async_task(
+                "core.tasks.track_event",
+                profile_id=suggestion.project.profile_id,
+                event_name=ANALYTICS_EVENTS.CONTENT_GENERATION_SUCCEEDED,
+                properties={
+                    "project_id": suggestion.project.id,
+                    "title_suggestion_id": suggestion.id,
+                    "blog_post_id": blog_post.id,
+                    "content_type": suggestion.content_type,
+                    "result_status": "succeeded",
+                },
+                source_function="tasks.generate_blog_post_content",
+                group="Track Event",
             )
 
             # Send email notification if requested (i.e., manually triggered, not auto-posting)
@@ -2132,6 +2186,20 @@ def generate_blog_post_content(suggestion_id: int, send_email: bool = True):
                 suggestion_id=suggestion_id,
                 project_id=suggestion.project.id,
             )
+            async_task(
+                "core.tasks.track_event",
+                profile_id=suggestion.project.profile_id,
+                event_name=ANALYTICS_EVENTS.CONTENT_GENERATION_FAILED,
+                properties={
+                    "project_id": suggestion.project.id,
+                    "title_suggestion_id": suggestion.id,
+                    "content_type": suggestion.content_type,
+                    "result_status": "failed",
+                    "failure_reason": "validation_error",
+                },
+                source_function="tasks.generate_blog_post_content",
+                group="Track Event",
+            )
             return f"Validation error: {str(error)}"
         except Exception as error:
             logger.error(
@@ -2140,6 +2208,20 @@ def generate_blog_post_content(suggestion_id: int, send_email: bool = True):
                 exc_info=True,
                 suggestion_id=suggestion_id,
                 project_id=suggestion.project.id if suggestion.project else None,
+            )
+            async_task(
+                "core.tasks.track_event",
+                profile_id=suggestion.project.profile_id,
+                event_name=ANALYTICS_EVENTS.CONTENT_GENERATION_FAILED,
+                properties={
+                    "project_id": suggestion.project.id,
+                    "title_suggestion_id": suggestion.id,
+                    "content_type": suggestion.content_type,
+                    "result_status": "failed",
+                    "failure_reason": "unexpected_exception",
+                },
+                source_function="tasks.generate_blog_post_content",
+                group="Track Event",
             )
             return f"Unexpected error: {str(error)}"
 

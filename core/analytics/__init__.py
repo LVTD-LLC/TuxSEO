@@ -8,6 +8,7 @@ from core.analytics.events import (
     is_known_event_name,
     normalize_event_name,
 )
+from core.analytics.tracking import enqueue_track_event
 
 __all__ = [
     "ANALYTICS_EVENTS",
@@ -18,4 +19,5 @@ __all__ = [
     "normalize_event_name",
     "is_known_event_name",
     "get_event_definition",
+    "enqueue_track_event",
 ]

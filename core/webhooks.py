@@ -129,6 +129,19 @@ def handle_updated_subscription(**kwargs):
                 product_id=product_id,
             )
 
+            async_task(
+                "core.tasks.track_event",
+                profile_id=profile.id,
+                event_name=ANALYTICS_EVENTS.PLAN_UPGRADED,
+                properties={
+                    "plan": product.name,
+                    "subscription_id": subscription_id,
+                    "result_status": "succeeded",
+                },
+                source_function="webhooks.handle_updated_subscription",
+                group="Track Event",
+            )
+
         elif is_cancellation:
             profile.save(update_fields=["subscription", "updated_at"])
 
@@ -148,6 +161,20 @@ def handle_updated_subscription(**kwargs):
                 "[SubscriptionUpdated] Cancellation processed",
                 profile_id=profile.id,
                 cancel_at=event_data.get("cancel_at"),
+            )
+
+            plan_name = profile.product.name if profile.product else "free"
+            async_task(
+                "core.tasks.track_event",
+                profile_id=profile.id,
+                event_name=ANALYTICS_EVENTS.PLAN_CANCELLED,
+                properties={
+                    "plan": plan_name,
+                    "subscription_id": subscription_id,
+                    "result_status": "succeeded",
+                },
+                source_function="webhooks.handle_updated_subscription",
+                group="Track Event",
             )
 
         else:

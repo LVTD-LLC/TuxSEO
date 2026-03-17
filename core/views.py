@@ -1479,6 +1479,19 @@ class ProjectIntegrationsView(LoginRequiredMixin, DetailView):
         integration.external_account_email = ""
         integration.save()
 
+        async_task(
+            "core.tasks.track_event",
+            profile_id=self.object.profile_id,
+            event_name=ANALYTICS_EVENTS.INTEGRATION_DISCONNECTED,
+            properties={
+                "project_id": self.object.id,
+                "provider": provider,
+                "result_status": "succeeded",
+            },
+            source_function="ProjectIntegrationsView._disconnect_google_integration",
+            group="Track Event",
+        )
+
     def _connect_plausible(self, cleaned_data):
         base_url = cleaned_data["base_url"]
         site_id = cleaned_data["site_id"]
@@ -1512,6 +1525,19 @@ class ProjectIntegrationsView(LoginRequiredMixin, DetailView):
         integration.plausible_site_id = site_id
         integration.plausible_base_url = base_url
         integration.save()
+
+        async_task(
+            "core.tasks.track_event",
+            profile_id=self.object.profile_id,
+            event_name=ANALYTICS_EVENTS.INTEGRATION_CONNECTED,
+            properties={
+                "project_id": self.object.id,
+                "provider": ProjectIntegration.Provider.PLAUSIBLE,
+                "result_status": "succeeded",
+            },
+            source_function="ProjectIntegrationsView._connect_plausible",
+            group="Track Event",
+        )
         return True
 
     def _disconnect_plausible(self):
@@ -1525,6 +1551,19 @@ class ProjectIntegrationsView(LoginRequiredMixin, DetailView):
         integration.plausible_site_id = ""
         integration.plausible_base_url = "https://plausible.io"
         integration.save()
+
+        async_task(
+            "core.tasks.track_event",
+            profile_id=self.object.profile_id,
+            event_name=ANALYTICS_EVENTS.INTEGRATION_DISCONNECTED,
+            properties={
+                "project_id": self.object.id,
+                "provider": ProjectIntegration.Provider.PLAUSIBLE,
+                "result_status": "succeeded",
+            },
+            source_function="ProjectIntegrationsView._disconnect_plausible",
+            group="Track Event",
+        )
 
 
 class ProjectIntegrationsGoogleCallbackView(LoginRequiredMixin, View):
@@ -1628,6 +1667,19 @@ class ProjectIntegrationsGoogleCallbackView(LoginRequiredMixin, View):
             integration.token_expires_at = timezone.now() + timedelta(seconds=int(expires_in))
 
         integration.save()
+
+        async_task(
+            "core.tasks.track_event",
+            profile_id=project.profile_id,
+            event_name=ANALYTICS_EVENTS.INTEGRATION_CONNECTED,
+            properties={
+                "project_id": project.id,
+                "provider": provider,
+                "result_status": "succeeded",
+            },
+            source_function="ProjectIntegrationsGoogleCallbackView._save_google_integration",
+            group="Track Event",
+        )
 
 
 class ProjectSettingsView(LoginRequiredMixin, DetailView):
