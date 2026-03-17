@@ -1,5 +1,7 @@
 import asyncio
+import re
 import secrets
+from urllib.parse import urlparse
 from urllib.request import urlopen
 
 import requests
@@ -13,6 +15,8 @@ from tuxseo.utils import get_tuxseo_logger
 
 logger = get_tuxseo_logger(__name__)
 
+_AUTHORITY_MIN_SCORE = 0.15
+_AUTHORITY_MIN_OVERLAP_RATIO = 0.12
 
 class DivErrorList(ErrorList):
     def __str__(self):
@@ -597,6 +601,164 @@ def get_relevant_pages_for_blog_post(project, meta_description: str, max_pages: 
     )
 
     return relevant_pages
+
+
+def _is_likely_authority_domain(domain: str) -> bool:
+    domain = (domain or "").lower()
+    if not domain:
+        return False
+
+    blocked_suffixes = (
+        "reddit.com",
+        "quora.com",
+        "pinterest.com",
+        "medium.com",
+        "substack.com",
+        "youtube.com",
+        "youtu.be",
+        "facebook.com",
+        "instagram.com",
+        "tiktok.com",
+        "x.com",
+        "twitter.com",
+    )
+
+    return not any(domain == suffix or domain.endswith(f".{suffix}") for suffix in blocked_suffixes)
+
+
+def _tokenize_relevance_text(value: str) -> set[str]:
+    stopwords = {
+        "about",
+        "after",
+        "also",
+        "because",
+        "from",
+        "have",
+        "into",
+        "more",
+        "that",
+        "their",
+        "them",
+        "they",
+        "this",
+        "what",
+        "when",
+        "where",
+        "with",
+        "your",
+    }
+    tokens = re.findall(r"[a-z0-9]{4,}", (value or "").lower())
+    return {token for token in tokens if token not in stopwords}
+
+
+def _passes_authority_relevance_gate(*, query: str, title: str, text_snippet: str, score) -> bool:
+    query_tokens = _tokenize_relevance_text(query)
+    if not query_tokens:
+        return False
+
+    candidate_tokens = _tokenize_relevance_text(f"{title} {text_snippet}")
+    overlap_ratio = len(query_tokens.intersection(candidate_tokens)) / max(len(query_tokens), 1)
+
+    parsed_score = None
+    if score is not None:
+        try:
+            parsed_score = float(score)
+        except (TypeError, ValueError):
+            parsed_score = None
+
+    if parsed_score is not None and parsed_score < _AUTHORITY_MIN_SCORE:
+        return False
+
+    return overlap_ratio >= _AUTHORITY_MIN_OVERLAP_RATIO
+
+
+def get_external_authority_link_candidates(meta_description: str, max_links: int = 2):
+    """Fetch relevance-gated external authority links for generation planning.
+
+    `max_links` is defensively clamped here as this helper may be called outside
+    generation context with unsanitized input.
+    """
+    max_links = max(1, min(3, int(max_links or 1)))
+
+    if not meta_description or not meta_description.strip():
+        return []
+
+    exa_api_key = (getattr(settings, "EXA_API_KEY", "") or "").strip()
+    if not exa_api_key:
+        return []
+
+    try:
+        response = requests.post(
+            "https://api.exa.ai/search",
+            headers={
+                "x-api-key": exa_api_key,
+                "Content-Type": "application/json",
+            },
+            json={
+                "query": meta_description,
+                "type": "auto",
+                "num_results": max(8, max_links * 4),
+                "contents": {
+                    "highlights": {
+                        "numSentences": 2,
+                    }
+                },
+            },
+            timeout=20,
+        )
+        response.raise_for_status()
+    except requests.RequestException as error:
+        logger.warning(
+            "[ExternalAuthorityLinks] Exa lookup failed",
+            error=str(error),
+            exc_info=True,
+            max_links=max_links,
+        )
+        return []
+
+    results = response.json().get("results", [])
+    selected_links = []
+    seen_urls = set()
+
+    for item in results:
+        url = (item.get("url") or "").strip()
+        if not url or url in seen_urls:
+            continue
+
+        parsed_url = urlparse(url)
+        if parsed_url.scheme not in {"http", "https"}:
+            continue
+
+        domain = (parsed_url.hostname or "").lower()
+        if not _is_likely_authority_domain(domain):
+            continue
+
+        title = (item.get("title") or "").strip()
+        highlights = item.get("highlights") or []
+        text_snippet = " ".join(highlights) if isinstance(highlights, list) else str(highlights)
+        if not _passes_authority_relevance_gate(
+            query=meta_description,
+            title=title,
+            text_snippet=text_snippet,
+            score=item.get("score"),
+        ):
+            continue
+
+        selected_links.append(
+            {
+                "url": url,
+                "title": title or domain,
+                "description": text_snippet[:280],
+                "summary": text_snippet[:400],
+                "link_source": "external",
+            }
+        )
+        seen_urls.add(url)
+
+        if len(selected_links) >= max_links:
+            break
+
+    return selected_links
 
 
 def get_relevant_external_pages_for_blog_post(

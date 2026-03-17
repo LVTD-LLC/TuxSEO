@@ -63,6 +63,7 @@ from core.choices import (
 from core.utils import (
     generate_random_key,
     get_jina_embedding,
+    get_external_authority_link_candidates,
     get_markdown_content,
     get_og_image_prompt,
     get_relevant_external_pages_for_blog_post,
@@ -822,8 +823,56 @@ class BlogPostTitleSuggestion(BaseModel):
 
         return keywords_to_use
 
+    def get_external_authority_links(self, max_links: int | None = None):
+        target_links = max_links or getattr(settings, "EXTERNAL_AUTHORITY_LINK_TARGET", 2)
+        target_links = max(1, min(3, int(target_links)))
+        if not self.suggested_meta_description:
+            return []
+
+        authority_links = get_external_authority_link_candidates(
+            meta_description=self.suggested_meta_description,
+            max_links=target_links,
+        )
+
+        # Fallback to internal relevance retrieval when Exa is unavailable or sparse.
+        if len(authority_links) < target_links:
+            existing_urls = {link["url"] for link in authority_links}
+            try:
+                fallback_pages = get_relevant_external_pages_for_blog_post(
+                    meta_description=self.suggested_meta_description,
+                    exclude_project=self.project,
+                    max_pages=target_links,
+                )
+            except Exception as error:
+                logger.warning(
+                    "[ExternalAuthorityLinks] Fallback retrieval failed",
+                    title_suggestion_id=self.id,
+                    error=str(error),
+                )
+                fallback_pages = []
+
+            for page in fallback_pages:
+                if page.url in existing_urls:
+                    continue
+                authority_links.append(
+                    {
+                        "url": page.url,
+                        "title": page.title,
+                        "description": page.description,
+                        "summary": page.summary,
+                        "link_source": "external",
+                    }
+                )
+                existing_urls.add(page.url)
+                if len(authority_links) >= target_links:
+                    break
+
+        return authority_links[:target_links]
+
     def get_blog_post_generation_context(self, content_type=ContentType.SHARING):
         internal_project_pages = self.get_internal_links()
+        external_authority_links = self.get_external_authority_links()
+
         project_page_contexts = [
             ProjectPageContext(
                 url=page.url,
@@ -831,9 +880,25 @@ class BlogPostTitleSuggestion(BaseModel):
                 description=page.description,
                 summary=page.summary,
                 always_use=page.always_use,
+                link_source="internal",
             )
             for page in internal_project_pages
         ]
+
+        existing_urls = {page_context.url for page_context in project_page_contexts}
+        for link in external_authority_links:
+            if link["url"] in existing_urls:
+                continue
+            project_page_contexts.append(
+                ProjectPageContext(
+                    url=link["url"],
+                    title=link["title"],
+                    description=link["description"],
+                    summary=link["summary"],
+                    always_use=False,
+                    link_source="external",
+                )
+            )
 
         return BlogPostGenerationContext(
             project_details=self.project.project_details,
