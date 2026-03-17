@@ -1,12 +1,16 @@
 import json
 import random
 import re
+import time
+import xml.etree.ElementTree as ET
 from urllib.parse import unquote, urlencode, urljoin, urlparse
 
 import posthog
 import requests
 from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from django_q.tasks import async_task
 
@@ -24,6 +28,7 @@ from core.choices import (
     EmailType,
     ExecutionJobOperation,
     ExecutionJobStatus,
+    ProfileStates,
     ProjectPageSource,
 )
 from core.execution_reliability import append_job_history, build_failure_payload
@@ -51,6 +56,7 @@ SITEMAP_PATH_CANDIDATES = (
     "/sitemaps.xml",
     "/wp-sitemap.xml",
 )
+
 
 
 def _extract_sitemap_urls_from_robots(robots_txt: str, base_url: str) -> list[str]:
@@ -1290,122 +1296,349 @@ def get_and_save_pasf_keywords(
     PASF keywords saved: {stats["pasf_saved"]}"""
 
 
-def parse_sitemap_and_save_urls(project_id: int):
-    """
-    Parse the project's sitemap and save all URLs as ProjectPage records with SITEMAP source.
-    This task is called immediately when a user adds a sitemap URL.
-    """
+def _is_valid_sitemap_url(sitemap_url: str) -> bool:
+    if not sitemap_url or not isinstance(sitemap_url, str):
+        return False
+
+    parsed = urlparse(sitemap_url.strip())
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _fetch_sitemap_response(url: str) -> requests.Response:
+    timeout = settings.SITEMAP_SYNC_TIMEOUT_SECONDS
+    max_retries = settings.SITEMAP_SYNC_MAX_RETRIES
+    backoff_seconds = settings.SITEMAP_SYNC_RETRY_BACKOFF_SECONDS
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = requests.get(url, timeout=timeout)
+            if response.status_code >= 500:
+                raise requests.HTTPError(f"HTTP {response.status_code}", response=response)
+            return response
+        except (requests.Timeout, requests.ConnectionError, requests.HTTPError) as error:
+            if attempt >= max_retries:
+                raise
+
+            sleep_for = backoff_seconds * (2 ** (attempt - 1))
+            logger.warning(
+                "[Sitemap Sync] Retrying sitemap fetch",
+                url=url,
+                attempt=attempt,
+                max_retries=max_retries,
+                sleep_for_seconds=sleep_for,
+                error=str(error),
+            )
+            time.sleep(sleep_for)
+
+    raise RuntimeError("Unreachable sitemap retry loop")
+
+
+def _extract_sitemap_urls(xml_content: bytes, source_url: str) -> tuple[list[str], list[str]]:
+    namespace = {"ns": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+    root = ET.fromstring(xml_content)
+
+    url_locs = [
+        loc.text.strip() for loc in root.findall(".//ns:url/ns:loc", namespace) if loc.text and loc.text.strip()
+    ]
+
+    sitemap_locs = [
+        loc.text.strip()
+        for loc in root.findall(".//ns:sitemap/ns:loc", namespace)
+        if loc.text and loc.text.strip()
+    ]
+
+    if not url_locs and not sitemap_locs:
+        url_locs = [
+            loc.text.strip()
+            for loc in root.findall(".//{*}url/{*}loc")
+            if loc.text and loc.text.strip()
+        ]
+        sitemap_locs = [
+            loc.text.strip()
+            for loc in root.findall(".//{*}sitemap/{*}loc")
+            if loc.text and loc.text.strip()
+        ]
+
+    def _normalize_candidate_url(candidate_url: str) -> str:
+        parsed = urlparse(candidate_url)
+        if parsed.scheme or parsed.netloc:
+            return candidate_url
+        return urljoin(source_url, candidate_url)
+
+    normalized_url_locs = [_normalize_candidate_url(candidate_url) for candidate_url in url_locs]
+    normalized_sitemap_locs = [
+        _normalize_candidate_url(candidate_url) for candidate_url in sitemap_locs
+    ]
+
+    return normalized_url_locs, normalized_sitemap_locs
+
+
+def _collect_urls_from_sitemap(sitemap_url: str) -> tuple[set[str], int]:
+    discovered_urls: set[str] = set()
+    failed_children = 0
+
+    queue: list[tuple[str, int]] = [(sitemap_url, 0)]
+    visited: set[str] = set()
+
+    while queue:
+        current_url, depth = queue.pop(0)
+
+        if current_url in visited:
+            continue
+        visited.add(current_url)
+
+        if depth > settings.SITEMAP_SYNC_MAX_INDEX_DEPTH:
+            logger.warning(
+                "[Sitemap Sync] Maximum sitemap index depth reached",
+                sitemap_url=current_url,
+                max_depth=settings.SITEMAP_SYNC_MAX_INDEX_DEPTH,
+            )
+            continue
+
+        try:
+            response = _fetch_sitemap_response(current_url)
+            if not response.ok:
+                failed_children += 1
+                logger.warning(
+                    "[Sitemap Sync] Non-200 sitemap response",
+                    sitemap_url=current_url,
+                    status_code=response.status_code,
+                )
+                continue
+
+            urls, child_sitemaps = _extract_sitemap_urls(response.content, current_url)
+        except (requests.RequestException, ET.ParseError) as error:
+            failed_children += 1
+            logger.warning(
+                "[Sitemap Sync] Failed to process child sitemap",
+                sitemap_url=current_url,
+                error=str(error),
+            )
+            continue
+
+        discovered_urls.update(urls)
+
+        for child_sitemap_url in child_sitemaps[: settings.SITEMAP_SYNC_MAX_CHILD_SITEMAPS]:
+            if child_sitemap_url not in visited:
+                queue.append((child_sitemap_url, depth + 1))
+
+        if len(child_sitemaps) > settings.SITEMAP_SYNC_MAX_CHILD_SITEMAPS:
+            logger.warning(
+                "[Sitemap Sync] Child sitemap limit reached; truncating",
+                sitemap_url=current_url,
+                child_sitemap_count=len(child_sitemaps),
+                limit=settings.SITEMAP_SYNC_MAX_CHILD_SITEMAPS,
+            )
+
+    return discovered_urls, failed_children
+
+
+def _sync_project_sitemap(project: Project) -> dict:
+    if not _is_valid_sitemap_url(project.sitemap_url):
+        return {
+            "project_id": project.id,
+            "project_name": project.name,
+            "status": "skipped",
+            "reason": "invalid_sitemap_url",
+        }
+
+    run_started_at = timezone.now()
+    discovered_urls, failed_children = _collect_urls_from_sitemap(project.sitemap_url)
+
+    with transaction.atomic():
+        existing_urls = set(
+            ProjectPage.objects.filter(project=project, url__in=discovered_urls).values_list("url", flat=True)
+        )
+
+        new_urls = discovered_urls - existing_urls
+        created_count = len(new_urls)
+
+        if new_urls:
+            ProjectPage.objects.bulk_create(
+                [
+                    ProjectPage(
+                        project=project,
+                        url=url,
+                        source=ProjectPageSource.SITEMAP,
+                        sitemap_is_stale=False,
+                        sitemap_last_seen_at=run_started_at,
+                    )
+                    for url in new_urls
+                ],
+                ignore_conflicts=True,
+            )
+
+        updated_count = ProjectPage.objects.filter(
+            project=project,
+            source=ProjectPageSource.SITEMAP,
+            url__in=discovered_urls,
+        ).update(sitemap_is_stale=False, sitemap_last_seen_at=run_started_at)
+
+        stale_count = ProjectPage.objects.filter(
+            project=project,
+            source=ProjectPageSource.SITEMAP,
+            sitemap_is_stale=False,
+        ).filter(
+            Q(sitemap_last_seen_at__lt=run_started_at) | Q(sitemap_last_seen_at__isnull=True)
+        ).update(sitemap_is_stale=True)
+
+    async_task(
+        "core.tasks.analyze_sitemap_pages",
+        project.id,
+        group="Analyze Sitemap Pages",
+    )
+
+    return {
+        "project_id": project.id,
+        "project_name": project.name,
+        "status": "success",
+        "discovered": len(discovered_urls),
+        "added": created_count,
+        "updated": updated_count,
+        "stale": stale_count,
+        "failed": failed_children,
+    }
+
+
+def parse_sitemap_and_save_urls(project_id: int, return_summary: bool = False):
+    """Parse and sync one project's sitemap URLs into ProjectPage records."""
+    result = {
+        "status": "failed",
+        "message": "",
+        "project_id": project_id,
+    }
+
     try:
         project = Project.objects.get(id=project_id)
     except Project.DoesNotExist:
-        logger.error(f"[Parse Sitemap] Project {project_id} not found.")
-        return f"Project {project_id} not found."
+        logger.error("[Parse Sitemap] Project not found", project_id=project_id)
+        result["status"] = "skipped"
+        result["message"] = f"Project {project_id} not found."
+        return result if return_summary else result["message"]
 
-    if not project.sitemap_url:
+    if project.deleted_at is not None:
+        logger.info("[Parse Sitemap] Skipping deleted project", project_id=project_id)
+        result["status"] = "skipped"
+        result["message"] = f"Project {project_id} is deleted, skipping."
+        return result if return_summary else result["message"]
+
+    if not _is_valid_sitemap_url(project.sitemap_url):
         logger.warning(
-            "[Parse Sitemap] No sitemap URL found for project",
-            project_id=project_id,
-            project_name=project.name,
-        )
-        return f"No sitemap URL found for project {project.name}."
-
-    logger.info(
-        "[Parse Sitemap] Starting sitemap parsing",
-        project_id=project_id,
-        project_name=project.name,
-        sitemap_url=project.sitemap_url,
-    )
-
-    try:
-        response = requests.get(project.sitemap_url, timeout=30)
-        response.raise_for_status()
-
-        # Parse XML content
-        import xml.etree.ElementTree as ET
-
-        root = ET.fromstring(response.content)
-
-        # Handle both sitemap formats: standard sitemap and sitemap index
-        namespace = {"ns": "http://www.sitemaps.org/schemas/sitemap/0.9"}
-
-        urls_found = []
-
-        # Check if this is a sitemap index
-        sitemap_locs = root.findall(".//ns:sitemap/ns:loc", namespace)
-        if sitemap_locs:
-            # This is a sitemap index, fetch each sitemap
-            for sitemap_loc in sitemap_locs:
-                sitemap_url = sitemap_loc.text
-                try:
-                    sitemap_response = requests.get(sitemap_url, timeout=30)
-                    sitemap_response.raise_for_status()
-                    sitemap_root = ET.fromstring(sitemap_response.content)
-                    url_locs = sitemap_root.findall(".//ns:url/ns:loc", namespace)
-                    urls_found.extend([loc.text for loc in url_locs if loc.text])
-                except Exception as e:
-                    logger.warning(
-                        "[Parse Sitemap] Failed to fetch nested sitemap",
-                        sitemap_url=sitemap_url,
-                        error=str(e),
-                    )
-        else:
-            # This is a regular sitemap
-            url_locs = root.findall(".//ns:url/ns:loc", namespace)
-            urls_found.extend([loc.text for loc in url_locs if loc.text])
-
-        # Save URLs to database
-        created_count = 0
-        existing_count = 0
-
-        for url in urls_found:
-            project_page, created = ProjectPage.objects.get_or_create(
-                project=project, url=url, defaults={"source": ProjectPageSource.SITEMAP}
-            )
-            if created:
-                created_count += 1
-            else:
-                existing_count += 1
-
-        logger.info(
-            "[Parse Sitemap] Completed sitemap parsing",
-            project_id=project_id,
-            project_name=project.name,
-            total_urls=len(urls_found),
-            created_count=created_count,
-            existing_count=existing_count,
-        )
-
-        # Schedule analysis of first 10 unanalyzed pages
-        async_task(
-            "core.tasks.analyze_sitemap_pages",
-            project_id,
-            group="Analyze Sitemap Pages",
-        )
-
-        return f"""Sitemap parsing completed for {project.name}:
-        Total URLs found: {len(urls_found)}
-        New pages: {created_count}
-        Existing pages: {existing_count}"""
-
-    except requests.RequestException as e:
-        logger.error(
-            "[Parse Sitemap] Request error",
+            "[Parse Sitemap] No valid sitemap URL found for project",
             project_id=project_id,
             project_name=project.name,
             sitemap_url=project.sitemap_url,
-            error=str(e),
+        )
+        result["status"] = "skipped"
+        result["message"] = f"No valid sitemap URL found for project {project.name}."
+        return result if return_summary else result["message"]
+
+    lock_key = f"sitemap-sync:project:{project.id}"
+    lock_acquired = cache.add(lock_key, "1", timeout=settings.SITEMAP_SYNC_LOCK_TTL_SECONDS)
+    if not lock_acquired:
+        logger.info(
+            "[Parse Sitemap] Project sync already in progress, skipping overlap",
+            project_id=project.id,
+            project_name=project.name,
+        )
+        result["status"] = "skipped"
+        result["message"] = f"Sitemap sync already running for project {project.name}."
+        return result if return_summary else result["message"]
+
+    try:
+        logger.info(
+            "[Parse Sitemap] Starting sitemap sync",
+            project_id=project.id,
+            project_name=project.name,
+            sitemap_url=project.sitemap_url,
+        )
+
+        summary = _sync_project_sitemap(project)
+
+        logger.info("[Parse Sitemap] Project sync completed", **summary)
+
+        result["status"] = summary["status"]
+        result["message"] = (
+            f"Sitemap sync completed for {project.name}: "
+            f"discovered={summary['discovered']}, added={summary['added']}, "
+            f"updated={summary['updated']}, stale={summary['stale']}, failed={summary['failed']}"
+        )
+        result["summary"] = summary
+    except requests.RequestException as error:
+        logger.error(
+            "[Parse Sitemap] Request error",
+            project_id=project.id,
+            project_name=project.name,
+            sitemap_url=project.sitemap_url,
+            error=str(error),
             exc_info=True,
         )
-        return f"Failed to fetch sitemap for {project.name}: {str(e)}"
-    except Exception as e:
+        result["status"] = "failed"
+        result["message"] = f"Failed to fetch sitemap for {project.name}: {str(error)}"
+    except Exception as error:
         logger.error(
             "[Parse Sitemap] Unexpected error",
-            project_id=project_id,
+            project_id=project.id,
             project_name=project.name,
-            error=str(e),
+            sitemap_url=project.sitemap_url,
+            error=str(error),
             exc_info=True,
         )
-        return f"Error parsing sitemap for {project.name}: {str(e)}"
+        result["status"] = "failed"
+        result["message"] = f"Error parsing sitemap for {project.name}: {str(error)}"
+    finally:
+        cache.delete(lock_key)
+
+    return result if return_summary else result["message"]
+
+
+def sync_all_projects_with_sitemaps():
+    """Periodic job that syncs sitemap URLs for all eligible projects."""
+    eligible_projects = list(
+        Project.objects.filter(
+            deleted_at__isnull=True,
+            profile__deleted_at__isnull=True,
+        )
+        .exclude(sitemap_url="")
+        .select_related("profile")
+    )
+
+    summary = {
+        "total": len(eligible_projects),
+        "processed": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "skipped": 0,
+    }
+
+    for project in eligible_projects:
+        if project.profile and project.profile.state == ProfileStates.ACCOUNT_DELETED:
+            summary["skipped"] += 1
+            logger.info(
+                "[Sitemap Sync Batch] Skipping disabled profile project",
+                project_id=project.id,
+                project_name=project.name,
+            )
+            continue
+
+        result = parse_sitemap_and_save_urls(project.id, return_summary=True)
+        summary["processed"] += 1
+
+        status = result.get("status")
+        if status == "success":
+            summary["succeeded"] += 1
+        elif status == "skipped":
+            summary["skipped"] += 1
+        else:
+            summary["failed"] += 1
+
+    logger.info("[Sitemap Sync Batch] Completed", **summary)
+
+    return (
+        "Sitemap sync batch completed: "
+        f"total={summary['total']}, processed={summary['processed']}, "
+        f"succeeded={summary['succeeded']}, skipped={summary['skipped']}, failed={summary['failed']}"
+    )
 
 
 def analyze_sitemap_pages(project_id: int, limit: int = 10):

@@ -214,6 +214,27 @@ Scheduled entrypoint:
 Worker task entrypoint:
 - `core.tasks.sync_project_integration_analytics(project_id, provider)`
 
+### Periodic sitemap sync for “Your Pages”
+
+TuxSEO now auto-refreshes sitemap-backed project pages on a configurable schedule.
+
+- batch entrypoint: `core.tasks.sync_all_projects_with_sitemaps`
+- single-project sync: `core.tasks.parse_sitemap_and_save_urls(project_id)`
+- manual trigger endpoint (session auth): `POST /api/project/{project_id}/sitemap/sync-now/`
+
+Behavior:
+- only projects with a valid sitemap URL are eligible
+- per-project lock prevents overlapping syncs
+- supports both `urlset` sitemap XML and sitemap index files
+- upserts discovered URLs and marks missing sitemap URLs as stale instead of deleting
+- logs per-project counters: discovered, added, updated, stale, failed
+
+Key env settings:
+- `SITEMAP_SYNC_SCHEDULER_ENABLED` (default `true`)
+- `SITEMAP_SYNC_INTERVAL_HOURS` (default `6`)
+- `SITEMAP_SYNC_TIMEOUT_SECONDS`, `SITEMAP_SYNC_MAX_RETRIES`, `SITEMAP_SYNC_RETRY_BACKOFF_SECONDS`
+- `USE_REDIS_CACHE` (enable shared Redis cache for cross-worker sync locks)
+
 ### Custom post types for blog idea generation
 
 Projects can now define reusable **custom post types** under the Posts sidebar:

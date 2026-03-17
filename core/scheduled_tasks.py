@@ -6,6 +6,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db.models import Count, Q
 from django.utils import timezone
+from django_q.models import Schedule
 from django_q.tasks import async_task
 
 from core.choices import EmailType, ProjectPageSource
@@ -17,6 +18,60 @@ from tuxseo.utils import get_tuxseo_logger
 logger = get_tuxseo_logger(__name__)
 
 User = get_user_model()
+
+
+def ensure_periodic_sitemap_sync_schedule() -> str:
+    """Create/update the django-q schedule row for periodic sitemap sync."""
+    schedule_name = "Periodic sitemap sync"
+
+    if not settings.SITEMAP_SYNC_SCHEDULER_ENABLED:
+        removed_count, _ = Schedule.objects.filter(name=schedule_name).delete()
+        if removed_count:
+            logger.info(
+                "[Sitemap Sync Schedule] Removed disabled schedule",
+                schedule_name=schedule_name,
+            )
+        return "Sitemap sync scheduler disabled"
+
+
+    interval_minutes = settings.SITEMAP_SYNC_INTERVAL_HOURS * 60
+
+    schedule_defaults = {
+        "func": "core.tasks.sync_all_projects_with_sitemaps",
+        "schedule_type": Schedule.MINUTES,
+        "minutes": interval_minutes,
+        "repeats": -1,
+        "cluster": settings.Q_CLUSTER.get("name", ""),
+    }
+
+    schedule = Schedule.objects.filter(name=schedule_name).order_by("id").first()
+
+    if schedule is None:
+        Schedule.objects.create(name=schedule_name, **schedule_defaults)
+        logger.info(
+            "[Sitemap Sync Schedule] Created",
+            schedule_name=schedule_name,
+            interval_minutes=interval_minutes,
+        )
+        return "Sitemap sync schedule created"
+
+    updates = []
+    for field_name, expected_value in schedule_defaults.items():
+        if getattr(schedule, field_name) != expected_value:
+            setattr(schedule, field_name, expected_value)
+            updates.append(field_name)
+
+    if updates:
+        schedule.save(update_fields=updates)
+        logger.info(
+            "[Sitemap Sync Schedule] Updated",
+            schedule_name=schedule_name,
+            updated_fields=updates,
+            interval_minutes=interval_minutes,
+        )
+        return "Sitemap sync schedule updated"
+
+    return "Sitemap sync schedule unchanged"
 
 
 def analyze_project_sitemap_pages():

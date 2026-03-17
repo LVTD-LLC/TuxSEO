@@ -1,6 +1,7 @@
 import posthog
 from django.apps import AppConfig
 from django.conf import settings
+from django.db.utils import OperationalError, ProgrammingError
 
 from tuxseo.utils import get_tuxseo_logger
 
@@ -22,3 +23,16 @@ class CoreConfig(AppConfig):
             if settings.ENVIRONMENT == "dev":
                 posthog.disabled = True
                 posthog.debug = True
+
+        if settings.SITEMAP_SYNC_SCHEDULER_ENABLED:
+            try:
+                from core.scheduled_tasks import ensure_periodic_sitemap_sync_schedule
+
+                ensure_periodic_sitemap_sync_schedule()
+            except (OperationalError, ProgrammingError) as error:
+                # Database/table might not exist yet during startup/migrations.
+                logger.info(
+                    "[Sitemap Sync Schedule] Skipping schedule bootstrap (DB unavailable)",
+                    error=str(error),
+                    exc_info=True,
+                )
