@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Analytics
   - implementation-ready integration analytics architecture spec covering GA4, GSC, and Plausible (`docs/integration-analytics-architecture-v1.md`)
+  - analytics ingestion models: `AnalyticsSourceSnapshot`, `AnalyticsFactDaily`, and `AnalyticsSyncCursor`
+  - provider ingestion service + connectors for GA4, GSC, and Plausible with cursor-based incremental sync
+  - scheduled analytics sync dispatcher (`schedule_project_analytics_syncs`) and worker task (`sync_project_integration_analytics`)
+  - retry/backoff handling for transient provider failures and rate limits with cursor/snapshot observability
+  - tests for incremental cursor behavior, idempotent upserts, and failure recording
 - Pages
   - added changelog page
   - features to the pro plan on pricing page

@@ -25,6 +25,7 @@ from core.choices import (
     ProjectPageSource,
 )
 from core.execution_reliability import append_job_history, build_failure_payload
+from core.integration_analytics import sync_project_provider_analytics
 from core.models import (
     AgentExecutionJob,
     BlogPostTitleSuggestion,
@@ -2295,3 +2296,19 @@ def run_agent_execution_job(job_id: int):
             exc_info=True,
         )
         return f"Job {job_id} failed: {str(error)}"
+
+
+def sync_project_integration_analytics(project_id: int, provider: str):
+    """Sync one project's connected analytics provider with incremental cursor semantics."""
+    result = sync_project_provider_analytics(project_id=project_id, provider=provider)
+
+    logger.info(
+        "[AnalyticsSyncTask] Provider sync finished",
+        project_id=project_id,
+        provider=provider,
+        result_status=result.get("status"),
+        rows_fetched=result.get("rows_fetched"),
+        rows_upserted=result.get("rows_upserted"),
+    )
+
+    return result
