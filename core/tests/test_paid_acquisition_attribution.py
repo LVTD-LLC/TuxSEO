@@ -91,7 +91,11 @@ def test_signup_view_persists_attribution_from_session(client):
     track_event_calls = [
         call
         for call in async_task_mock.call_args_list
-        if call.args and call.args[0] == "core.tasks.track_event"
+        if call.args
+        and (
+            call.args[0] == "core.tasks.track_event"
+            or getattr(call.args[0], "__name__", "") == "track_event"
+        )
     ]
     assert track_event_calls
 
