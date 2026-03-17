@@ -53,8 +53,16 @@ def redact_value(value: Any, key: str | None = None) -> Any:
     return value
 
 
-def redact_event(event_dict: dict[str, Any]) -> dict[str, Any]:
+def redact_event_dict(event_dict: dict[str, Any]) -> dict[str, Any]:
     return {key: redact_value(value, key=key) for key, value in event_dict.items()}
+
+
+def redact_event(logger: Any, method_name: str | None = None, event_dict: dict[str, Any] | None = None):
+    """Structlog processor for redaction (also backward compatible with direct dict calls in tests)."""
+    if event_dict is None and isinstance(logger, dict):
+        return redact_event_dict(logger)
+    assert event_dict is not None
+    return redact_event_dict(event_dict)
 
 
 def _to_level(level: str) -> int:
@@ -160,7 +168,7 @@ class PostHogLogsEmitter:
         if not self._enabled or self._logger is None:
             return
 
-        payload = redact_event(event_dict)
+        payload = event_dict
 
         message = str(payload.get("event") or payload.get("message") or "")
         level = _to_level(str(payload.get("level") or "info"))
@@ -189,7 +197,16 @@ class PostHogLogsProcessor:
         return event_dict
 
 
-def ensure_exception_fields(event_dict: dict[str, Any]) -> dict[str, Any]:
+def ensure_exception_fields(
+    logger: Any,
+    method_name: str | None = None,
+    event_dict: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Structlog processor for exception normalization (also accepts direct dict usage)."""
+    if event_dict is None and isinstance(logger, dict):
+        event_dict = logger
+    assert event_dict is not None
+
     exception = event_dict.get("exception")
     if isinstance(exception, str) and exception:
         first_line = exception.splitlines()[0]
