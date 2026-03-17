@@ -886,6 +886,56 @@ class BlogPostTitleSuggestion(BaseModel):
 
         return not has_complete_sentence_ending
 
+    def _get_generation_target_keywords(self) -> list[str]:
+        return [keyword for keyword in self.get_blog_post_keywords() if keyword and keyword.strip()]
+
+    @staticmethod
+    def contains_forced_keyword_markdown(
+        blog_post_content: str, target_keywords: list[str]
+    ) -> tuple[bool, str]:
+        import re
+
+        if not blog_post_content:
+            return False, ""
+
+        for raw_keyword in target_keywords:
+            normalized_keyword = (raw_keyword or "").strip()
+            if not normalized_keyword:
+                continue
+
+            escaped_keyword = re.escape(normalized_keyword)
+            forced_format_patterns = [
+                rf"`{escaped_keyword}`",
+                rf"\*\*{escaped_keyword}\*\*",
+                rf"__{escaped_keyword}__",
+                rf"\*{escaped_keyword}\*",
+                rf"_{escaped_keyword}_",
+            ]
+
+            if any(
+                re.search(pattern, blog_post_content, re.IGNORECASE)
+                for pattern in forced_format_patterns
+            ):
+                return (
+                    True,
+                    f"Target keyword '{normalized_keyword}' is wrapped in markdown emphasis/code. Keep it in plain prose.",
+                )
+
+        return False, ""
+
+    @staticmethod
+    def has_any_target_keyword_usage(blog_post_content: str, target_keywords: list[str]) -> bool:
+        normalized_content = (blog_post_content or "").lower()
+        if not normalized_content:
+            return False
+
+        return any(
+            normalized_keyword in normalized_content
+            for normalized_keyword in [
+                (keyword or "").strip().lower() for keyword in target_keywords if keyword and keyword.strip()
+            ]
+        )
+
     def validate_generated_blog_post_content(self, blog_post_content: str):
         normalized_content = (blog_post_content or "").strip()
 
@@ -898,9 +948,21 @@ class BlogPostTitleSuggestion(BaseModel):
         if self.has_incomplete_ending(normalized_content):
             return False, "Generated content appears to be cut off before completion."
 
+        target_keywords = self._get_generation_target_keywords()
+        if target_keywords and not self.has_any_target_keyword_usage(normalized_content, target_keywords):
+            return False, "Generated content must naturally include at least one selected target keyword."
+
+        has_forced_keyword_markdown, keyword_markdown_error = self.contains_forced_keyword_markdown(
+            normalized_content,
+            target_keywords,
+        )
+        if has_forced_keyword_markdown:
+            return False, keyword_markdown_error
+
         return True, ""
 
     def build_content_generation_prompt(self, previous_validation_error: str = "") -> str:
+        target_keywords = self._get_generation_target_keywords()
         prompt_lines = [
             "Generate a complete, publication-ready blog post from the provided context.",
             "Return all required schema fields: description, slug, tags, and content.",
@@ -909,6 +971,16 @@ class BlogPostTitleSuggestion(BaseModel):
             "Do not include a References section.",
             "Finish with a complete conclusion and end on a complete sentence.",
         ]
+
+        if target_keywords:
+            prompt_lines.extend(
+                [
+                    f"Target keywords to use naturally when relevant: {', '.join(target_keywords)}.",
+                    "Integrate keywords as normal prose inside sentences and headings.",
+                    "Never wrap target keywords in backticks, bold, italics, or other forced markdown emphasis.",
+                    "Avoid keyword stuffing and keep readability natural.",
+                ]
+            )
 
         if previous_validation_error:
             prompt_lines.append(

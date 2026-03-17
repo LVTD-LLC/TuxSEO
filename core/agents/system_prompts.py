@@ -146,8 +146,10 @@ def add_target_keywords(ctx: RunContext[BlogPostGenerationContext]) -> str:
             {keywords_list}
 
             Please incorporate these keywords naturally throughout the content where appropriate.
-            Don't force them in, but use them when they fit contextually and help improve the readability and SEO value of the post.
-            Don't make them bold, just a regular part of the text.
+            Use them as part of normal prose (sentences and headings) where they genuinely fit contextually.
+            Do not force awkward repetition or keyword stuffing.
+            Never wrap target keywords in visual formatting such as backticks, bold, italics, or quotes just to highlight them.
+            Keep target keywords as a regular part of the text so readability stays natural.
         """  # noqa: E501
     else:
         return ""
