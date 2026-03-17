@@ -1,10 +1,25 @@
-# TuxSEO Analytics Event Taxonomy
+# TuxSEO Analytics Event Taxonomy (PostHog)
 
 Canonical analytics event names live in:
 
 - `core/analytics/event_taxonomy.json`
 
-This file is the **single source of truth** for event names and deprecated aliases.
+This file is the **single source of truth** for event names, required properties, and deprecated aliases.
+
+## Actor identity strategy
+
+TuxSEO uses a dual identity model so funnels are stable and queryable:
+
+- **PostHog distinct_id**: authenticated user email (`profile.user.email`) from backend capture.
+- **Stable actor dimensions** (always attached server-side in `track_event`):
+  - `profile_id`
+  - `email`
+  - `actor_id_type=profile_id`
+  - `actor_id=<profile_id>`
+  - `plan`
+  - `current_state`
+
+For critical outcomes, capture is done server-side (not client-only).
 
 ## How code should consume event names
 
@@ -12,37 +27,35 @@ This file is the **single source of truth** for event names and deprecated alias
   - `ANALYTICS_EVENTS` for constants
   - `normalize_event_name()` for alias mapping
 - Frontend (JS): `frontend/src/constants/analytics_events.js`
-  - imports the same JSON file and exports equivalent constants
+  - imports the same JSON and exports matching constants
 
-## Canonical events (v1)
+## Canonical events (v2 highlights)
 
-- `site_visited`
-- `signup_started`
+### P1 funnel coverage
+
 - `signup_completed`
-- `email_verified`
+- `login_succeeded`
 - `project_create_succeeded`
-- `project_deleted`
-- `first_title_generated`
-- `first_blog_generated`
-- `first_publish_attempt`
-- `pricing_cta_clicked`
-- `checkout_started`
-- `checkout_succeeded`
-- `checkout_failed`
-- `subscription_created`
-- `subscription_upgraded`
-- `subscription_cancelled`
-- `subscription_deleted`
-- `outcome_attribution_recorded`
+- `integration_connected`
+- `integration_disconnected`
+- `keyword_updated`
+- `page_analysis_completed`
+- `title_generation_completed`
+- `content_generation_succeeded`
+- `content_generation_failed`
+- `publish_attempted`
+- `publish_succeeded`
+- `publish_failed`
+- `link_exchange_toggled`
+- `plan_upgraded`
+- `plan_cancelled`
 
-## Deprecated aliases
+See `event_taxonomy.json` for full list + required properties per event.
 
-- `user_signed_up` → `signup_completed`
-- `project_created` → `project_create_succeeded`
-- `first_post_generated` → `first_blog_generated`
-- `checkout_completed` → `checkout_succeeded`
+## Required-property enforcement
 
-`track_event` normalizes deprecated names before sending events to PostHog.
+`core.tasks.track_event` now validates required properties from taxonomy before capture.
+If required properties are missing, event capture is rejected and logged.
 
 ## Change policy
 

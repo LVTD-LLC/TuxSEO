@@ -1,4 +1,4 @@
-from allauth.account.signals import email_confirmed, user_signed_up
+from allauth.account.signals import email_confirmed, user_logged_in, user_signed_up
 from django.contrib.auth.models import User
 from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
@@ -77,6 +77,29 @@ def email_confirmation_callback(sender, request, user, **kwargs):
         email = kwargs["sociallogin"].user.email
         if email:
             async_task(add_email_to_buttondown, email, tag="user")
+
+
+@receiver(user_logged_in)
+def capture_login_succeeded(sender, request, user, **kwargs):
+    profile = getattr(user, "profile", None)
+    if not profile:
+        return
+
+    auth_provider = "password"
+    if kwargs.get("sociallogin"):
+        auth_provider = "social"
+
+    async_task(
+        "core.tasks.track_event",
+        profile_id=profile.id,
+        event_name=ANALYTICS_EVENTS.LOGIN_SUCCEEDED,
+        properties={
+            "auth_provider": auth_provider,
+            "result_status": "succeeded",
+        },
+        source_function="signals.capture_login_succeeded",
+        group="Track Event",
+    )
 
 
 @receiver(post_save, sender=Project)

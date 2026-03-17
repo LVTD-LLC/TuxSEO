@@ -344,6 +344,7 @@ class Profile(BaseModel):
             "project_id": project.id,
             "project_name": project.name,
             "project_url": url,
+            "result_status": "succeeded",
         }
 
         if created:
@@ -2425,6 +2426,20 @@ class ProjectPage(BaseModel):
             )
 
         self.save(update_fields=update_fields)
+
+        async_task(
+            "core.tasks.track_event",
+            profile_id=self.project.profile_id,
+            event_name=ANALYTICS_EVENTS.PAGE_ANALYSIS_COMPLETED,
+            properties={
+                "project_id": self.project_id,
+                "project_page_id": self.id,
+                "source": self.source,
+                "result_status": "succeeded",
+            },
+            source_function="ProjectPage.analyze_content",
+            group="Track Event",
+        )
 
         return True
 
