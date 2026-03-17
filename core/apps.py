@@ -29,6 +29,10 @@ class CoreConfig(AppConfig):
                 from core.scheduled_tasks import ensure_periodic_sitemap_sync_schedule
 
                 ensure_periodic_sitemap_sync_schedule()
-            except (OperationalError, ProgrammingError):
+            except (OperationalError, ProgrammingError) as error:
                 # Database/table might not exist yet during startup/migrations.
-                logger.info("[Sitemap Sync Schedule] Skipping schedule bootstrap (DB unavailable)")
+                logger.info(
+                    "[Sitemap Sync Schedule] Skipping schedule bootstrap (DB unavailable)",
+                    error=str(error),
+                    exc_info=True,
+                )

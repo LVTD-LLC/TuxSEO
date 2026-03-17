@@ -1359,13 +1359,15 @@ def _extract_sitemap_urls(xml_content: bytes, source_url: str) -> tuple[list[str
             if loc.text and loc.text.strip()
         ]
 
-    normalized_url_locs = [
-        urljoin(source_url, candidate_url) if candidate_url.startswith("/") else candidate_url
-        for candidate_url in url_locs
-    ]
+    def _normalize_candidate_url(candidate_url: str) -> str:
+        parsed = urlparse(candidate_url)
+        if parsed.scheme or parsed.netloc:
+            return candidate_url
+        return urljoin(source_url, candidate_url)
+
+    normalized_url_locs = [_normalize_candidate_url(candidate_url) for candidate_url in url_locs]
     normalized_sitemap_locs = [
-        urljoin(source_url, candidate_url) if candidate_url.startswith("/") else candidate_url
-        for candidate_url in sitemap_locs
+        _normalize_candidate_url(candidate_url) for candidate_url in sitemap_locs
     ]
 
     return normalized_url_locs, normalized_sitemap_locs

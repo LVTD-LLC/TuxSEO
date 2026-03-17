@@ -22,11 +22,19 @@ User = get_user_model()
 
 def ensure_periodic_sitemap_sync_schedule() -> str:
     """Create/update the django-q schedule row for periodic sitemap sync."""
+    schedule_name = "Periodic sitemap sync"
+
     if not settings.SITEMAP_SYNC_SCHEDULER_ENABLED:
+        removed_count, _ = Schedule.objects.filter(name=schedule_name).delete()
+        if removed_count:
+            logger.info(
+                "[Sitemap Sync Schedule] Removed disabled schedule",
+                schedule_name=schedule_name,
+            )
         return "Sitemap sync scheduler disabled"
 
+
     interval_minutes = settings.SITEMAP_SYNC_INTERVAL_HOURS * 60
-    schedule_name = "Periodic sitemap sync"
 
     schedule_defaults = {
         "func": "core.tasks.sync_all_projects_with_sitemaps",
