@@ -12,7 +12,7 @@ from django_q.tasks import async_task, result
 from ninja import NinjaAPI
 
 from core.abuse_prevention import enforce_verified_email_for_expensive_action
-from core.analytics import ANALYTICS_EVENTS
+from core.analytics import ANALYTICS_EVENTS, enqueue_track_event
 from core.api.auth import session_auth, superuser_api_auth
 from core.api.schemas import (
     APIKeyOut,
@@ -457,8 +457,7 @@ def generate_title_suggestions(request: HttpRequest, data: GenerateTitleSuggesti
         html = render_to_string("components/blog_post_suggestion_card.html", context)
         suggestions_html.append(html)
 
-    async_task(
-        "core.tasks.track_event",
+    enqueue_track_event(
         profile_id=profile.id,
         event_name=ANALYTICS_EVENTS.TITLE_GENERATION_COMPLETED,
         properties={
@@ -469,7 +468,6 @@ def generate_title_suggestions(request: HttpRequest, data: GenerateTitleSuggesti
             "custom_post_type": custom_post_type.name if custom_post_type else "",
         },
         source_function="api.generate_title_suggestions",
-        group="Track Event",
     )
 
     return {
@@ -554,8 +552,7 @@ def generate_title_from_idea(request: HttpRequest, data: GenerateTitleSuggestion
         }
         suggestion_html = render_to_string("components/blog_post_suggestion_card.html", context)
 
-        async_task(
-            "core.tasks.track_event",
+        enqueue_track_event(
             profile_id=profile.id,
             event_name=ANALYTICS_EVENTS.TITLE_GENERATION_COMPLETED,
             properties={
@@ -566,7 +563,6 @@ def generate_title_from_idea(request: HttpRequest, data: GenerateTitleSuggestion
                 "custom_post_type": custom_post_type.name if custom_post_type else "",
             },
             source_function="api.generate_title_from_idea",
-            group="Track Event",
         )
 
         return {
@@ -865,8 +861,7 @@ def toggle_link_exchange(request: HttpRequest, project_id: int):
     project.particiate_in_link_exchange = not project.particiate_in_link_exchange
     project.save(update_fields=["particiate_in_link_exchange"])
 
-    async_task(
-        "core.tasks.track_event",
+    enqueue_track_event(
         profile_id=profile.id,
         event_name=ANALYTICS_EVENTS.LINK_EXCHANGE_TOGGLED,
         properties={
@@ -875,7 +870,6 @@ def toggle_link_exchange(request: HttpRequest, project_id: int):
             "result_status": "succeeded",
         },
         source_function="api.toggle_link_exchange",
-        group="Track Event",
     )
 
     return {"status": "success", "enabled": project.particiate_in_link_exchange}
@@ -1383,8 +1377,7 @@ def add_keyword_to_project(request: HttpRequest, data: AddKeywordIn):
             ],
         }
 
-        async_task(
-            "core.tasks.track_event",
+        enqueue_track_event(
             profile_id=profile.id,
             event_name=ANALYTICS_EVENTS.KEYWORD_UPDATED,
             properties={
@@ -1396,7 +1389,6 @@ def add_keyword_to_project(request: HttpRequest, data: AddKeywordIn):
                 "already_associated": not pk_created,
             },
             source_function="api.add_keyword_to_project",
-            group="Track Event",
         )
 
         return {
@@ -1427,8 +1419,7 @@ def toggle_project_keyword_use(request: HttpRequest, data: ToggleProjectKeywordU
         project_keyword.use = not project_keyword.use
         project_keyword.save(update_fields=["use"])
 
-        async_task(
-            "core.tasks.track_event",
+        enqueue_track_event(
             profile_id=profile.id,
             event_name=ANALYTICS_EVENTS.KEYWORD_UPDATED,
             properties={
@@ -1439,7 +1430,6 @@ def toggle_project_keyword_use(request: HttpRequest, data: ToggleProjectKeywordU
                 "use": project_keyword.use,
             },
             source_function="api.toggle_project_keyword_use",
-            group="Track Event",
         )
 
         return ToggleProjectKeywordUseOut(status="success", use=project_keyword.use)
@@ -1467,8 +1457,7 @@ def delete_project_keyword(request: HttpRequest, data: DeleteProjectKeywordIn):
         keyword_id = project_keyword.keyword_id
         project_keyword.delete()
 
-        async_task(
-            "core.tasks.track_event",
+        enqueue_track_event(
             profile_id=profile.id,
             event_name=ANALYTICS_EVENTS.KEYWORD_UPDATED,
             properties={
@@ -1478,7 +1467,6 @@ def delete_project_keyword(request: HttpRequest, data: DeleteProjectKeywordIn):
                 "result_status": "succeeded",
             },
             source_function="api.delete_project_keyword",
-            group="Track Event",
         )
 
         return DeleteProjectKeywordOut(
@@ -1802,17 +1790,15 @@ def post_generated_blog_post(request: HttpRequest, data: PostGeneratedBlogPostIn
         if generated_post is None:
             return ownership_not_found_payload("Generated blog post")
 
-        async_task(
-            "core.tasks.track_event",
+        enqueue_track_event(
             profile_id=profile.id,
             event_name=ANALYTICS_EVENTS.PUBLISH_ATTEMPTED,
             properties={
-                "project_id": generated_post.project_id,
+                "project_id": getattr(generated_post, "project_id", None),
                 "blog_post_id": generated_post.id,
                 "result_status": "attempted",
             },
             source_function="api.post_generated_blog_post",
-            group="Track Event",
         )
 
         if generated_post.publish_approval_status != GeneratedBlogPost.ApprovalStatus.APPROVED:
@@ -1823,18 +1809,16 @@ def post_generated_blog_post(request: HttpRequest, data: PostGeneratedBlogPostIn
                 decision=generated_post.publish_approval_status,
                 reason="awaiting_publish_approval",
             )
-            async_task(
-                "core.tasks.track_event",
+            enqueue_track_event(
                 profile_id=profile.id,
                 event_name=ANALYTICS_EVENTS.PUBLISH_FAILED,
                 properties={
-                    "project_id": generated_post.project_id,
+                    "project_id": getattr(generated_post, "project_id", None),
                     "blog_post_id": generated_post.id,
                     "result_status": "failed",
                     "failure_reason": "awaiting_publish_approval",
                 },
                 source_function="api.post_generated_blog_post",
-                group="Track Event",
             )
             return {
                 "status": "error",
@@ -1860,18 +1844,16 @@ def post_generated_blog_post(request: HttpRequest, data: PostGeneratedBlogPostIn
                 reason=quality_gate_result["summary"],
                 metadata={"blocking_checks": quality_gate_result["blocking_checks"]},
             )
-            async_task(
-                "core.tasks.track_event",
+            enqueue_track_event(
                 profile_id=profile.id,
                 event_name=ANALYTICS_EVENTS.PUBLISH_FAILED,
                 properties={
-                    "project_id": generated_post.project_id,
+                    "project_id": getattr(generated_post, "project_id", None),
                     "blog_post_id": generated_post.id,
                     "result_status": "failed",
                     "failure_reason": "quality_gate_blocked",
                 },
                 source_function="api.post_generated_blog_post",
-                group="Track Event",
             )
             return {
                 "status": "error",
@@ -1908,17 +1890,15 @@ def post_generated_blog_post(request: HttpRequest, data: PostGeneratedBlogPostIn
                 reason=publish_message,
                 metadata={"quality_gate_decision": quality_gate_result["decision"]},
             )
-            async_task(
-                "core.tasks.track_event",
+            enqueue_track_event(
                 profile_id=profile.id,
                 event_name=ANALYTICS_EVENTS.PUBLISH_SUCCEEDED,
                 properties={
-                    "project_id": generated_post.project_id,
+                    "project_id": getattr(generated_post, "project_id", None),
                     "blog_post_id": generated_post.id,
                     "result_status": "succeeded",
                 },
                 source_function="api.post_generated_blog_post",
-                group="Track Event",
             )
             return {"status": "success", "message": publish_message}
         else:
@@ -1929,18 +1909,16 @@ def post_generated_blog_post(request: HttpRequest, data: PostGeneratedBlogPostIn
                 decision="FAILED",
                 reason="endpoint_submission_failed",
             )
-            async_task(
-                "core.tasks.track_event",
+            enqueue_track_event(
                 profile_id=profile.id,
                 event_name=ANALYTICS_EVENTS.PUBLISH_FAILED,
                 properties={
-                    "project_id": generated_post.project_id,
+                    "project_id": getattr(generated_post, "project_id", None),
                     "blog_post_id": generated_post.id,
                     "result_status": "failed",
                     "failure_reason": "endpoint_submission_failed",
                 },
                 source_function="api.post_generated_blog_post",
-                group="Track Event",
             )
             return {"status": "error", "message": "Failed to post blog."}
     except Exception as e:
