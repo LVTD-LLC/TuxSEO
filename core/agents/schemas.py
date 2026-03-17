@@ -137,8 +137,8 @@ class TitleSuggestionContext(BaseModel):
     user_prompt: str | None = Field(
         default=None, description="Optional user-provided guidance for title generation"
     )
-    custom_post_type_prompt: str | None = Field(
-        default=None,
+    custom_post_type_prompt: str = Field(
+        default="",
         description=(
             "Optional custom post-type guidance that must shape title tone/format while preserving "
             "SEO clarity and readability"
@@ -198,8 +198,8 @@ class BlogPostGenerationContext(BaseModel):
     project_keywords: list[str] = []
     project_pages: list[ProjectPageContext] = []
     content_type: str = Field(description="Type of content to generate (SEO or SHARING)")
-    custom_post_type_prompt: str | None = Field(
-        default=None,
+    custom_post_type_prompt: str = Field(
+        default="",
         description=(
             "Optional custom post-type guidance that must influence article tone/structure without "
             "breaking baseline quality constraints"

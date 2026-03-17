@@ -85,8 +85,7 @@ def test_generate_title_suggestions_applies_custom_post_type_prompt(monkeypatch)
     assert captured["content_type"] == ContentType.SHARING
     assert captured["num_titles"] == 2
     assert captured["custom_post_type_prompt"] == "Focus on implementation details and trade-offs."
-    assert "Focus on implementation details and trade-offs." in captured["user_prompt"]
-    assert "Include practical examples" in captured["user_prompt"]
+    assert captured["user_prompt"] == "Include practical examples"
 
     suggestion = BlogPostTitleSuggestion.objects.get(title="Technical idea")
     assert suggestion.custom_post_type_id == post_type.id
@@ -211,7 +210,7 @@ def test_custom_post_type_prompt_is_included_in_blog_post_generation_context(mon
 
 
 @pytest.mark.django_db
-def test_build_content_generation_prompt_includes_custom_post_type_guidance():
+def test_build_content_generation_prompt_does_not_duplicate_custom_post_type_guidance():
     user = User.objects.create_user("owner-prompt", "owner-prompt@example.com", "secret")
     project = Project.objects.create(profile=user.profile, name="Site", url="https://site.test")
     post_type = ProjectCustomPostType.objects.create(
@@ -230,5 +229,4 @@ def test_build_content_generation_prompt_includes_custom_post_type_guidance():
 
     generation_prompt = suggestion.build_content_generation_prompt()
 
-    assert "Apply this custom post-type guidance in both tone and structure" in generation_prompt
-    assert post_type.prompt_guidance in generation_prompt
+    assert post_type.prompt_guidance not in generation_prompt

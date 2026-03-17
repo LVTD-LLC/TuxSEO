@@ -1125,14 +1125,6 @@ class BlogPostTitleSuggestion(BaseModel):
                 ]
             )
 
-        if self.custom_post_type and self.custom_post_type.prompt_guidance:
-            prompt_lines.extend(
-                [
-                    f"Apply this custom post-type guidance in both tone and structure: {self.custom_post_type.prompt_guidance}.",
-                    "Keep this custom guidance visible in the final draft, but do not violate readability, structure, or SEO hygiene.",
-                ]
-            )
-
         if previous_validation_error:
             prompt_lines.append(
                 f"Previous draft failed validation: {previous_validation_error} Regenerate and fully fix this issue."  # noqa: E501

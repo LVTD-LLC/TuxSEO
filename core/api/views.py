@@ -128,12 +128,8 @@ def get_custom_post_type_for_generation(*, project: Project, post_type_id: int |
 
 
 def build_effective_user_prompt(*, custom_post_type, user_prompt: str) -> str:
-    custom_prompt = (custom_post_type.prompt_guidance or "").strip() if custom_post_type else ""
-    user_prompt = (user_prompt or "").strip()
-
-    if custom_prompt and user_prompt:
-        return f"{custom_prompt}\n\nAdditional user guidance:\n{user_prompt}"
-    return custom_prompt or user_prompt
+    _ = custom_post_type
+    return (user_prompt or "").strip()
 
 
 @api.post("/validate-url", response=ValidateUrlOut, auth=[session_auth])
