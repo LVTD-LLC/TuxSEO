@@ -153,6 +153,8 @@ export default class extends Controller {
   createProjectElement(data) {
     const element = document.createElement('div');
     element.className = 'overflow-hidden p-6 bg-white rounded-xl border border-gray-200 shadow-sm transition-all duration-300 transform hover:shadow-lg hover:border-gray-300 hover:-translate-y-1';
+    element.dataset.projectSearchTarget = 'item';
+    element.dataset.projectSearchText = (data.name || data.url || '').toLowerCase();
 
     element.innerHTML = `
       <div class="flex flex-col h-full">
