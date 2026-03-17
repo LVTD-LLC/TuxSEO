@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - scheduled analytics sync dispatcher (`schedule_project_analytics_syncs`) and worker task (`sync_project_integration_analytics`)
   - retry/backoff handling for transient provider failures and rate limits with cursor/snapshot observability
   - tests for incremental cursor behavior, idempotent upserts, and failure recording
+  - Project Home "Analytics (GA4/GSC/Plausible)" UI section with provider connection badges, 30-day rollups, derived rates, 7-day trend deltas, and top low-CTR/high-impression SEO opportunities
 - Pages
   - added changelog page
   - features to the pro plan on pricing page
