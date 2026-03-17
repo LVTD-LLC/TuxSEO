@@ -765,11 +765,11 @@ def get_relevant_external_pages_for_blog_post(
     meta_description: str, exclude_project=None, max_pages: int = 3
 ):
     """
-    Find the most relevant pages from other paying users' projects for a blog post.
+    Find the most relevant pages from other link-exchange projects for a blog post.
 
-    This function searches across all project pages from paying users,
-    finds those with analyzed content (embeddings), and returns the most relevant ones
-    based on semantic similarity to the blog post's meta description.
+    This function searches across project pages with embeddings,
+    finds those from projects participating in link exchange, and returns
+    the most relevant ones based on semantic similarity to the blog post's meta description.
 
     Args:
         meta_description: The meta description text to find relevant pages for
@@ -810,40 +810,35 @@ def get_relevant_external_pages_for_blog_post(
         )
         return ProjectPage.objects.none()
 
-    pages_from_paying_users_query = ProjectPage.objects.filter(
+    eligible_external_pages_query = ProjectPage.objects.filter(
         embedding__isnull=False,
         date_analyzed__isnull=False,
         project__profile__isnull=False,
+        project__particiate_in_link_exchange=True,
     )
 
     if exclude_project:
-        pages_from_paying_users_query = pages_from_paying_users_query.exclude(
-            project=exclude_project
+        eligible_external_pages_query = eligible_external_pages_query.exclude(project=exclude_project)
+
+    eligible_external_pages = eligible_external_pages_query.select_related("project__profile")
+
+    relevant_external_pages = list(
+        eligible_external_pages.order_by(CosineDistance("embedding", meta_description_embedding))[
+            :max_pages
+        ]
+    )
+
+    if not relevant_external_pages:
+        logger.info(
+            "[GetRelevantExternalPages] No pages with embeddings found from link-exchange projects"
         )
-
-    pages_from_paying_users = pages_from_paying_users_query.select_related("project__profile")
-
-    pages_with_active_subscriptions = [
-        page for page in pages_from_paying_users if page.project.profile.has_product_or_subscription
-    ]
-
-    if not pages_with_active_subscriptions:
-        logger.info("[GetRelevantExternalPages] No pages with embeddings found from paying users")
         return ProjectPage.objects.none()
-
-    page_ids = [page.id for page in pages_with_active_subscriptions]
-
-    relevant_external_pages = ProjectPage.objects.filter(id__in=page_ids).order_by(
-        CosineDistance("embedding", meta_description_embedding)
-    )[:max_pages]
 
     logger.info(
         "[GetRelevantExternalPages] Successfully found relevant external pages",
         num_relevant_pages=len(relevant_external_pages),
         max_pages=max_pages,
-        total_pages_with_embeddings=len(pages_with_active_subscriptions),
         meta_description_preview=meta_description[:100],
-        page_ids=page_ids,
     )
 
     return relevant_external_pages
