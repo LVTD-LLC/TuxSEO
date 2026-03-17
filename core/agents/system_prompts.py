@@ -92,12 +92,24 @@ def add_project_pages(ctx: RunContext) -> str:
                 """
 
         if optional_pages:
+            external_pages = [page for page in optional_pages if page.link_source == "external"]
+            max_external_links = max(1, len(external_pages)) if external_pages else 0
+
             instruction += """
 
               OPTIONAL PAGES (Use Intelligently):
               The following pages are available for linking if they are contextually relevant to the content. Use your judgment to determine which pages would provide value to readers and enhance the blog post. Only include links where they naturally fit and add value:
 
             """  # noqa: E501
+
+            if external_pages:
+                instruction += f"""
+              EXTERNAL AUTHORITY LINKING RULES:
+              - Prefer external links only when they directly support a specific claim or statistic.
+              - Keep external links readable and sparse (target 1-{max_external_links} total external links).
+              - Never force an external link just to hit a quota; skip if relevance is weak.
+                """
+
             for page in optional_pages:
                 instruction += f"""
                   --------
@@ -105,6 +117,7 @@ def add_project_pages(ctx: RunContext) -> str:
                   - URL: {page.url}
                   - Description: {page.description}
                   - Summary: {page.summary}
+                  - Source: {page.link_source}
                   --------
                 """
 
