@@ -23,15 +23,16 @@
         {{ create_form.prompt_guidance }}
         {% for error in create_form.prompt_guidance.errors %}<p class="mt-1 text-sm text-red-600">{{ error }}</p>{% endfor %}
       </div>
+      {% for error in create_form.non_field_errors %}<p class="mt-1 text-sm text-red-600">{{ error }}</p>{% endfor %}
       <button type="submit" class="inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-gray-900 rounded-md border border-gray-900 hover:bg-gray-800">Create post type</button>
     </form>
   </section>
 
   <section class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm">
     <h3 class="text-lg font-semibold text-gray-900">Existing custom post types</h3>
-    {% if project.custom_post_types.count %}
+    {% if custom_post_types %}
       <div class="mt-4 space-y-6">
-        {% for post_type in project.custom_post_types.all %}
+        {% for post_type in custom_post_types %}
           <article class="p-4 rounded-md border border-gray-200">
             <form method="post" action="{% url 'project_custom_post_type_update' project.id post_type.id %}" class="space-y-3">
               {% csrf_token %}

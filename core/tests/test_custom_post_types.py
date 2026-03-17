@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
+from django.urls import reverse
 
 from core.api.schemas import GenerateTitleSuggestionsIn
 from core.api.views import generate_title_suggestions
@@ -115,3 +116,60 @@ def test_generate_title_suggestions_rejects_foreign_custom_post_type(monkeypatch
 
     assert response["status"] == "error"
     assert response["message"] == "Custom post type not found for this project."
+
+
+@pytest.mark.django_db
+def test_create_duplicate_custom_post_type_name_does_not_500(client):
+    user = User.objects.create_user("owner-duplicate", "owner-duplicate@example.com", "secret")
+    project = Project.objects.create(profile=user.profile, name="Site", url="https://site.test")
+    ProjectCustomPostType.objects.create(
+        project=project,
+        name="Technical",
+        prompt_guidance="Focus on implementation details.",
+    )
+
+    client.force_login(user)
+    response = client.post(
+        reverse("project_custom_post_types", kwargs={"pk": project.id}),
+        {
+            "name": " technical ",
+            "prompt_guidance": "Another guidance",
+        },
+    )
+
+    assert response.status_code == 200
+    assert ProjectCustomPostType.objects.filter(project=project).count() == 1
+
+
+@pytest.mark.django_db
+def test_update_duplicate_custom_post_type_name_does_not_500(client):
+    user = User.objects.create_user("owner-update-duplicate", "owner-update-duplicate@example.com", "secret")
+    project = Project.objects.create(profile=user.profile, name="Site", url="https://site.test")
+    first_type = ProjectCustomPostType.objects.create(
+        project=project,
+        name="Technical",
+        prompt_guidance="Focus on implementation details.",
+    )
+    second_type = ProjectCustomPostType.objects.create(
+        project=project,
+        name="Beginner",
+        prompt_guidance="Beginner guidance.",
+    )
+
+    client.force_login(user)
+    response = client.post(
+        reverse(
+            "project_custom_post_type_update",
+            kwargs={"pk": project.id, "post_type_pk": second_type.id},
+        ),
+        {
+            "name": " technical ",
+            "prompt_guidance": "Updated guidance",
+        },
+        follow=True,
+    )
+
+    assert response.status_code == 200
+    second_type.refresh_from_db()
+    assert second_type.name == "Beginner"
+    assert first_type.name == "Technical"

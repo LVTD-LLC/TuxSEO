@@ -18,6 +18,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.messages.views import SuccessMessageMixin
 from django.core import signing
+from django.core.exceptions import ValidationError
 from django.db.models import Count, F, FloatField, Prefetch, Q, Sum
 from django.http import Http404, HttpResponse, HttpResponseRedirect
 from django.shortcuts import get_object_or_404, redirect, render
@@ -1062,7 +1063,9 @@ class ProjectEyeCatchingPostsView(LoginRequiredMixin, DetailView):
     context_object_name = "project"
 
     def get_queryset(self):
-        return Project.objects.filter(profile=self.request.user.profile)
+        return Project.objects.prefetch_related("custom_post_types").filter(
+            profile=self.request.user.profile
+        )
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -1125,7 +1128,9 @@ class ProjectSEOPostsView(LoginRequiredMixin, DetailView):
     context_object_name = "project"
 
     def get_queryset(self):
-        return Project.objects.filter(profile=self.request.user.profile)
+        return Project.objects.prefetch_related("custom_post_types").filter(
+            profile=self.request.user.profile
+        )
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -1188,7 +1193,9 @@ class ProjectCustomPostTypePostsView(LoginRequiredMixin, DetailView):
     context_object_name = "project"
 
     def get_queryset(self):
-        return Project.objects.filter(profile=self.request.user.profile)
+        return Project.objects.prefetch_related("custom_post_types").filter(
+            profile=self.request.user.profile
+        )
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -1256,11 +1263,14 @@ class ProjectCustomPostTypesView(LoginRequiredMixin, DetailView):
     context_object_name = "project"
 
     def get_queryset(self):
-        return Project.objects.filter(profile=self.request.user.profile)
+        return Project.objects.prefetch_related("custom_post_types").filter(
+            profile=self.request.user.profile
+        )
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["create_form"] = kwargs.get("create_form") or ProjectCustomPostTypeForm()
+        context["custom_post_types"] = list(self.object.custom_post_types.all())
         return context
 
     def post(self, request, *args, **kwargs):
@@ -1270,7 +1280,17 @@ class ProjectCustomPostTypesView(LoginRequiredMixin, DetailView):
         if create_form.is_valid():
             custom_post_type = create_form.save(commit=False)
             custom_post_type.project = self.object
-            custom_post_type.save()
+            try:
+                custom_post_type.save()
+            except ValidationError as error:
+                for field, messages_list in error.message_dict.items():
+                    target_field = field if field in create_form.fields else None
+                    for message in messages_list:
+                        create_form.add_error(target_field, message)
+                messages.error(request, "Could not create custom post type. Please check the form.")
+                context = self.get_context_data(create_form=create_form)
+                return self.render_to_response(context)
+
             messages.success(request, f"Created custom post type '{custom_post_type.name}'.")
             return redirect("project_custom_post_types", pk=self.object.pk)
 
@@ -1286,8 +1306,18 @@ class ProjectCustomPostTypeUpdateView(LoginRequiredMixin, View):
 
         form = ProjectCustomPostTypeForm(request.POST, instance=custom_post_type)
         if form.is_valid():
-            form.save()
-            messages.success(request, f"Updated custom post type '{custom_post_type.name}'.")
+            try:
+                form.save()
+                messages.success(request, f"Updated custom post type '{custom_post_type.name}'.")
+            except ValidationError as error:
+                validation_messages = []
+                for field, messages_list in error.message_dict.items():
+                    joined_messages = ", ".join(messages_list)
+                    validation_messages.append(f"{field}: {joined_messages}")
+                messages.error(
+                    request,
+                    "Could not update custom post type. " + " ".join(validation_messages),
+                )
         else:
             messages.error(request, "Could not update custom post type. Please check the form.")
 
