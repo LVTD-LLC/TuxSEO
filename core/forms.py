@@ -252,6 +252,51 @@ class ProjectScanForm(forms.ModelForm):
         fields = ["url"]
 
 
+class PlausibleIntegrationForm(forms.Form):
+    site_id = forms.CharField(
+        max_length=255,
+        label="Site ID",
+        widget=forms.TextInput(
+            attrs={
+                "class": "block px-3 py-2 w-full text-sm text-gray-900 bg-white rounded-md border border-gray-300 focus:ring-gray-500 focus:border-gray-500",
+                "placeholder": "example.com",
+            }
+        ),
+    )
+    api_key = forms.CharField(
+        max_length=255,
+        label="API Key",
+        widget=forms.PasswordInput(
+            render_value=True,
+            attrs={
+                "class": "block px-3 py-2 w-full text-sm text-gray-900 bg-white rounded-md border border-gray-300 focus:ring-gray-500 focus:border-gray-500",
+                "placeholder": "plausible_api_key",
+            },
+        ),
+    )
+    base_url = forms.URLField(
+        required=False,
+        initial="https://plausible.io",
+        label="Plausible URL",
+        widget=forms.URLInput(
+            attrs={
+                "class": "block px-3 py-2 w-full text-sm text-gray-900 bg-white rounded-md border border-gray-300 focus:ring-gray-500 focus:border-gray-500",
+                "placeholder": "https://plausible.io",
+            }
+        ),
+    )
+
+    def clean_site_id(self):
+        return self.cleaned_data["site_id"].strip()
+
+    def clean_api_key(self):
+        return self.cleaned_data["api_key"].strip()
+
+    def clean_base_url(self):
+        base_url = (self.cleaned_data.get("base_url") or "https://plausible.io").strip()
+        return base_url.rstrip("/")
+
+
 class AutoSubmissionSettingForm(forms.ModelForm):
     TIMEZONE_CHOICES = [
         ("UTC", "UTC"),

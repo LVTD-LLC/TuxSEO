@@ -1,5 +1,6 @@
 import pytest
 from django.contrib.auth.models import User
+from django.test import override_settings
 from django.urls import reverse
 
 from core.models import Project
@@ -58,3 +59,32 @@ def test_project_integrations_view_requires_login(client):
 
     assert response.status_code == 302
     assert response.url.startswith(reverse("account_login"))
+
+
+@pytest.mark.django_db
+@override_settings(
+    GOOGLE_CLIENT_ID="google-client-id",
+    GOOGLE_CLIENT_SECRET="google-client-secret",
+)
+def test_project_integrations_google_connect_redirects_to_google(client):
+    user, project = create_user_with_project("project-integrations-owner-4")
+    client.force_login(user)
+
+    response = client.post(
+        reverse("project_integrations", kwargs={"pk": project.id}),
+        {"action": "connect_google_analytics"},
+    )
+
+    assert response.status_code == 302
+    assert response.url.startswith("https://accounts.google.com/o/oauth2/v2/auth?")
+
+
+@pytest.mark.django_db
+def test_project_integrations_google_callback_rejects_invalid_state(client):
+    user, _ = create_user_with_project("project-integrations-owner-5")
+    client.force_login(user)
+
+    response = client.get(reverse("project_integrations_google_callback"), {"state": "bad-state"})
+
+    assert response.status_code == 302
+    assert response.url == reverse("home")
