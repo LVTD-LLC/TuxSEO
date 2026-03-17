@@ -241,7 +241,10 @@ def sync_project_attribution_from_profile(*, project, profile) -> None:
         project.first_touch_attribution = profile.first_touch_attribution
         update_fields.append("first_touch_attribution")
 
-    if profile.latest_touch_attribution:
+    if (
+        profile.latest_touch_attribution
+        and project.latest_touch_attribution != profile.latest_touch_attribution
+    ):
         project.latest_touch_attribution = profile.latest_touch_attribution
         update_fields.append("latest_touch_attribution")
 

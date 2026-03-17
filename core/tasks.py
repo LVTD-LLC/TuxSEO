@@ -877,8 +877,8 @@ def track_event(
                 "actor_id": str(profile.id),
                 "event_schema_version": EVENT_TAXONOMY_VERSION,
                 "event_stage": event_definition["stage"],
-                **attribution_properties,
                 **properties,
+                **attribution_properties,
             },
         )
 

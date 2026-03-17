@@ -1259,7 +1259,7 @@ class BlogPostTitleSuggestion(BaseModel):
 
         if GeneratedBlogPost.objects.filter(project__profile=self.project.profile).count() == 1:
             first_content_properties = {
-                "project_id": self.project.id,
+                "project_id": self.project_id,
                 "blog_post_id": blog_post.id,
                 "title_suggestion_id": self.id,
                 "content_type": content_type,
