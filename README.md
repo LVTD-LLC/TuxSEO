@@ -173,6 +173,14 @@ TuxSEO maintains a canonical event taxonomy and coverage matrix for funnel-safe 
 
 `core/analytics/event_taxonomy.json` is the source of truth for canonical event names + required properties.
 
+### PostHog dashboard pack (ops + funnel + LLM)
+
+The first-pass operational + product + LLM dashboard set is documented (with live links) in:
+
+- `docs/posthog-dashboards.md`
+
+Use `scripts/posthog_dashboard_bootstrap.py` to create/update all dashboard tiles idempotently.
+
 ### Analytics ingestion jobs (GA4, GSC, Plausible)
 
 TuxSEO now ships background ingestion for connected analytics providers:
