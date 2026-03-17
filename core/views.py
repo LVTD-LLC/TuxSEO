@@ -18,9 +18,10 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.messages.views import SuccessMessageMixin
 from django.core import signing
+from django.core.exceptions import ValidationError
 from django.db.models import Count, F, FloatField, Prefetch, Q, Sum
 from django.http import Http404, HttpResponse, HttpResponseRedirect
-from django.shortcuts import redirect, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
@@ -36,6 +37,7 @@ from core.forms import (
     AutoSubmissionSettingForm,
     PlausibleIntegrationForm,
     ProfileUpdateForm,
+    ProjectCustomPostTypeForm,
     ProjectScanForm,
 )
 from core.models import (
@@ -48,6 +50,7 @@ from core.models import (
     Profile,
     ProfileStateTransition,
     Project,
+    ProjectCustomPostType,
     ProjectEarnedLink,
     ProjectIntegration,
 )
@@ -1060,7 +1063,9 @@ class ProjectEyeCatchingPostsView(LoginRequiredMixin, DetailView):
     context_object_name = "project"
 
     def get_queryset(self):
-        return Project.objects.filter(profile=self.request.user.profile)
+        return Project.objects.prefetch_related("custom_post_types").filter(
+            profile=self.request.user.profile
+        )
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -1068,7 +1073,8 @@ class ProjectEyeCatchingPostsView(LoginRequiredMixin, DetailView):
         profile = self.request.user.profile
 
         all_suggestions = project.blog_post_title_suggestions.filter(
-            content_type=ContentType.SHARING
+            content_type=ContentType.SHARING,
+            custom_post_type__isnull=True,
         ).prefetch_related("generated_blog_posts")
 
         project_keywords = project.get_keywords()
@@ -1122,7 +1128,9 @@ class ProjectSEOPostsView(LoginRequiredMixin, DetailView):
     context_object_name = "project"
 
     def get_queryset(self):
-        return Project.objects.filter(profile=self.request.user.profile)
+        return Project.objects.prefetch_related("custom_post_types").filter(
+            profile=self.request.user.profile
+        )
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -1130,7 +1138,8 @@ class ProjectSEOPostsView(LoginRequiredMixin, DetailView):
         profile = self.request.user.profile
 
         all_suggestions = project.blog_post_title_suggestions.filter(
-            content_type=ContentType.SEO
+            content_type=ContentType.SEO,
+            custom_post_type__isnull=True,
         ).prefetch_related("generated_blog_posts")
 
         project_keywords = project.get_keywords()
@@ -1176,6 +1185,153 @@ class ProjectSEOPostsView(LoginRequiredMixin, DetailView):
         context["content_type_display"] = "SEO Optimized"
 
         return context
+
+
+class ProjectCustomPostTypePostsView(LoginRequiredMixin, DetailView):
+    model = Project
+    template_name = "project/project_custom_post_type_posts.html"
+    context_object_name = "project"
+
+    def get_queryset(self):
+        return Project.objects.prefetch_related("custom_post_types").filter(
+            profile=self.request.user.profile
+        )
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        project = self.object
+        profile = self.request.user.profile
+
+        custom_post_type = project.custom_post_types.filter(id=self.kwargs["post_type_pk"]).first()
+        if custom_post_type is None:
+            raise Http404("Custom post type not found")
+
+        all_suggestions = project.blog_post_title_suggestions.filter(
+            content_type=ContentType.SHARING,
+            custom_post_type=custom_post_type,
+        ).prefetch_related("generated_blog_posts")
+
+        project_keywords = project.get_keywords()
+
+        archived_suggestions = []
+        active_suggestions = []
+
+        for suggestion in all_suggestions:
+            suggestion.keywords_with_usage = []
+            if suggestion.target_keywords:
+                for keyword_text in suggestion.target_keywords:
+                    keyword_info = project_keywords.get(
+                        keyword_text.lower(),
+                        {"keyword": None, "in_use": False, "project_keyword_id": None},
+                    )
+                    suggestion.keywords_with_usage.append(
+                        {
+                            "text": keyword_text,
+                            "keyword": keyword_info["keyword"],
+                            "in_use": keyword_info["in_use"],
+                            "project_keyword_id": keyword_info["project_keyword_id"],
+                        }
+                    )
+
+            has_posted_blog_post = any(
+                blog_post.posted for blog_post in suggestion.generated_blog_posts.all()
+            )
+            if has_posted_blog_post:
+                continue
+
+            if suggestion.archived:
+                archived_suggestions.append(suggestion)
+            else:
+                active_suggestions.append(suggestion)
+
+        context["custom_post_type"] = custom_post_type
+        context["archived_suggestions"] = archived_suggestions
+        context["active_suggestions"] = active_suggestions
+        context["has_pro_subscription"] = profile.is_on_pro_plan
+        context["has_auto_submission_setting"] = AutoSubmissionSetting.objects.filter(
+            project=project
+        ).exists()
+        context["content_type"] = "SHARING"
+        context["content_type_display"] = custom_post_type.name
+
+        return context
+
+
+class ProjectCustomPostTypesView(LoginRequiredMixin, DetailView):
+    model = Project
+    template_name = "project/project_custom_post_types.html"
+    context_object_name = "project"
+
+    def get_queryset(self):
+        return Project.objects.prefetch_related("custom_post_types").filter(
+            profile=self.request.user.profile
+        )
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["create_form"] = kwargs.get("create_form") or ProjectCustomPostTypeForm()
+        context["custom_post_types"] = list(self.object.custom_post_types.all())
+        return context
+
+    def post(self, request, *args, **kwargs):
+        self.object = self.get_object()
+        create_form = ProjectCustomPostTypeForm(request.POST)
+
+        if create_form.is_valid():
+            custom_post_type = create_form.save(commit=False)
+            custom_post_type.project = self.object
+            try:
+                custom_post_type.save()
+            except ValidationError as error:
+                for field, messages_list in error.message_dict.items():
+                    target_field = field if field in create_form.fields else None
+                    for message in messages_list:
+                        create_form.add_error(target_field, message)
+                messages.error(request, "Could not create custom post type. Please check the form.")
+                context = self.get_context_data(create_form=create_form)
+                return self.render_to_response(context)
+
+            messages.success(request, f"Created custom post type '{custom_post_type.name}'.")
+            return redirect("project_custom_post_types", pk=self.object.pk)
+
+        messages.error(request, "Could not create custom post type. Please check the form.")
+        context = self.get_context_data(create_form=create_form)
+        return self.render_to_response(context)
+
+
+class ProjectCustomPostTypeUpdateView(LoginRequiredMixin, View):
+    def post(self, request, pk, post_type_pk):
+        project = get_object_or_404(Project, pk=pk, profile=request.user.profile)
+        custom_post_type = get_object_or_404(ProjectCustomPostType, pk=post_type_pk, project=project)
+
+        form = ProjectCustomPostTypeForm(request.POST, instance=custom_post_type)
+        if form.is_valid():
+            try:
+                form.save()
+                messages.success(request, f"Updated custom post type '{custom_post_type.name}'.")
+            except ValidationError as error:
+                validation_messages = []
+                for field, messages_list in error.message_dict.items():
+                    joined_messages = ", ".join(messages_list)
+                    validation_messages.append(f"{field}: {joined_messages}")
+                messages.error(
+                    request,
+                    "Could not update custom post type. " + " ".join(validation_messages),
+                )
+        else:
+            messages.error(request, "Could not update custom post type. Please check the form.")
+
+        return redirect("project_custom_post_types", pk=project.pk)
+
+
+class ProjectCustomPostTypeDeleteView(LoginRequiredMixin, View):
+    def post(self, request, pk, post_type_pk):
+        project = get_object_or_404(Project, pk=pk, profile=request.user.profile)
+        custom_post_type = get_object_or_404(ProjectCustomPostType, pk=post_type_pk, project=project)
+        deleted_name = custom_post_type.name
+        custom_post_type.delete()
+        messages.success(request, f"Deleted custom post type '{deleted_name}'.")
+        return redirect("project_custom_post_types", pk=project.pk)
 
 
 class ProjectIntegrationsView(LoginRequiredMixin, DetailView):

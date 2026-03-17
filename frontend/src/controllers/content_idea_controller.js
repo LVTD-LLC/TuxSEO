@@ -5,7 +5,8 @@ export default class extends Controller {
   static targets = ["form", "input"];
   static values = {
     projectId: Number,
-    contentType: String
+    contentType: String,
+    postTypeId: Number
   };
 
   toggleForm() {
@@ -38,7 +39,8 @@ export default class extends Controller {
         body: JSON.stringify({
           project_id: this.projectIdValue,
           user_prompt: idea,
-          content_type: contentType
+          content_type: contentType,
+          post_type_id: this.hasPostTypeIdValue ? this.postTypeIdValue : null
         })
       });
 

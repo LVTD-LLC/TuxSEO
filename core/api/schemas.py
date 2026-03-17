@@ -64,6 +64,7 @@ class GenerateTitleSuggestionsIn(Schema):
     content_type: str = ContentType.SHARING
     user_prompt: str = ""
     num_titles: int = 3
+    post_type_id: int | None = None
 
 
 class TitleSuggestionOut(Schema):

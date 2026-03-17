@@ -73,6 +73,7 @@ from core.models import (
     Keyword,
     Profile,
     Project,
+    ProjectCustomPostType,
     ProjectKeyword,
     ProjectPage,
 )
@@ -117,6 +118,22 @@ def should_allow_unverified_first_onboarding_project(profile, project_source: st
     is_onboarding_modal_source = project_source == "onboarding_modal"
     has_no_existing_projects = not Project.objects.filter(profile=profile).exists()
     return is_onboarding_modal_source and has_no_existing_projects
+
+
+def get_custom_post_type_for_generation(*, project: Project, post_type_id: int | None):
+    if post_type_id is None:
+        return None
+
+    return ProjectCustomPostType.objects.filter(id=post_type_id, project=project).first()
+
+
+def build_effective_user_prompt(*, custom_post_type, user_prompt: str) -> str:
+    custom_prompt = (custom_post_type.prompt_guidance or "").strip() if custom_post_type else ""
+    user_prompt = (user_prompt or "").strip()
+
+    if custom_prompt and user_prompt:
+        return f"{custom_prompt}\n\nAdditional user guidance:\n{user_prompt}"
+    return custom_prompt or user_prompt
 
 
 @api.post("/validate-url", response=ValidateUrlOut, auth=[session_auth])
@@ -375,6 +392,18 @@ def generate_title_suggestions(request: HttpRequest, data: GenerateTitleSuggesti
             **entitlement_error,
         }
 
+    custom_post_type = get_custom_post_type_for_generation(
+        project=project,
+        post_type_id=data.post_type_id,
+    )
+    if data.post_type_id and custom_post_type is None:
+        return {
+            "suggestions": [],
+            "suggestions_html": [],
+            "status": "error",
+            "message": "Custom post type not found for this project.",
+        }
+
     titles_to_generate = data.num_titles
     if profile.title_suggestion_limit:
         remaining_ideas = (
@@ -382,9 +411,23 @@ def generate_title_suggestions(request: HttpRequest, data: GenerateTitleSuggesti
         )
         titles_to_generate = min(data.num_titles, remaining_ideas)
 
-    suggestions = project.generate_title_suggestions(
-        content_type=content_type, num_titles=titles_to_generate
+    effective_user_prompt = build_effective_user_prompt(
+        custom_post_type=custom_post_type,
+        user_prompt=data.user_prompt,
     )
+
+    suggestions = project.generate_title_suggestions(
+        content_type=content_type,
+        num_titles=titles_to_generate,
+        user_prompt=effective_user_prompt,
+    )
+
+    if custom_post_type:
+        BlogPostTitleSuggestion.objects.filter(id__in=[s.id for s in suggestions]).update(
+            custom_post_type=custom_post_type
+        )
+        for suggestion in suggestions:
+            suggestion.custom_post_type = custom_post_type
 
     # Render HTML for each suggestion using the Django template
     suggestions_html = []
@@ -438,20 +481,38 @@ def generate_title_from_idea(request: HttpRequest, data: GenerateTitleSuggestion
     if entitlement_error:
         return entitlement_error
 
+    custom_post_type = get_custom_post_type_for_generation(
+        project=project,
+        post_type_id=data.post_type_id,
+    )
+    if data.post_type_id and custom_post_type is None:
+        return {"status": "error", "message": "Custom post type not found for this project."}
+
     try:
         try:
             content_type = ContentType[data.content_type]
         except KeyError:
             return {"status": "error", "message": f"Invalid content type: {data.content_type}"}
 
+        effective_user_prompt = build_effective_user_prompt(
+            custom_post_type=custom_post_type,
+            user_prompt=data.user_prompt,
+        )
+
         suggestions = project.generate_title_suggestions(
-            content_type=content_type, num_titles=1, user_prompt=data.user_prompt
+            content_type=content_type,
+            num_titles=1,
+            user_prompt=effective_user_prompt,
         )
 
         if not suggestions:
             return {"status": "error", "message": "No suggestions were generated"}
 
         suggestion = suggestions[0]
+
+        if custom_post_type:
+            suggestion.custom_post_type = custom_post_type
+            suggestion.save(update_fields=["custom_post_type"])
 
         # Add keyword usage info to the suggestion
         project_keywords = project.get_keywords()
