@@ -21,6 +21,11 @@ def _vec(*pairs):
     return data
 
 
+def _mark_profile_paid(profile):
+    profile.user.is_superuser = True
+    profile.user.save(update_fields=["is_superuser"])
+
+
 @pytest.fixture
 def blog_post_with_title_suggestion(db):
     user = User.objects.create_user(username="safe-links", password="x")
@@ -87,6 +92,93 @@ def test_external_link_blocked_when_opt_in_or_relevance_fails(monkeypatch, blog_
     assert suggestion_log.decision == LinkOpportunityAuditLog.Decision.BLOCKED
     assert "source_project_not_opted_in" in suggestion_log.reasons
     assert "below_relevance_threshold" in suggestion_log.reasons
+
+
+@pytest.mark.django_db
+def test_paid_source_blocks_free_external_project_from_promotion(
+    monkeypatch, blog_post_with_title_suggestion
+):
+    blog_post = blog_post_with_title_suggestion
+    _mark_profile_paid(blog_post.project.profile)
+
+    free_target_user = User.objects.create_user(username="free-target", password="x")
+    free_target_project = Project.objects.create(
+        profile=free_target_user.profile,
+        url="https://free-target.example.com",
+        name="Free target",
+        particiate_in_link_exchange=True,
+    )
+    free_target_page = ProjectPage.objects.create(
+        project=free_target_project,
+        url="https://free-target.example.com/page",
+        title="Free target page",
+        description="Free target description",
+        summary="Free target summary",
+        embedding=_vec((0, 1.0)),
+    )
+
+    monkeypatch.setattr("core.models.get_jina_embedding", lambda _text: _vec((0, 1.0)))
+
+    _safe_internal, safe_external = blog_post._evaluate_safe_link_opportunities(
+        internal_pages=[],
+        external_pages=[free_target_page],
+    )
+
+    assert safe_external == []
+
+    suggestion_log = LinkOpportunityAuditLog.objects.get(
+        generated_blog_post=blog_post,
+        phase=LinkOpportunityAuditLog.Phase.SUGGESTION,
+        candidate_page=free_target_page,
+    )
+    assert suggestion_log.decision == LinkOpportunityAuditLog.Decision.BLOCKED
+    assert "target_project_not_paid_for_promotion" in suggestion_log.reasons
+    assert "free_project_cannot_be_promoted_into_paid_post" in suggestion_log.reasons
+
+
+@pytest.mark.django_db
+def test_free_source_can_receive_paid_external_link_when_relevant(
+    monkeypatch, blog_post_with_title_suggestion
+):
+    blog_post = blog_post_with_title_suggestion
+
+    paid_target_user = User.objects.create_user(username="paid-target", password="x")
+    _mark_profile_paid(paid_target_user.profile)
+
+    paid_target_project = Project.objects.create(
+        profile=paid_target_user.profile,
+        url="https://paid-target.example.com",
+        name="Paid target",
+        particiate_in_link_exchange=True,
+    )
+    paid_target_page = ProjectPage.objects.create(
+        project=paid_target_project,
+        url="https://paid-target.example.com/page",
+        title="Paid target page",
+        description="Paid target description",
+        summary="Paid target summary",
+        embedding=_vec((0, 1.0)),
+    )
+
+    monkeypatch.setattr("core.models.get_jina_embedding", lambda _text: _vec((0, 1.0)))
+
+    _safe_internal, safe_external = blog_post._evaluate_safe_link_opportunities(
+        internal_pages=[],
+        external_pages=[paid_target_page],
+    )
+
+    assert [page.id for page in safe_external] == [paid_target_page.id]
+
+    suggestion_log = LinkOpportunityAuditLog.objects.get(
+        generated_blog_post=blog_post,
+        phase=LinkOpportunityAuditLog.Phase.SUGGESTION,
+        candidate_page=paid_target_page,
+    )
+    assert suggestion_log.decision == LinkOpportunityAuditLog.Decision.ALLOWED
+    assert "source_project_free" in suggestion_log.policy_flags
+    assert "target_project_paid" in suggestion_log.policy_flags
+    assert "eligibility_passed" in suggestion_log.policy_flags
+    assert "relevance_passed" in suggestion_log.policy_flags
 
 
 @pytest.mark.django_db

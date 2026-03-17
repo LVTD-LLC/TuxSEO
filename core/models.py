@@ -1568,12 +1568,37 @@ class GeneratedBlogPost(BaseModel):
         relation = ""
 
         if link_source == "external":
+            source_is_paid = bool(
+                self.project.profile and self.project.profile.has_product_or_subscription
+            )
+            target_is_paid = bool(
+                page.project
+                and page.project.profile
+                and page.project.profile.has_product_or_subscription
+            )
+
             if not self.project.particiate_in_link_exchange:
                 reasons.append("source_project_not_opted_in")
             if not page.project or not page.project.particiate_in_link_exchange:
                 reasons.append("target_project_not_opted_in")
+
+            # Eligibility policy:
+            # - only paid projects are eligible to be promoted cross-project
+            # - free projects must never be promoted into paid-project posts
+            if not target_is_paid:
+                reasons.append("target_project_not_paid_for_promotion")
+            if source_is_paid and not target_is_paid:
+                reasons.append("free_project_cannot_be_promoted_into_paid_post")
+
             relation = "nofollow"
-            flags.extend(["external", "nofollow_supported"])
+            flags.extend(
+                [
+                    "external",
+                    "nofollow_supported",
+                    "source_project_paid" if source_is_paid else "source_project_free",
+                    "target_project_paid" if target_is_paid else "target_project_free",
+                ]
+            )
         else:
             flags.append("internal")
 
@@ -1619,6 +1644,12 @@ class GeneratedBlogPost(BaseModel):
         ).count()
         if proposed_anchor and identical_anchor_count >= max_identical_anchor_per_window:
             reasons.append("anchor_diversity_cap_exceeded")
+
+        has_eligibility_rejection = any("paid" in reason or "opted_in" in reason for reason in reasons)
+        has_relevance_rejection = any("relevance" in reason for reason in reasons)
+
+        flags.append("eligibility_passed" if not has_eligibility_rejection else "eligibility_failed")
+        flags.append("relevance_passed" if not has_relevance_rejection else "relevance_failed")
 
         allowed = len(reasons) == 0
 
