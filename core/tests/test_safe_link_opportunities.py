@@ -184,6 +184,7 @@ def test_free_source_can_receive_paid_external_link_when_relevant(
 @pytest.mark.django_db
 def test_velocity_and_anchor_diversity_caps_block_candidate(monkeypatch, blog_post_with_title_suggestion):
     blog_post = blog_post_with_title_suggestion
+    _mark_profile_paid(blog_post.project.profile)
 
     target_project = Project.objects.create(
         profile=blog_post.project.profile,
