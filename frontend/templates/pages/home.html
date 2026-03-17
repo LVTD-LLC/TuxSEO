@@ -4,7 +4,7 @@
 {% block content %}
 <div class="isolate relative px-6 mt-10 lg:px-8">
   <div class="mx-auto text-center">
-    <div data-controller="scan-progress">
+    <div data-controller="scan-progress project-search">
       <div class="px-6 mx-auto mt-12 max-w-7xl lg:px-8">
         <div class="mx-auto max-w-2xl">
           <div class="flex justify-between items-center">
@@ -89,7 +89,20 @@
             </a>
           </form>
 
-          <div class="mt-8 space-y-8" data-scan-progress-target="projectsList">
+          <div class="mt-8 {% if projects %}{% else %}hidden {% endif %}" data-project-search-target="searchContainer">
+            <label for="project-search-input" class="sr-only">Search projects</label>
+            <input
+              id="project-search-input"
+              type="search"
+              placeholder="Search projects"
+              autocomplete="off"
+              data-project-search-target="query"
+              data-action="input->project-search#filter"
+              class="w-full px-3.5 py-2.5 text-gray-900 rounded-md border border-gray-300 shadow-sm transition-all duration-200 ease-in-out placeholder:text-gray-400 focus:border-gray-500 focus:ring-1 focus:ring-gray-500 hover:border-gray-400 sm:text-sm sm:leading-6"
+            >
+          </div>
+
+          <div class="mt-8 space-y-8" data-scan-progress-target="projectsList" data-project-search-target="list">
             {% if projects %}
               {% for project_data in projects %}
                 {% with project=project_data.project %}
@@ -101,6 +114,10 @@
                 <p class="text-sm text-gray-500">No projects yet. Add your first project above!</p>
               </div>
             {% endif %}
+          </div>
+
+          <div data-project-search-target="emptyState" class="hidden p-8 mt-4 text-center bg-white rounded-lg border border-gray-200 shadow-sm">
+            <p class="text-sm text-gray-500">No projects match your search.</p>
           </div>
         </div>
       </div>
