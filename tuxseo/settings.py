@@ -26,6 +26,7 @@ from sentry_sdk.integrations.redis import RedisIntegration
 from structlog_sentry import SentryProcessor
 
 from tuxseo.logging_utils import scrubbing_callback
+from tuxseo.posthog_logs import PostHogLogsEmitter, PostHogLogsProcessor, ensure_exception_fields, redact_event
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -42,6 +43,24 @@ ENVIRONMENT = env("ENVIRONMENT")
 SENTRY_DSN = env("SENTRY_DSN", default="")
 
 LOGFIRE_TOKEN = env("LOGFIRE_TOKEN", default="")
+
+POSTHOG_API_KEY = env("POSTHOG_API_KEY", default="")
+POSTHOG_INGEST_HOST = env("POSTHOG_INGEST_HOST", default="https://us.i.posthog.com")
+POSTHOG_LOGS_ENABLED = env.bool("POSTHOG_LOGS_ENABLED", default=ENVIRONMENT == "prod")
+POSTHOG_LOGS_ENDPOINT = env(
+    "POSTHOG_LOGS_ENDPOINT",
+    default=f"{POSTHOG_INGEST_HOST.rstrip('/')}/v1/logs",
+)
+POSTHOG_LOGS_BATCH_MAX_QUEUE_SIZE = env.int("POSTHOG_LOGS_BATCH_MAX_QUEUE_SIZE", default=2048)
+POSTHOG_LOGS_BATCH_MAX_EXPORT_BATCH_SIZE = env.int(
+    "POSTHOG_LOGS_BATCH_MAX_EXPORT_BATCH_SIZE", default=256
+)
+POSTHOG_LOGS_BATCH_SCHEDULE_DELAY_MILLIS = env.int(
+    "POSTHOG_LOGS_BATCH_SCHEDULE_DELAY_MILLIS", default=4000
+)
+POSTHOG_LOGS_BATCH_EXPORT_TIMEOUT_MILLIS = env.int(
+    "POSTHOG_LOGS_BATCH_EXPORT_TIMEOUT_MILLIS", default=30000
+)
 
 if LOGFIRE_TOKEN != "":
     logfire.configure(
@@ -102,6 +121,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "tuxseo.middleware.RequestLogContextMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "allauth.account.middleware.AccountMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
@@ -444,6 +464,18 @@ LOGGING = {
     },
 }
 
+posthog_logs_emitter = PostHogLogsEmitter(
+    enabled=POSTHOG_LOGS_ENABLED,
+    endpoint=POSTHOG_LOGS_ENDPOINT,
+    api_key=POSTHOG_API_KEY,
+    service_name="tuxseo-backend",
+    environment=ENVIRONMENT,
+    batch_max_queue_size=POSTHOG_LOGS_BATCH_MAX_QUEUE_SIZE,
+    batch_max_export_batch_size=POSTHOG_LOGS_BATCH_MAX_EXPORT_BATCH_SIZE,
+    batch_schedule_delay_millis=POSTHOG_LOGS_BATCH_SCHEDULE_DELAY_MILLIS,
+    batch_export_timeout_millis=POSTHOG_LOGS_BATCH_EXPORT_TIMEOUT_MILLIS,
+)
+
 structlog_processors = [
     structlog.contextvars.merge_contextvars,
     structlog.stdlib.filter_by_level,
@@ -452,8 +484,13 @@ structlog_processors = [
     structlog.stdlib.add_log_level,
     structlog.stdlib.PositionalArgumentsFormatter(),
     structlog.processors.StackInfoRenderer(),
-    # structlog.processors.format_exc_info,
+    structlog.processors.format_exc_info,
+    ensure_exception_fields,
+    redact_event,
 ]
+
+if posthog_logs_emitter.enabled:
+    structlog_processors.append(PostHogLogsProcessor(posthog_logs_emitter))
 
 if SENTRY_DSN:
     structlog_processors.append(
@@ -509,7 +546,6 @@ if SENTRY_DSN and ENVIRONMENT == "prod":
         include_local_variables=True,
     )
 
-POSTHOG_API_KEY = env("POSTHOG_API_KEY", default="")
 BUTTONDOWN_API_KEY = env("BUTTONDOWN_API_KEY", default="")
 
 STRIPE_LIVE_SECRET_KEY = env("STRIPE_LIVE_SECRET_KEY", default="")
