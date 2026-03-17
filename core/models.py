@@ -1766,6 +1766,30 @@ class GeneratedBlogPost(BaseModel):
         if placement_logs:
             LinkOpportunityAuditLog.objects.bulk_create(placement_logs)
 
+        now = timezone.now()
+        for page in candidate_pages:
+            if page.project_id == self.project_id:
+                continue
+
+            final_anchor = final_anchor_by_url.get(page.url, "")
+            if not final_anchor:
+                continue
+
+            source_page_url = f"{self.project.url.rstrip('/')}/{self.slug.lstrip('/')}"
+            ProjectEarnedLink.objects.update_or_create(
+                source_project=self.project,
+                target_project=page.project,
+                source_page_url=source_page_url,
+                target_page_url=page.url,
+                defaults={
+                    "source_generated_blog_post": self,
+                    "source_page_title": self.title,
+                    "target_page": page,
+                    "last_anchor": final_anchor,
+                    "last_seen_at": now,
+                },
+            )
+
     def _get_link_candidate_pages(self, max_pages=4, max_external_pages=3):
         manually_selected_project_pages = list(self.project.project_pages.filter(always_use=True))
         relevant_project_pages = list(
@@ -2485,6 +2509,52 @@ class AgentExecutionJob(BaseModel):
 
     def __str__(self):
         return f"Job {self.id} {self.operation} ({self.status})"
+
+
+class ProjectEarnedLink(BaseModel):
+    source_project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="outbound_earned_links",
+    )
+    target_project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="inbound_earned_links",
+    )
+    source_generated_blog_post = models.ForeignKey(
+        GeneratedBlogPost,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="earned_links_created",
+    )
+    source_page_title = models.CharField(max_length=255, blank=True, default="")
+    source_page_url = models.URLField(max_length=500, blank=True, default="")
+    target_page = models.ForeignKey(
+        ProjectPage,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="earned_links_received",
+    )
+    target_page_url = models.URLField(max_length=500)
+    first_seen_at = models.DateTimeField(default=timezone.now)
+    last_seen_at = models.DateTimeField(default=timezone.now)
+    last_anchor = models.CharField(max_length=255, blank=True, default="")
+
+    class Meta:
+        unique_together = (
+            "source_project",
+            "target_project",
+            "source_page_url",
+            "target_page_url",
+        )
+        indexes = [
+            models.Index(fields=["target_project", "last_seen_at"]),
+            models.Index(fields=["source_project", "last_seen_at"]),
+            models.Index(fields=["target_page_url"]),
+        ]
 
 
 class LinkOpportunityAuditLog(BaseModel):

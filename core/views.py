@@ -47,6 +47,7 @@ from core.models import (
     Profile,
     ProfileStateTransition,
     Project,
+    ProjectEarnedLink,
     ProjectIntegration,
 )
 from core.outcome_attribution import get_project_reporting_snapshot
@@ -1472,6 +1473,37 @@ class ProjectPagesView(LoginRequiredMixin, DetailView):
         context["ai_pages_count"] = ai_pages_count
         context["sitemap_pages_count"] = sitemap_pages_count
         context["unanalyzed_pages_count"] = total_pages_count - analyzed_pages_count
+
+        return context
+
+
+class ProjectEarnedLinksView(LoginRequiredMixin, DetailView):
+    model = Project
+    template_name = "project/project_earned_links.html"
+    context_object_name = "project"
+
+    def get_queryset(self):
+        return Project.objects.filter(profile=self.request.user.profile)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        project = self.object
+
+        earned_links = list(
+            ProjectEarnedLink.objects.filter(target_project=project)
+            .select_related(
+                "source_project",
+                "source_generated_blog_post",
+                "target_page",
+            )
+            .order_by("-last_seen_at", "-created_at")
+        )
+
+        context["earned_links"] = earned_links
+        context["total_earned_links_count"] = len(earned_links)
+        context["unique_source_projects_count"] = len(
+            {link.source_project_id for link in earned_links}
+        )
 
         return context
 
