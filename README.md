@@ -233,6 +233,7 @@ Key env settings:
 - `SITEMAP_SYNC_SCHEDULER_ENABLED` (default `true`)
 - `SITEMAP_SYNC_INTERVAL_HOURS` (default `6`)
 - `SITEMAP_SYNC_TIMEOUT_SECONDS`, `SITEMAP_SYNC_MAX_RETRIES`, `SITEMAP_SYNC_RETRY_BACKOFF_SECONDS`
+- `USE_REDIS_CACHE` (enable shared Redis cache for cross-worker sync locks)
 
 ### Custom post types for blog idea generation
 
