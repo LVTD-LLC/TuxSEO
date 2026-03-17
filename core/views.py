@@ -64,6 +64,11 @@ logger = get_tuxseo_logger(__name__)
 User = get_user_model()
 
 
+def get_google_integrations_callback_url():
+    site_url = settings.SITE_URL.rstrip("/")
+    return f"{site_url}{reverse('project_integrations_google_callback')}"
+
+
 PRICE_SELECTION_RULES = {
     "Pro - Monthly": {
         "amount": 9900,
@@ -1122,9 +1127,7 @@ class ProjectIntegrationsView(LoginRequiredMixin, DetailView):
         }
         self.request.session.set_expiry(600)
 
-        callback_url = self.request.build_absolute_uri(
-            reverse("project_integrations_google_callback")
-        )
+        callback_url = get_google_integrations_callback_url()
         scope = self.google_scope_map[provider]
 
         params = {
@@ -1246,7 +1249,7 @@ class ProjectIntegrationsGoogleCallbackView(LoginRequiredMixin, View):
         return redirect("project_integrations", pk=project.pk)
 
     def _exchange_google_code_for_token(self, request, code):
-        callback_url = request.build_absolute_uri(reverse("project_integrations_google_callback"))
+        callback_url = get_google_integrations_callback_url()
         try:
             response = requests.post(
                 "https://oauth2.googleapis.com/token",
