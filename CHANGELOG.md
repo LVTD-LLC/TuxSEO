@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pages
   - added changelog page
   - features to the pro plan on pricing page
+  - periodic sitemap sync for "Your Pages" across sitemap-enabled projects with per-project locking, sitemap index traversal, stale URL marking, and configurable scheduler interval
+  - manual per-project sitemap "Sync now" API trigger for support/debugging
 - Monitoring
   - Sentry Agent Monitoring
   - structured PostHog Logs pipeline for backend logs (web requests, background jobs, AI generation flows) with correlation IDs, async OTLP batching, and redaction safeguards

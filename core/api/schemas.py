@@ -330,6 +330,12 @@ class UpdateSitemapUrlOut(Schema):
     message: str
 
 
+class SyncSitemapNowOut(Schema):
+    status: str
+    message: str
+    task_id: str = ""
+
+
 class ToggleProjectPageAlwaysUseIn(Schema):
     page_id: int
 

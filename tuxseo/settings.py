@@ -370,6 +370,19 @@ Q_CLUSTER = {
     "error_reporter": {},
 }
 
+SITEMAP_SYNC_INTERVAL_HOURS = max(1, env.int("SITEMAP_SYNC_INTERVAL_HOURS", default=6))
+SITEMAP_SYNC_SCHEDULER_ENABLED = env.bool("SITEMAP_SYNC_SCHEDULER_ENABLED", default=True)
+SITEMAP_SYNC_TIMEOUT_SECONDS = max(5, env.int("SITEMAP_SYNC_TIMEOUT_SECONDS", default=30))
+SITEMAP_SYNC_MAX_RETRIES = max(1, env.int("SITEMAP_SYNC_MAX_RETRIES", default=3))
+SITEMAP_SYNC_RETRY_BACKOFF_SECONDS = max(
+    0.1, env.float("SITEMAP_SYNC_RETRY_BACKOFF_SECONDS", default=1.0)
+)
+SITEMAP_SYNC_MAX_INDEX_DEPTH = max(0, env.int("SITEMAP_SYNC_MAX_INDEX_DEPTH", default=2))
+SITEMAP_SYNC_MAX_CHILD_SITEMAPS = max(1, env.int("SITEMAP_SYNC_MAX_CHILD_SITEMAPS", default=50))
+SITEMAP_SYNC_LOCK_TTL_SECONDS = max(
+    60, env.int("SITEMAP_SYNC_LOCK_TTL_SECONDS", default=3600)
+)
+
 
 def extract_from_record(logger, name, event_dict):
     """

@@ -47,6 +47,7 @@ from core.api.schemas import (
     ProjectScanOut,
     SubmitFeedbackIn,
     SubmitSitemapIn,
+    SyncSitemapNowOut,
     TaskStatusOut,
     ToggleAutoSubmissionOut,
     ToggleLinkExchangeOut,
@@ -968,6 +969,32 @@ def submit_sitemap(request: HttpRequest, project_id: int, data: SubmitSitemapIn)
     return {
         "status": "success",
         "message": "Sitemap submitted successfully! Your pages will be analyzed shortly.",
+    }
+
+
+@api.post(
+    "/project/{project_id}/sitemap/sync-now/",
+    response=SyncSitemapNowOut,
+    auth=[session_auth],
+)
+def sync_sitemap_now(request: HttpRequest, project_id: int):
+    """Manually trigger sitemap sync for a project (debug/support helper)."""
+    profile = request.auth
+    project = get_object_or_404(Project, id=project_id, profile=profile)
+
+    if not project.sitemap_url.strip():
+        return {
+            "status": "error",
+            "message": "Project has no sitemap URL configured.",
+            "task_id": "",
+        }
+
+    task_id = async_task("core.tasks.parse_sitemap_and_save_urls", project.id, group="Parse Sitemap")
+
+    return {
+        "status": "success",
+        "message": "Sitemap sync queued.",
+        "task_id": str(task_id),
     }
 
 

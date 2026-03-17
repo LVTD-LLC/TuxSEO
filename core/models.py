@@ -2315,6 +2315,17 @@ class ProjectPage(BaseModel):
         help_text="When enabled, this page link will always be included in generated blog posts",
     )
 
+    # Sitemap sync state
+    sitemap_is_stale = models.BooleanField(
+        default=False,
+        help_text="True when this URL was previously discovered via sitemap but is missing in the latest sync run.",
+    )
+    sitemap_last_seen_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When this URL was last seen in a successful sitemap sync.",
+    )
+
     def __str__(self):
         return f"{self.project.name}: {self.title}"
 
