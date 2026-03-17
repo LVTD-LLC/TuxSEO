@@ -172,7 +172,10 @@ Projects can now define reusable **custom post types** under the Posts sidebar:
   - a unique, clean name (validated per project)
   - prompt guidance (required, max length enforced)
 - each custom type appears directly in Posts navigation
-- selecting a custom type opens a dedicated idea-generation page that applies its guidance automatically when generating suggestions
+- selecting a custom type opens a dedicated generation page that applies its guidance automatically to both:
+  - title suggestion generation
+  - full article generation from those suggestions
+- built-in post types continue to use the default generation behavior unchanged
 
 ### Deterministic content quality evaluation
 

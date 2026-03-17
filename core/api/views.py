@@ -420,6 +420,7 @@ def generate_title_suggestions(request: HttpRequest, data: GenerateTitleSuggesti
         content_type=content_type,
         num_titles=titles_to_generate,
         user_prompt=effective_user_prompt,
+        custom_post_type_prompt=(custom_post_type.prompt_guidance if custom_post_type else ""),
     )
 
     if custom_post_type:
@@ -503,6 +504,7 @@ def generate_title_from_idea(request: HttpRequest, data: GenerateTitleSuggestion
             content_type=content_type,
             num_titles=1,
             user_prompt=effective_user_prompt,
+            custom_post_type_prompt=(custom_post_type.prompt_guidance if custom_post_type else ""),
         )
 
         if not suggestions:

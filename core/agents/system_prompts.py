@@ -175,3 +175,18 @@ def add_webpage_content(ctx: RunContext[WebPageContent]) -> str:
         f"Description: {ctx.deps.description}"
         f"Content: {ctx.deps.markdown_content}"
     )
+
+
+def add_custom_post_type_guidance(ctx: RunContext[BlogPostGenerationContext]) -> str:
+    custom_prompt = (ctx.deps.custom_post_type_prompt or "").strip()
+    if not custom_prompt:
+        return ""
+
+    return f"""
+        CUSTOM POST TYPE REQUIREMENT (HIGH PRIORITY)
+        Apply this guidance throughout the article's voice and structure:
+        "{custom_prompt}"
+
+        Keep the guidance visible in the final draft while preserving clear structure,
+        natural readability, and SEO hygiene.
+    """
