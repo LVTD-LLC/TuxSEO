@@ -73,6 +73,17 @@
       </li>
       <li>
         <a
+          href="{% url 'project_earned_links' project.id %}"
+          class="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors {% if request.resolver_match.url_name == 'project_earned_links' %}bg-gray-100 text-gray-900{% else %}text-gray-700 hover:bg-gray-50 hover:text-gray-900{% endif %}"
+        >
+          <svg class="mr-3 w-5 h-5 {% if request.resolver_match.url_name == 'project_earned_links' %}text-gray-900{% else %}text-gray-400{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 015.657 5.656l-3 3a4 4 0 01-5.657-5.656m-1.414 1.414a4 4 0 01-5.657-5.656l3-3a4 4 0 015.657 5.656" />
+          </svg>
+          Earned Links
+        </a>
+      </li>
+      <li>
+        <a
           href="{% url 'project_competitors' project.id %}"
           class="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors {% if request.resolver_match.url_name == 'project_competitors' %}bg-gray-100 text-gray-900{% else %}text-gray-700 hover:bg-gray-50 hover:text-gray-900{% endif %}"
         >

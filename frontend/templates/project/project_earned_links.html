@@ -1,0 +1,69 @@
+{% extends "base_project.html" %}
+
+{% block meta %}
+  <title>TuxSEO - Earned Links for {{ project.name }}</title>
+  <meta name="description" content="Inbound links earned from other TuxSEO projects for {{ project.name }}." />
+{% endblock meta %}
+
+{% block project_content %}
+<div class="mb-6">
+  <h2 class="text-2xl font-bold text-gray-900">Earned Links</h2>
+  <p class="mt-2 text-gray-600">
+    Inbound links where other TuxSEO projects referenced your pages in generated content.
+  </p>
+</div>
+
+<div class="grid grid-cols-1 gap-4 mb-6 sm:grid-cols-2">
+  <div class="p-4 bg-white rounded-lg border border-gray-200 shadow-sm">
+    <p class="text-sm font-medium text-gray-500">Inbound Links</p>
+    <p class="mt-1 text-2xl font-semibold text-gray-900">{{ total_earned_links_count }}</p>
+  </div>
+  <div class="p-4 bg-white rounded-lg border border-gray-200 shadow-sm">
+    <p class="text-sm font-medium text-gray-500">Source Projects</p>
+    <p class="mt-1 text-2xl font-semibold text-gray-900">{{ unique_source_projects_count }}</p>
+  </div>
+</div>
+
+<div class="overflow-hidden bg-white rounded-lg border border-gray-200 shadow-sm">
+  {% if earned_links %}
+    <div class="overflow-x-auto">
+      <table class="min-w-full divide-y divide-gray-200">
+        <thead class="bg-gray-50">
+          <tr>
+            <th class="px-4 py-3 text-xs font-semibold tracking-wider text-left text-gray-500 uppercase">Source Project</th>
+            <th class="px-4 py-3 text-xs font-semibold tracking-wider text-left text-gray-500 uppercase">Source Post/Page</th>
+            <th class="px-4 py-3 text-xs font-semibold tracking-wider text-left text-gray-500 uppercase">Target Page</th>
+            <th class="px-4 py-3 text-xs font-semibold tracking-wider text-left text-gray-500 uppercase">Last Seen</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-100 bg-white">
+          {% for link in earned_links %}
+            <tr>
+              <td class="px-4 py-3 text-sm text-gray-900">{{ link.source_project.name }}</td>
+              <td class="px-4 py-3 text-sm text-gray-700">
+                {% if link.source_page_title %}
+                  {{ link.source_page_title }}
+                {% elif link.source_generated_blog_post %}
+                  {{ link.source_generated_blog_post.title }}
+                {% else %}
+                  Generated content
+                {% endif %}
+              </td>
+              <td class="px-4 py-3 text-sm">
+                <a href="{{ link.target_page_url }}" target="_blank" rel="noopener noreferrer" class="text-gray-900 underline break-all">
+                  {{ link.target_page_url }}
+                </a>
+              </td>
+              <td class="px-4 py-3 text-sm text-gray-700">{{ link.last_seen_at|date:"Y-m-d H:i" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="p-6 text-sm text-gray-600">
+      No earned links yet. Once another TuxSEO project links to your pages in generated content, entries will show up here.
+    </div>
+  {% endif %}
+</div>
+{% endblock project_content %}

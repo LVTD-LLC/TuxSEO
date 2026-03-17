@@ -54,6 +54,11 @@ urlpatterns = [
     ),
     path("project/<int:pk>/pages/", views.ProjectPagesView.as_view(), name="project_pages"),
     path(
+        "project/<int:pk>/earned-links/",
+        views.ProjectEarnedLinksView.as_view(),
+        name="project_earned_links",
+    ),
+    path(
         "project/<int:pk>/competitors/",
         views.ProjectCompetitorsView.as_view(),
         name="project_competitors",
