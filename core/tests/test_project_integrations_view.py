@@ -1,3 +1,5 @@
+from urllib.parse import parse_qs, urlparse
+
 import pytest
 from django.contrib.auth.models import User
 from django.test import override_settings
@@ -65,6 +67,7 @@ def test_project_integrations_view_requires_login(client):
 @override_settings(
     GOOGLE_CLIENT_ID="google-client-id",
     GOOGLE_CLIENT_SECRET="google-client-secret",
+    SITE_URL="https://tuxseo.com",
 )
 def test_project_integrations_google_connect_redirects_to_google(client):
     user, project = create_user_with_project("project-integrations-owner-4")
@@ -77,6 +80,11 @@ def test_project_integrations_google_connect_redirects_to_google(client):
 
     assert response.status_code == 302
     assert response.url.startswith("https://accounts.google.com/o/oauth2/v2/auth?")
+
+    query = parse_qs(urlparse(response.url).query)
+    assert query["redirect_uri"] == [
+        "https://tuxseo.com/project/integrations/google/callback/"
+    ]
 
 
 @pytest.mark.django_db
