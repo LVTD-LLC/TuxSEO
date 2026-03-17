@@ -275,8 +275,12 @@ def validate_attribution_payload(payload: dict[str, Any]) -> None:
 
 def build_attribution_event_properties(*, profile, project=None) -> dict[str, Any]:
     source = project if project is not None else profile
-    first_touch = getattr(source, "first_touch_attribution", None) or {}
-    latest_touch = getattr(source, "latest_touch_attribution", None) or {}
+
+    first_touch_value = getattr(source, "first_touch_attribution", None)
+    latest_touch_value = getattr(source, "latest_touch_attribution", None)
+
+    first_touch = first_touch_value if isinstance(first_touch_value, dict) else {}
+    latest_touch = latest_touch_value if isinstance(latest_touch_value, dict) else {}
 
     if not first_touch and not latest_touch:
         return {}
