@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- Analytics
+  - implementation-ready integration analytics architecture spec covering GA4, GSC, and Plausible (`docs/integration-analytics-architecture-v1.md`)
 - Pages
   - added changelog page
   - features to the pro plan on pricing page
