@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Posts
   - custom post types per project with validated name + prompt guidance, CRUD management UI, and Posts navigation integration
   - custom post types can be selected in navigation and applied as generation guidance for title suggestions
+  - custom post-type guidance now also propagates into full article generation, with regression coverage for both title and content generation paths
 - Emails
   - Feedback email (for profiles with one product)
   - create project reminder for signed up users without project

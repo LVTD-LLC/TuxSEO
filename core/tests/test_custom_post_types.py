@@ -44,10 +44,18 @@ def test_generate_title_suggestions_applies_custom_post_type_prompt(monkeypatch)
 
     captured = {}
 
-    def fake_generate(self, content_type, num_titles, user_prompt="", model=None):
+    def fake_generate(
+        self,
+        content_type,
+        num_titles,
+        user_prompt="",
+        custom_post_type_prompt="",
+        model=None,
+    ):
         captured["content_type"] = content_type
         captured["num_titles"] = num_titles
         captured["user_prompt"] = user_prompt
+        captured["custom_post_type_prompt"] = custom_post_type_prompt
         suggestion = BlogPostTitleSuggestion.objects.create(
             project=self,
             title="Technical idea",
@@ -76,8 +84,8 @@ def test_generate_title_suggestions_applies_custom_post_type_prompt(monkeypatch)
     assert response["status"] == "success"
     assert captured["content_type"] == ContentType.SHARING
     assert captured["num_titles"] == 2
-    assert "Focus on implementation details and trade-offs." in captured["user_prompt"]
-    assert "Include practical examples" in captured["user_prompt"]
+    assert captured["custom_post_type_prompt"] == "Focus on implementation details and trade-offs."
+    assert captured["user_prompt"] == "Include practical examples"
 
     suggestion = BlogPostTitleSuggestion.objects.get(title="Technical idea")
     assert suggestion.custom_post_type_id == post_type.id
@@ -173,3 +181,52 @@ def test_update_duplicate_custom_post_type_name_does_not_500(client):
     second_type.refresh_from_db()
     assert second_type.name == "Beginner"
     assert first_type.name == "Technical"
+
+
+@pytest.mark.django_db
+def test_custom_post_type_prompt_is_included_in_blog_post_generation_context(monkeypatch):
+    user = User.objects.create_user("owner-content", "owner-content@example.com", "secret")
+    project = Project.objects.create(profile=user.profile, name="Site", url="https://site.test")
+    post_type = ProjectCustomPostType.objects.create(
+        project=project,
+        name="Case Study",
+        prompt_guidance="Use a case-study narrative with concrete before/after outcomes.",
+    )
+    suggestion = BlogPostTitleSuggestion.objects.create(
+        project=project,
+        custom_post_type=post_type,
+        title="How teams reduced content churn",
+        description="desc",
+        category="General Audience",
+        content_type=ContentType.SHARING,
+    )
+
+    monkeypatch.setattr(BlogPostTitleSuggestion, "get_internal_links", lambda self, max_pages=2: [])
+    monkeypatch.setattr(BlogPostTitleSuggestion, "get_external_authority_links", lambda self, max_links=None: [])
+
+    context = suggestion.get_blog_post_generation_context(content_type=ContentType.SHARING)
+
+    assert context.custom_post_type_prompt == post_type.prompt_guidance
+
+
+@pytest.mark.django_db
+def test_build_content_generation_prompt_does_not_duplicate_custom_post_type_guidance():
+    user = User.objects.create_user("owner-prompt", "owner-prompt@example.com", "secret")
+    project = Project.objects.create(profile=user.profile, name="Site", url="https://site.test")
+    post_type = ProjectCustomPostType.objects.create(
+        project=project,
+        name="Tutorial",
+        prompt_guidance="Use step-by-step instructional tone with short code-like examples.",
+    )
+    suggestion = BlogPostTitleSuggestion.objects.create(
+        project=project,
+        custom_post_type=post_type,
+        title="Practical setup guide",
+        description="desc",
+        category="General Audience",
+        content_type=ContentType.SHARING,
+    )
+
+    generation_prompt = suggestion.build_content_generation_prompt()
+
+    assert post_type.prompt_guidance not in generation_prompt

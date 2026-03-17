@@ -586,7 +586,12 @@ class Project(BaseModel):
         return True
 
     def generate_title_suggestions(
-        self, content_type=ContentType.SHARING, num_titles=3, user_prompt="", model=None
+        self,
+        content_type=ContentType.SHARING,
+        num_titles=3,
+        user_prompt="",
+        custom_post_type_prompt="",
+        model=None,
     ):
         agent = create_title_suggestions_agent(content_type=content_type, model=model)
 
@@ -594,6 +599,7 @@ class Project(BaseModel):
             project_details=self.project_details,
             num_titles=num_titles,
             user_prompt=user_prompt,
+            custom_post_type_prompt=custom_post_type_prompt,
             liked_suggestions=[suggestion.title for suggestion in self.liked_title_suggestions],
             disliked_suggestions=[
                 suggestion.title for suggestion in self.disliked_title_suggestions
@@ -973,6 +979,11 @@ class BlogPostTitleSuggestion(BaseModel):
             project_keywords=self.get_blog_post_keywords(),
             project_pages=project_page_contexts,
             content_type=content_type,
+            custom_post_type_prompt=(
+                (self.custom_post_type.prompt_guidance or "").strip()
+                if self.custom_post_type
+                else ""
+            ),
         )
 
     @staticmethod

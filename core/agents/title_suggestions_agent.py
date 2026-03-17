@@ -256,6 +256,21 @@ def create_title_suggestions_agent(content_type=ContentType.SHARING, model=None)
         """
 
     @agent.system_prompt
+    def add_custom_post_type_prompt(ctx: RunContext[TitleSuggestionContext]) -> str:
+        custom_prompt = (ctx.deps.custom_post_type_prompt or "").strip()
+        if not custom_prompt:
+            return ""
+
+        return f"""
+            CUSTOM POST TYPE REQUIREMENT (HIGH PRIORITY)
+            The user selected a custom post type with this guidance:
+            "{custom_prompt}"
+
+            Make the post type influence clearly visible in title framing, tone, and format.
+            Keep titles specific, readable, and SEO-appropriate.
+        """
+
+    @agent.system_prompt
     def add_feedback_history(ctx: RunContext[TitleSuggestionContext]) -> str:
         feedback_sections = []
 
