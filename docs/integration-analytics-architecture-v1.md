@@ -84,22 +84,24 @@ Without a stable data model, each provider would push ad-hoc fields into product
 | project_id | FK | |
 | provider | enum | `ga4`, `gsc`, `plausible` |
 | metric_date | date | grain = 1 day |
-| dimension_scope | enum | `site`, `page`, `query`, `country`, `device`, `channel` |
-| page_url | text nullable | normalized canonical URL |
-| search_query | text nullable | query term (primarily GSC) |
+| dimension_scope | enum | `site`, `page`, `query`, `page_query`, `country`, `device`, `channel` |
+| page_url | varchar(1024) nullable | normalized canonical URL (hard-capped for index safety) |
+| page_url_key | char(64) nullable | sha256 of normalized `page_url` |
+| search_query | varchar(512) nullable | query term (primarily GSC, hard-capped for index safety) |
+| search_query_key | char(64) nullable | sha256 of normalized `search_query` |
 | country_code | char(2) nullable | ISO-3166-1 alpha-2 |
 | device_type | varchar(32) nullable | `desktop`, `mobile`, `tablet`, `other` |
 | channel_group | varchar(64) nullable | normalized acquisition channel (when available) |
 | clicks | bigint nullable | |
 | impressions | bigint nullable | |
-| ctr | numeric(8,6) nullable | store provider CTR as-is; can be recomputed |
+| ctr | numeric(10,6) nullable | normalized ratio in range [0,1] |
 | avg_position | numeric(8,3) nullable | GSC position |
 | sessions | bigint nullable | |
 | users | bigint nullable | |
 | engaged_sessions | bigint nullable | GA4/Plausible when available |
-| bounce_rate | numeric(8,6) nullable | |
+| bounce_rate | numeric(10,6) nullable | normalized ratio in range [0,1] |
 | conversions | numeric(18,6) nullable | numeric for fractional modeled conversions |
-| conversion_rate | numeric(8,6) nullable | |
+| conversion_rate | numeric(10,6) nullable | normalized ratio in range [0,1] |
 | provider_payload_meta | jsonb nullable | unmapped provider dimensions/flags |
 | source_snapshot_id | UUID FK nullable | lineage to raw snapshot |
 | ingested_at | timestamptz | |
@@ -107,13 +109,13 @@ Without a stable data model, each provider would push ad-hoc fields into product
 
 **Uniqueness / idempotency key**
 Unique on:
-`(project_id, provider, metric_date, dimension_scope, coalesce(page_url,''), coalesce(search_query,''), coalesce(country_code,''), coalesce(device_type,''), coalesce(channel_group,''))`
+`(project_id, provider, metric_date, dimension_scope, coalesce(page_url_key,''), coalesce(search_query_key,''), coalesce(country_code,''), coalesce(device_type,''), coalesce(channel_group,''))`
 
 **Indexes**
 - `(project_id, metric_date desc)`
 - `(project_id, provider, metric_date desc)`
 - `(project_id, dimension_scope, metric_date desc)`
-- Partial indexes for `page_url is not null` and `search_query is not null`
+- Partial indexes for `page_url_key is not null` and `search_query_key is not null`
 
 **Retention**
 - Keep normalized facts **indefinitely** (or min 24 months if cost cap is required).
@@ -128,6 +130,7 @@ Unique on:
 | id | UUID PK | |
 | project_id | FK | |
 | provider | enum | `ga4`, `gsc`, `plausible` |
+| source_account_ref | varchar(255) | provider account/property/site identifier |
 | last_successful_date | date nullable | inclusive end-date synced |
 | backfill_start_date | date nullable | first date pending backfill |
 | backfill_end_date | date nullable | backfill target end |
@@ -137,7 +140,7 @@ Unique on:
 | last_error | text nullable | sanitized |
 | updated_at | timestamptz | |
 
-Unique on `(project_id, provider)`.
+Unique on `(project_id, provider, source_account_ref)`. This prevents cursor collisions when one project connects multiple accounts/properties for the same provider.
 
 ---
 
@@ -167,8 +170,11 @@ Unique on `(project_id, provider)`.
   - site
   - page
   - query
+  - page_query (when provider row has both `page` + `query` dimensions)
   - country
   - device
+- Deterministic scope rule: use the most specific matching scope from this order:
+  `page_query` > `query` > `page` > `country` > `device` > `site`.
 
 ### Plausible
 **Raw**
@@ -199,6 +205,11 @@ Unique on `(project_id, provider)`.
 - Search performance: `clicks`, `impressions`, `ctr`, `avg_position`
 - Traffic/engagement: `sessions`, `users`, `engaged_sessions`, `bounce_rate`
 - Conversion signals: `conversions`, `conversion_rate`
+
+### Ratio normalization contract (mandatory)
+- `ctr`, `bounce_rate`, and `conversion_rate` are always stored as decimal ratios in `[0,1]`.
+- Provider percentages (e.g., Plausible `bounce_rate=54.3`) must be divided by 100 before insert.
+- Values outside `[0,1]` must fail mapping validation and be recorded as sync errors (not partially written).
 
 ### Explicitly deferred
 - Hourly grain
@@ -235,7 +246,7 @@ To add a new provider without major refactor:
 1. Implement provider fetcher -> write `analytics_source_snapshot`.
 2. Implement provider mapper -> emit canonical rows into `analytics_fact_daily`.
 3. Store provider-only fields in `provider_payload_meta` until promoted to first-class columns.
-4. Reuse existing sync cursor and scheduling primitives keyed by `(project_id, provider)`.
+4. Reuse existing sync cursor and scheduling primitives keyed by `(project_id, provider, source_account_ref)`.
 
 No schema change required unless a new metric is promoted to canonical.
 
@@ -243,6 +254,7 @@ No schema change required unless a new metric is promoted to canonical.
 
 ## Reliability and safety rules
 - All ingestion writes must be idempotent via unique key upsert.
+- Mapper enforces `page_url` and `search_query` caps (1024/512) and populates stable hash keys used by uniqueness constraints.
 - Never delete normalized facts in regular sync; prefer overwrite/upsert by key/date.
 - Log provider errors with sanitized messages (no secrets/tokens).
 - Keep lineage (`source_snapshot_id`) for debugging trust issues.
