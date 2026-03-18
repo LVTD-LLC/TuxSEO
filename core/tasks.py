@@ -44,6 +44,7 @@ from core.models import (
     ProjectKeyword,
     ProjectPage,
 )
+from core.twenty_signup_sync import sync_signup_project_to_twenty as sync_signup_project_to_twenty_service
 from tuxseo.logging_context import bind_log_context
 from tuxseo.utils import get_tuxseo_logger
 
@@ -56,7 +57,6 @@ SITEMAP_PATH_CANDIDATES = (
     "/sitemaps.xml",
     "/wp-sitemap.xml",
 )
-
 
 
 def _extract_sitemap_urls_from_robots(robots_txt: str, base_url: str) -> list[str]:
@@ -2642,6 +2642,55 @@ def run_agent_execution_job(job_id: int):
                 exc_info=True,
             )
             return f"Job {job_id} failed: {str(error)}"
+
+
+def sync_signup_project_to_twenty(project_id: int):
+    if not settings.TWENTY_SIGNUP_SYNC_ENABLED:
+        return {
+            "status": "skipped",
+            "error_code": "signup_sync_disabled",
+        }
+
+    project = (
+        Project.objects.select_related("profile", "profile__user")
+        .filter(id=project_id)
+        .first()
+    )
+    if not project:
+        return {
+            "status": "failed",
+            "error_code": "project_not_found",
+            "project_id": project_id,
+        }
+
+    profile = getattr(project, "profile", None)
+    user = getattr(profile, "user", None)
+    if not user:
+        return {
+            "status": "skipped",
+            "error_code": "project_user_missing",
+            "project_id": project_id,
+        }
+
+    result = sync_signup_project_to_twenty_service(user=user, project=project)
+    payload = result.to_dict()
+
+    logger.info(
+        "[Twenty Signup Sync Task] Completed",
+        sync_event="twenty_signup_sync",
+        event_name="twenty_signup_sync",
+        status=payload.get("status"),
+        personId=payload.get("person_id"),
+        companyId=payload.get("company_id"),
+        sourcePersonId=payload.get("source_person_id"),
+        sourceOrganizationId=payload.get("source_organization_id"),
+        person_id=payload.get("person_id"),
+        company_id=payload.get("company_id"),
+        source_person_id=payload.get("source_person_id"),
+        source_organization_id=payload.get("source_organization_id"),
+        error_code=payload.get("error_code"),
+    )
+    return payload
 
 
 def sync_project_integration_analytics(project_id: int, provider: str):
