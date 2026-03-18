@@ -397,6 +397,16 @@ def schedule_project_analytics_syncs():
     )
 
 
+def sync_connected_project_analytics():
+    """Backward-compatible alias for legacy scheduler path naming.
+
+    Django Q schedules may still reference `core.scheduled_tasks.sync_connected_project_analytics`
+    from earlier rollout notes. Keep this alias so existing schedules continue to work
+    after the dispatcher naming was standardized to `schedule_project_analytics_syncs`.
+    """
+    return schedule_project_analytics_syncs()
+
+
 def schedule_project_feedback_checkin_emails():
     """
     Daily scheduled task that finds profiles who have:

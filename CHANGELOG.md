@@ -40,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - project successfully created email
 
 ### Fixed
+- Analytics
+  - added backward-compatible scheduled task alias `core.scheduled_tasks.sync_connected_project_analytics` so older Django Q scheduler entries continue dispatching analytics sync jobs
 - fixed `FieldError` on publish history page
 - Posted posts should not appear on SEO Optimized and Eye Catching post pages.
 - emails
