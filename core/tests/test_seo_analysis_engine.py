@@ -40,10 +40,12 @@ def test_analyze_project_page_seo_scores_deterministic_checks():
 
     result = analyze_project_page_seo(project_page)
 
-    assert result["score"] == 83
+    assert result["score"] == 71
     assert result["passed_checks"] == 5
-    assert result["total_checks"] == 6
-    assert result["issues"] == ["Meta description length"]
+    assert result["total_checks"] == 7
+    assert result["issues"] == ["Meta description length", "JSON-LD schema"]
+    assert result["json_ld"]["state"] == "missing"
+    assert result["json_ld"]["status_label"] == "Missing (suggested starter available)"
 
 
 @pytest.mark.django_db
@@ -113,5 +115,6 @@ def test_analyze_project_page_seo_reports_failures_when_page_is_sparse():
 
     assert result["score"] == 0
     assert result["passed_checks"] == 0
-    assert result["total_checks"] == 6
-    assert len(result["issues"]) == 6
+    assert result["total_checks"] == 7
+    assert len(result["issues"]) == 7
+    assert result["json_ld"]["state"] == "missing"
