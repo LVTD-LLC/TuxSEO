@@ -74,6 +74,11 @@ urlpatterns = [
     ),
     path("project/<int:pk>/pages/", views.ProjectPagesView.as_view(), name="project_pages"),
     path(
+        "project/<int:project_pk>/pages/<int:page_pk>/",
+        views.ProjectPageDetailView.as_view(),
+        name="project_page_detail",
+    ),
+    path(
         "project/<int:pk>/earned-links/",
         views.ProjectEarnedLinksView.as_view(),
         name="project_earned_links",

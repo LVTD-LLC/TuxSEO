@@ -1,0 +1,124 @@
+{% extends "base_project.html" %}
+{% load static %}
+
+{% block meta %}
+  <title>TuxSEO - Page Detail for {{ project.name }}</title>
+  <meta name="description" content="Detail workspace for {{ project.name }} page {{ project_page.url }}." />
+{% endblock meta %}
+
+{% block project_content %}
+  <div class="mb-6">
+    <a
+      href="{% url 'project_pages' pk=project.id %}"
+      class="inline-flex items-center text-sm font-medium text-gray-500 hover:text-gray-700"
+    >
+      <svg class="mr-1 h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+      </svg>
+      Back to Your Pages
+    </a>
+
+    <h2 class="mt-3 text-2xl font-bold text-gray-900">Page Command Center</h2>
+    <p class="mt-2 text-sm text-gray-600 break-all">{{ project_page.url }}</p>
+  </div>
+
+  {% if is_gated %}
+    <div class="rounded-lg border border-yellow-200 bg-yellow-50 p-6">
+      <h3 class="text-lg font-semibold text-yellow-900">This feature is available on Pro</h3>
+      <p class="mt-2 text-sm text-yellow-800">
+        Per-page SEO command centers are part of the Pro plan. Upgrade to unlock page-level analysis, recommendations, and backlink discovery workflows.
+      </p>
+      <div class="mt-4">
+        <a
+          href="{% url 'user_upgrade_checkout_session' product_name='Pro - Monthly' %}"
+          class="inline-flex items-center rounded-md bg-yellow-700 px-4 py-2 text-sm font-semibold text-white hover:bg-yellow-800"
+        >
+          Upgrade to Pro
+        </a>
+      </div>
+    </div>
+  {% else %}
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+      <section class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+        <h3 class="text-lg font-semibold text-gray-900">Overview</h3>
+
+        {% if overview_state == "loading" %}
+          <div class="mt-4 rounded-md border border-blue-200 bg-blue-50 p-4 text-sm text-blue-700">
+            We are preparing this page overview. Refresh in a moment.
+          </div>
+        {% elif overview_state == "error" %}
+          <div class="mt-4 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            We could not load this page overview right now. Please try again.
+          </div>
+        {% elif overview_state == "empty" %}
+          <div class="mt-4 rounded-md border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
+            No overview data is available yet for this page.
+          </div>
+        {% else %}
+          <dl class="mt-4 space-y-3 text-sm">
+            <div>
+              <dt class="text-gray-500">Path</dt>
+              <dd class="font-medium text-gray-900">{{ project_page_path }}</dd>
+            </div>
+            <div>
+              <dt class="text-gray-500">Domain</dt>
+              <dd class="font-medium text-gray-900">{{ project_page_domain }}</dd>
+            </div>
+            <div>
+              <dt class="text-gray-500">Page type</dt>
+              <dd class="font-medium text-gray-900">{{ project_page.get_type_display|default:"Not classified yet" }}</dd>
+            </div>
+            <div>
+              <dt class="text-gray-500">Summary</dt>
+              <dd class="font-medium text-gray-900">{{ project_page.summary|default:"Summary will appear here after analysis." }}</dd>
+            </div>
+          </dl>
+        {% endif %}
+      </section>
+
+      <section class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+        <h3 class="text-lg font-semibold text-gray-900">SEO Analysis</h3>
+
+        {% if seo_state == "loading" %}
+          <div class="mt-4 rounded-md border border-blue-200 bg-blue-50 p-4 text-sm text-blue-700">
+            SEO analysis is running for this page.
+          </div>
+        {% elif seo_state == "error" %}
+          <div class="mt-4 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            SEO analysis failed to load. Please retry.
+          </div>
+        {% elif seo_state == "empty" %}
+          <div class="mt-4 rounded-md border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
+            No SEO insights yet. This section is scaffolded and ready for scoring, issue detection, and recommendations.
+          </div>
+        {% else %}
+          <div class="mt-4 rounded-md border border-green-200 bg-green-50 p-4 text-sm text-green-700">
+            SEO analysis data is available for this page.
+          </div>
+        {% endif %}
+      </section>
+
+      <section class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+        <h3 class="text-lg font-semibold text-gray-900">Backlink Opportunities</h3>
+
+        {% if backlink_state == "loading" %}
+          <div class="mt-4 rounded-md border border-blue-200 bg-blue-50 p-4 text-sm text-blue-700">
+            Backlink opportunities are being prepared.
+          </div>
+        {% elif backlink_state == "error" %}
+          <div class="mt-4 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            Could not load backlink opportunities. Please retry.
+          </div>
+        {% elif backlink_state == "empty" %}
+          <div class="mt-4 rounded-md border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
+            No opportunities yet. This section is scaffolded for future discovery, qualification, and outreach workflows.
+          </div>
+        {% else %}
+          <div class="mt-4 rounded-md border border-green-200 bg-green-50 p-4 text-sm text-green-700">
+            Backlink opportunities are available for this page.
+          </div>
+        {% endif %}
+      </section>
+    </div>
+  {% endif %}
+{% endblock project_content %}

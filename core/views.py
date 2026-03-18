@@ -2,7 +2,7 @@ import secrets
 import time
 from datetime import timedelta
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import markdown
 import requests
@@ -54,6 +54,7 @@ from core.models import (
     ProjectCustomPostType,
     ProjectEarnedLink,
     ProjectIntegration,
+    ProjectPage,
 )
 from core.outcome_attribution import get_project_reporting_snapshot
 from core.tasks import (
@@ -1804,7 +1805,6 @@ class ProjectPagesView(LoginRequiredMixin, DetailView):
         return Project.objects.filter(profile=self.request.user.profile)
 
     def get_context_data(self, **kwargs):
-        from urllib.parse import urlparse
         from django.core.paginator import Paginator
 
         context = super().get_context_data(**kwargs)
@@ -1850,6 +1850,55 @@ class ProjectPagesView(LoginRequiredMixin, DetailView):
         context["unanalyzed_pages_count"] = total_pages_count - analyzed_pages_count
 
         return context
+
+
+class ProjectPageDetailView(LoginRequiredMixin, DetailView):
+    model = ProjectPage
+    template_name = "project/project_page_detail.html"
+    context_object_name = "project_page"
+    pk_url_kwarg = "page_pk"
+
+    def get_queryset(self):
+        return ProjectPage.objects.select_related("project").filter(
+            project__profile=self.request.user.profile,
+            project_id=self.kwargs["project_pk"],
+        )
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        project_page = self.object
+        profile = self.request.user.profile
+        simulated_state = ""
+        if self.request.user.is_staff:
+            simulated_state = self.request.GET.get("state", "").lower()
+
+        page_parsed_url = urlparse(project_page.url)
+
+        context["project"] = project_page.project
+        context["has_pro_subscription"] = profile.is_on_pro_plan
+        context["is_gated"] = not profile.is_on_pro_plan
+        context["project_page_path"] = page_parsed_url.path or "/"
+        context["project_page_domain"] = page_parsed_url.netloc
+        context["state"] = simulated_state
+
+        overview_state = "ready" if project_page.date_analyzed else "loading"
+        seo_state = "empty"
+        backlink_state = "empty"
+
+        if simulated_state in {"loading", "empty", "error"}:
+            overview_state = simulated_state
+            seo_state = simulated_state
+            backlink_state = simulated_state
+
+        context["overview_state"] = overview_state
+        context["seo_state"] = seo_state
+        context["backlink_state"] = backlink_state
+
+        return context
+
+    def render_to_response(self, context, **response_kwargs):
+        response_kwargs.setdefault("status", 403 if context.get("is_gated") else 200)
+        return super().render_to_response(context, **response_kwargs)
 
 
 class ProjectEarnedLinksView(LoginRequiredMixin, DetailView):

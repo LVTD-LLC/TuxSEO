@@ -197,11 +197,21 @@
                 {% for page in pages %}
                   <tr class="transition-colors hover:bg-gray-50">
                     <td class="px-6 py-4">
-                      <div class="flex items-start">
-                        <a href="{{ page.url }}" target="_blank" rel="noopener noreferrer"
-                           class="flex items-center text-sm font-medium text-gray-900 hover:text-gray-600"
-                           title="{{ page.url }}">
+                      <div class="flex flex-col gap-1 items-start">
+                        <a
+                          href="{% url 'project_page_detail' project_pk=project.id page_pk=page.id %}"
+                          class="inline-flex items-center text-sm font-medium text-gray-900 hover:text-gray-600"
+                          title="Open page detail view"
+                        >
                           <span class="max-w-sm truncate">{{ page.url_path }}</span>
+                          {% if not user.profile.is_on_pro_plan %}
+                            <span class="ml-2 inline-flex items-center rounded-full bg-yellow-100 px-2 py-0.5 text-[10px] font-semibold text-yellow-800">Pro</span>
+                          {% endif %}
+                        </a>
+                        <a href="{{ page.url }}" target="_blank" rel="noopener noreferrer"
+                           class="inline-flex items-center text-xs text-gray-500 hover:text-gray-700"
+                           title="{{ page.url }}">
+                          Open live page
                           <svg class="flex-shrink-0 ml-1 w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                           </svg>
