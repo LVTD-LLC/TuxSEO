@@ -236,7 +236,7 @@ def test_project_page_detail_view_supports_explicit_error_state_for_shell(client
 
 
 @pytest.mark.django_db
-def test_project_page_detail_view_refresh_action_redirects_with_success_state(client, monkeypatch):
+def test_project_page_detail_view_refresh_action_redirects_after_success(client, monkeypatch):
     user = User.objects.create_user(
         username="page-detail-refresh-success-user",
         email="page-detail-refresh-success-user@example.com",
@@ -267,11 +267,14 @@ def test_project_page_detail_view_refresh_action_redirects_with_success_state(cl
     )
 
     assert response.status_code == 302
-    assert response.url.endswith("?run=success")
+    assert response.url == reverse(
+        "project_page_detail",
+        kwargs={"project_pk": project.id, "page_pk": page.id},
+    )
 
 
 @pytest.mark.django_db
-def test_project_page_detail_view_refresh_action_redirects_with_failed_state(client, monkeypatch):
+def test_project_page_detail_view_refresh_action_redirects_after_failure(client, monkeypatch):
     user = User.objects.create_user(
         username="page-detail-refresh-failed-user",
         email="page-detail-refresh-failed-user@example.com",
@@ -301,4 +304,37 @@ def test_project_page_detail_view_refresh_action_redirects_with_failed_state(cli
     )
 
     assert response.status_code == 302
-    assert response.url.endswith("?run=failed")
+    assert response.url == reverse(
+        "project_page_detail",
+        kwargs={"project_pk": project.id, "page_pk": page.id},
+    )
+
+
+@pytest.mark.django_db
+def test_project_page_detail_view_refresh_action_forbidden_for_free_users(client):
+    user = User.objects.create_user(
+        username="page-detail-refresh-free-user",
+        email="page-detail-refresh-free-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/features",
+        type_ai_guess="product page",
+    )
+
+    client.force_login(user)
+    response = client.post(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        ),
+        data={"action": "run_seo_analysis"},
+    )
+
+    assert response.status_code == 403

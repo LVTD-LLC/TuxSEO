@@ -1882,17 +1882,19 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
                 )
             )
 
-        run_state = "failed"
         try:
             has_content = self.object.get_page_content()
             if has_content and self.object.analyze_content():
-                run_state = "success"
+                messages.success(request, "Analysis refreshed successfully.")
+            else:
+                messages.error(request, "We couldn't refresh analysis. Please try again in a minute.")
         except Exception:
             logger.exception(
                 "[ProjectPageDetailView.post] Failed to refresh SEO analysis",
                 page_id=self.object.id,
                 project_id=self.object.project_id,
             )
+            messages.error(request, "We couldn't refresh analysis. Please try again in a minute.")
 
         return redirect(
             reverse(
@@ -1902,7 +1904,6 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
                     "page_pk": self.object.id,
                 },
             )
-            + f"?run={run_state}"
         )
 
     def get_context_data(self, **kwargs):
@@ -1913,10 +1914,6 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
         if self.request.user.is_staff:
             simulated_state = self.request.GET.get("state", "").lower()
 
-        run_state = self.request.GET.get("run", "idle").lower()
-        if run_state not in {"idle", "analyzing", "success", "failed"}:
-            run_state = "idle"
-
         page_parsed_url = urlparse(project_page.url)
 
         context["project"] = project_page.project
@@ -1925,7 +1922,6 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
         context["project_page_path"] = page_parsed_url.path or "/"
         context["project_page_domain"] = page_parsed_url.netloc
         context["state"] = simulated_state
-        context["seo_run_state"] = run_state
         context["analysis_source_label"] = project_page.get_source_display()
         context["analysis_last_run_at"] = project_page.date_analyzed
 
