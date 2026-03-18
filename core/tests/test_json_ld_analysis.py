@@ -27,6 +27,8 @@ def test_json_ld_analysis_detected_and_looks_ok_for_webpage():
 
     assert result["state"] == "ok"
     assert result["status_label"] == "Detected & looks okay"
+    assert result["html_input_available"] is True
+    assert result["is_scorable"] is True
     assert result["detected_script_blocks"] == 1
     assert result["total_items"] == 1
     assert result["parse_errors"] == []
@@ -54,6 +56,7 @@ def test_json_ld_analysis_detected_but_issues_and_starter_available():
 
     assert result["state"] == "issues"
     assert result["status_label"] == "Detected but issues"
+    assert result["is_scorable"] is True
     assert result["parse_errors"] == []
     assert result["items"][0]["is_valid"] is False
     assert "Missing required field for Article: author" in result["items"][0]["issues"]
@@ -75,8 +78,23 @@ def test_json_ld_analysis_missing_scripts_returns_missing_state_with_webpage_sta
 
     assert result["state"] == "missing"
     assert result["status_label"] == "Missing (suggested starter available)"
+    assert result["is_scorable"] is True
     assert result["detected_script_blocks"] == 0
     assert result["starter_suggestion"]["template_type"] == "WebPage"
+
+
+def test_json_ld_analysis_is_not_scorable_when_html_input_not_available():
+    result = analyze_json_ld_schema(
+        page_url="https://example.com/pricing",
+        page_type="pricing page",
+        title="Pricing",
+        description="Pricing page",
+        html_content="# Pricing\nThis is markdown without HTML tags or scripts.",
+    )
+
+    assert result["state"] == "missing"
+    assert result["html_input_available"] is False
+    assert result["is_scorable"] is False
 
 
 def test_json_ld_analysis_malformed_json_reports_parse_errors_without_crashing():

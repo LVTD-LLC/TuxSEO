@@ -40,12 +40,13 @@ def test_analyze_project_page_seo_scores_deterministic_checks():
 
     result = analyze_project_page_seo(project_page)
 
-    assert result["score"] == 71
+    assert result["score"] == 83
     assert result["passed_checks"] == 5
-    assert result["total_checks"] == 7
-    assert result["issues"] == ["Meta description length", "JSON-LD schema"]
+    assert result["total_checks"] == 6
+    assert result["issues"] == ["Meta description length"]
     assert result["json_ld"]["state"] == "missing"
     assert result["json_ld"]["status_label"] == "Missing (suggested starter available)"
+    assert result["json_ld"]["is_scorable"] is False
 
 
 @pytest.mark.django_db
@@ -89,6 +90,47 @@ def test_analyze_project_page_seo_ignores_fenced_code_for_h1_and_word_count():
 
 
 @pytest.mark.django_db
+def test_analyze_project_page_seo_includes_json_ld_check_when_html_scripts_available():
+    user = User.objects.create_user(
+        username="seo-analysis-jsonld-user",
+        email="seo-analysis-jsonld-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+
+    project_page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/features",
+        title="Feature page title for deterministic SEO validation",
+        description="D" * 130,
+        summary="This summary has enough words to satisfy deterministic summary quality checks used in tests.",
+        markdown_content="\n".join(
+            [
+                "<script type=\"application/ld+json\">",
+                '{"@context":"https://schema.org","@type":"WebPage","name":"Features","url":"https://example.com/features"}',
+                "</script>",
+                "# Features",
+                "[Pricing](/pricing)",
+                "[Use cases](https://example.com/use-cases)",
+                " ".join(["feature"] * 260),
+            ]
+        ),
+        type_ai_guess="product page",
+    )
+
+    result = analyze_project_page_seo(project_page)
+
+    assert result["json_ld"]["is_scorable"] is True
+    assert result["json_ld"]["state"] == "ok"
+    assert result["total_checks"] == 7
+    assert "JSON-LD schema" not in result["issues"]
+
+
+@pytest.mark.django_db
 def test_analyze_project_page_seo_reports_failures_when_page_is_sparse():
     user = User.objects.create_user(
         username="seo-analysis-empty-user",
@@ -115,6 +157,7 @@ def test_analyze_project_page_seo_reports_failures_when_page_is_sparse():
 
     assert result["score"] == 0
     assert result["passed_checks"] == 0
-    assert result["total_checks"] == 7
-    assert len(result["issues"]) == 7
+    assert result["total_checks"] == 6
+    assert len(result["issues"]) == 6
     assert result["json_ld"]["state"] == "missing"
+    assert result["json_ld"]["is_scorable"] is False

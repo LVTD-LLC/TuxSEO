@@ -106,14 +106,20 @@ def analyze_project_page_seo(project_page: ProjectPage) -> dict[str, Any]:
             value=f"{summary_word_count} words",
             recommendation="Provide a richer summary with key intent and page purpose.",
         ),
-        _check_item(
-            key="json_ld_schema",
-            label="JSON-LD schema",
-            passed=json_ld_analysis["state"] == _JSONLD_STATE_OK,
-            value=json_ld_analysis["status_label"],
-            recommendation="Use valid JSON-LD with @context and @type. Apply the starter suggestion and customize fields.",
-        ),
     ]
+
+    if json_ld_analysis["is_scorable"]:
+        checks.append(
+            _check_item(
+                key="json_ld_schema",
+                label="JSON-LD schema",
+                passed=json_ld_analysis["state"] == _JSONLD_STATE_OK,
+                value=json_ld_analysis["status_label"],
+                recommendation=(
+                    "Use valid JSON-LD with @context and @type. Apply the starter suggestion and customize fields."
+                ),
+            )
+        )
 
     passed_checks = sum(1 for check in checks if check["passed"])
     total_checks = len(checks)
@@ -132,11 +138,12 @@ def analyze_project_page_seo(project_page: ProjectPage) -> dict[str, Any]:
 def analyze_json_ld_schema(
     *,
     page_url: str,
-    page_type: str,
+    page_type: str | None,
     title: str,
     description: str,
     html_content: str,
 ) -> dict[str, Any]:
+    has_html_markup = bool(re.search(r"<[a-zA-Z][^>]*>", html_content or ""))
     script_blocks = _extract_json_ld_script_blocks(html_content)
     items: list[dict[str, Any]] = []
     parse_errors: list[str] = []
@@ -180,9 +187,13 @@ def analyze_json_ld_schema(
     else:
         state = _JSONLD_STATE_OK
 
+    is_scorable = has_html_markup or len(script_blocks) > 0
+
     return {
         "state": state,
         "status_label": _JSONLD_STATE_LABELS[state],
+        "html_input_available": has_html_markup,
+        "is_scorable": is_scorable,
         "detected_script_blocks": len(script_blocks),
         "valid_items": sum(1 for item in items if item["is_valid"]),
         "total_items": len(items),
@@ -201,6 +212,11 @@ def analyze_json_ld_schema(
         "notes": [
             "v1 guidance only: this is a baseline quality check, not strict schema.org compliance validation.",
             "Customize starter values before publishing (author, dates, canonical URL, and publisher details).",
+            (
+                "HTML input not available, so JSON-LD did not affect SEO score."
+                if not is_scorable
+                else "JSON-LD affected SEO score because HTML/script input was available."
+            ),
         ],
     }
 
@@ -208,7 +224,7 @@ def analyze_json_ld_schema(
 def build_json_ld_starter_suggestion(
     *,
     page_url: str,
-    page_type: str,
+    page_type: str | None,
     title: str,
     description: str,
 ) -> dict[str, Any]:

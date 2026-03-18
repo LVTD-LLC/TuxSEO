@@ -8,6 +8,8 @@ These payloads are examples for UI consumption.
 {
   "state": "missing",
   "status_label": "Missing (suggested starter available)",
+  "html_input_available": true,
+  "is_scorable": true,
   "detected_script_blocks": 0,
   "valid_items": 0,
   "total_items": 0,
@@ -32,6 +34,8 @@ These payloads are examples for UI consumption.
 {
   "state": "issues",
   "status_label": "Detected but issues",
+  "html_input_available": true,
+  "is_scorable": true,
   "detected_script_blocks": 1,
   "valid_items": 0,
   "total_items": 1,
@@ -41,6 +45,7 @@ These payloads are examples for UI consumption.
       "block_index": 1,
       "item_index": 1,
       "type": "Article",
+      "context": "https://not-schema.example",
       "issues": [
         "@context should usually reference schema.org",
         "Missing required field for Article: author",
@@ -58,6 +63,8 @@ These payloads are examples for UI consumption.
 {
   "state": "ok",
   "status_label": "Detected & looks okay",
+  "html_input_available": true,
+  "is_scorable": true,
   "detected_script_blocks": 1,
   "valid_items": 1,
   "total_items": 1,
@@ -67,11 +74,27 @@ These payloads are examples for UI consumption.
       "block_index": 1,
       "item_index": 1,
       "type": "WebPage",
+      "context": "https://schema.org",
       "issues": [],
       "is_valid": true
     }
   ],
   "starter_suggestion": null
+}
+```
+
+## 4) HTML unavailable (guidance shown, score not impacted)
+
+```json
+{
+  "state": "missing",
+  "status_label": "Missing (suggested starter available)",
+  "html_input_available": false,
+  "is_scorable": false,
+  "detected_script_blocks": 0,
+  "notes": [
+    "HTML input not available, so JSON-LD did not affect SEO score."
+  ]
 }
 ```
 
