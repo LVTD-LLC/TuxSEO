@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pages
   - added changelog page
   - features to the pro plan on pricing page
+  - paid-only per-page "Your Pages" DetailView route (`project/<project_pk>/pages/<page_pk>/`) with server-enforced Pro gating, explicit free-plan upgrade CTA, and shell sections for Overview, SEO Analysis, and Backlink Opportunities
+  - loading/empty/error UX states for the new page DetailView shell to support safe progressive rollout before analysis/recommendation internals are wired
   - periodic sitemap sync for "Your Pages" across sitemap-enabled projects with per-project locking, sitemap index traversal, stale URL marking, and configurable scheduler interval
   - manual per-project sitemap "Sync now" API trigger for support/debugging
 - Monitoring
