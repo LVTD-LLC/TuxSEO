@@ -57,6 +57,7 @@ from core.models import (
     ProjectPage,
 )
 from core.outcome_attribution import get_project_reporting_snapshot
+from core.seo_analysis import analyze_project_page_seo
 from core.tasks import (
     track_event,
     try_create_posthog_alias,
@@ -1881,8 +1882,18 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
         context["project_page_domain"] = page_parsed_url.netloc
         context["state"] = simulated_state
 
+        has_analysis_inputs = any(
+            [
+                project_page.title,
+                project_page.description,
+                project_page.markdown_content,
+                project_page.summary,
+                project_page.date_analyzed,
+            ]
+        )
+
         overview_state = "ready" if project_page.date_analyzed else "loading"
-        seo_state = "empty"
+        seo_state = "ready" if has_analysis_inputs else "loading"
         backlink_state = "empty"
 
         if simulated_state in {"loading", "empty", "error"}:
@@ -1893,6 +1904,9 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
         context["overview_state"] = overview_state
         context["seo_state"] = seo_state
         context["backlink_state"] = backlink_state
+        context["seo_analysis"] = (
+            analyze_project_page_seo(project_page) if seo_state == "ready" else None
+        )
 
         return context
 
