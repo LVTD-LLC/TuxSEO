@@ -3,7 +3,7 @@ from django.contrib.auth.models import User
 from django.urls import reverse
 from django.utils import timezone
 
-from core.models import Project, ProjectPage
+from core.models import Project, ProjectPage, ProjectPageAnalysisRun
 from core.seo_analysis import analyze_project_page_seo
 
 
@@ -253,9 +253,14 @@ def test_project_page_detail_view_refresh_action_redirects_after_success(client,
         type_ai_guess="product page",
     )
 
+    scheduled_tasks = []
+
+    def _fake_async_task(*args, **kwargs):
+        scheduled_tasks.append((args, kwargs))
+        return "task-id"
+
     monkeypatch.setattr(user.profile.__class__, "is_on_pro_plan", property(lambda _self: True))
-    monkeypatch.setattr(ProjectPage, "get_page_content", lambda _self: True)
-    monkeypatch.setattr(ProjectPage, "analyze_content", lambda _self: True)
+    monkeypatch.setattr("core.views.async_task", _fake_async_task)
 
     client.force_login(user)
     response = client.post(
@@ -271,6 +276,9 @@ def test_project_page_detail_view_refresh_action_redirects_after_success(client,
         "project_page_detail",
         kwargs={"project_pk": project.id, "page_pk": page.id},
     )
+    assert len(scheduled_tasks) == 1
+    assert scheduled_tasks[0][0][0] == "core.tasks.execute_project_page_analysis_run"
+    assert ProjectPageAnalysisRun.objects.filter(project_page=page).count() == 1
 
 
 @pytest.mark.django_db
@@ -290,9 +298,22 @@ def test_project_page_detail_view_refresh_action_redirects_after_failure(client,
         url="https://example.com/features",
         type_ai_guess="product page",
     )
+    ProjectPageAnalysisRun.objects.create(
+        project=project,
+        project_page=page,
+        requested_by=user.profile,
+        status=ProjectPageAnalysisRun.Status.FAILED,
+        finished_at=timezone.now(),
+    )
+
+    scheduled_tasks = []
+
+    def _fake_async_task(*args, **kwargs):
+        scheduled_tasks.append((args, kwargs))
+        return "task-id"
 
     monkeypatch.setattr(user.profile.__class__, "is_on_pro_plan", property(lambda _self: True))
-    monkeypatch.setattr(ProjectPage, "get_page_content", lambda _self: False)
+    monkeypatch.setattr("core.views.async_task", _fake_async_task)
 
     client.force_login(user)
     response = client.post(
@@ -308,6 +329,8 @@ def test_project_page_detail_view_refresh_action_redirects_after_failure(client,
         "project_page_detail",
         kwargs={"project_pk": project.id, "page_pk": page.id},
     )
+    assert len(scheduled_tasks) == 1
+    assert ProjectPageAnalysisRun.objects.filter(project_page=page).count() == 2
 
 
 @pytest.mark.django_db
@@ -338,3 +361,105 @@ def test_project_page_detail_view_refresh_action_forbidden_for_free_users(client
     )
 
     assert response.status_code == 403
+
+
+@pytest.mark.django_db
+def test_project_page_detail_view_shows_failed_run_and_retry_action(client, monkeypatch):
+    user = User.objects.create_user(
+        username="page-detail-failed-run-user",
+        email="page-detail-failed-run-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/page",
+        type_ai_guess="product page",
+    )
+
+    ProjectPageAnalysisRun.objects.create(
+        project=project,
+        project_page=page,
+        requested_by=user.profile,
+        status=ProjectPageAnalysisRun.Status.FAILED,
+        failure_message="Failed to fetch page content for SEO analysis.",
+    )
+
+    monkeypatch.setattr(
+        user.profile.__class__,
+        "is_on_pro_plan",
+        property(lambda _self: True),
+    )
+    client.force_login(user)
+
+    response = client.get(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        )
+    )
+
+    content = response.content.decode()
+    assert response.status_code == 200
+    assert "Latest run status: Failed" in content
+    assert "Retry analysis" in content
+    assert "Use “Retry analysis” after addressing the issue." in content
+
+
+@pytest.mark.django_db
+def test_project_page_detail_view_dedupes_when_active_run_exists(client, monkeypatch):
+    user = User.objects.create_user(
+        username="page-detail-dedupe-user",
+        email="page-detail-dedupe-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/page",
+        type_ai_guess="product page",
+    )
+
+    ProjectPageAnalysisRun.objects.create(
+        project=project,
+        project_page=page,
+        requested_by=user.profile,
+        status=ProjectPageAnalysisRun.Status.RUNNING,
+    )
+
+    monkeypatch.setattr(
+        user.profile.__class__,
+        "is_on_pro_plan",
+        property(lambda _self: True),
+    )
+
+    client.force_login(user)
+    response = client.post(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        ),
+        data={"action": "run_seo_analysis"},
+        follow=True,
+    )
+
+    assert response.status_code == 200
+    assert (
+        ProjectPageAnalysisRun.objects.filter(
+            project_page=page,
+            status__in=[
+                ProjectPageAnalysisRun.Status.QUEUED,
+                ProjectPageAnalysisRun.Status.RUNNING,
+            ],
+        ).count()
+        == 1
+    )
+    assert "Analysis is already running for this page" in response.content.decode()

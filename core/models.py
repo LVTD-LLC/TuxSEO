@@ -2376,6 +2376,16 @@ class ProjectPage(BaseModel):
             markdown_content=self.markdown_content,
         )
 
+    def get_latest_analysis_run(self):
+        return self.analysis_runs.order_by("-created_at").first()
+
+    def get_latest_successful_analysis_run(self):
+        return (
+            self.analysis_runs.filter(status=ProjectPageAnalysisRun.Status.SUCCEEDED)
+            .order_by("-finished_at", "-created_at")
+            .first()
+        )
+
     def get_page_content(self):
         """
         Fetch page content using Jina Reader API and update the project.
@@ -2482,6 +2492,63 @@ class ProjectPage(BaseModel):
         )
 
         return True
+
+
+class ProjectPageAnalysisRun(BaseModel):
+    class Status(models.TextChoices):
+        QUEUED = "queued", "Queued"
+        RUNNING = "running", "Running"
+        SUCCEEDED = "succeeded", "Succeeded"
+        FAILED = "failed", "Failed"
+
+    class Trigger(models.TextChoices):
+        MANUAL = "manual", "Manual"
+        AUTOMATIC = "automatic", "Automatic"
+
+    project_page = models.ForeignKey(
+        ProjectPage,
+        on_delete=models.CASCADE,
+        related_name="analysis_runs",
+    )
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="project_page_analysis_runs",
+    )
+    requested_by = models.ForeignKey(
+        Profile,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="project_page_analysis_runs",
+    )
+    trigger = models.CharField(max_length=32, choices=Trigger.choices, default=Trigger.MANUAL)
+    status = models.CharField(max_length=32, choices=Status.choices, default=Status.QUEUED)
+
+    queued_at = models.DateTimeField(default=timezone.now)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    analysis_payload = models.JSONField(default=dict, blank=True)
+    payload_checksum = models.CharField(max_length=64, blank=True, default="")
+    payload_bytes = models.PositiveIntegerField(default=0)
+
+    failure_message = models.TextField(blank=True, default="")
+    failure_details = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["project_page", "status", "created_at"]),
+            models.Index(fields=["project_page", "finished_at"]),
+            models.Index(fields=["project", "created_at"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project_page"],
+                condition=models.Q(status__in=["queued", "running"]),
+                name="project_page_single_active_analysis_run",
+            ),
+        ]
 
 
 class Competitor(BaseModel):

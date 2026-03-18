@@ -43,6 +43,7 @@ from core.models import (
     Project,
     ProjectKeyword,
     ProjectPage,
+    ProjectPageAnalysisRun,
 )
 from core.twenty_signup_sync import sync_signup_project_to_twenty as sync_signup_project_to_twenty_service
 from tuxseo.logging_context import bind_log_context
@@ -324,6 +325,31 @@ def analyze_project_page(project_id: int, link: str):
             exc_info=True,
         )
         return f"Error analyzing {link}: {str(e)}"
+
+
+def execute_project_page_analysis_run(run_id: int):
+    from core.project_page_analysis_runs import execute_run
+
+    try:
+        run = ProjectPageAnalysisRun.objects.select_related("project_page", "project").get(id=run_id)
+    except ProjectPageAnalysisRun.DoesNotExist:
+        logger.warning(
+            "[Project Page Analysis Run] Run not found",
+            run_id=run_id,
+        )
+        return f"Run {run_id} not found"
+
+    execute_run(run=run)
+
+    run.refresh_from_db()
+    logger.info(
+        "[Project Page Analysis Run] Completed run execution",
+        run_id=run.id,
+        project_id=run.project_id,
+        project_page_id=run.project_page_id,
+        status=run.status,
+    )
+    return f"Run {run.id} finished with status {run.status}"
 
 
 def schedule_project_page_analysis(project_id):
