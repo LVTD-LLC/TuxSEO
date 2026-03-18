@@ -253,9 +253,14 @@ def test_project_page_detail_view_refresh_action_redirects_after_success(client,
         type_ai_guess="product page",
     )
 
+    scheduled_tasks = []
+
+    def _fake_async_task(*args, **kwargs):
+        scheduled_tasks.append((args, kwargs))
+        return "task-id"
+
     monkeypatch.setattr(user.profile.__class__, "is_on_pro_plan", property(lambda _self: True))
-    monkeypatch.setattr(ProjectPage, "get_page_content", lambda _self: True)
-    monkeypatch.setattr(ProjectPage, "analyze_content", lambda _self: True)
+    monkeypatch.setattr("core.views.async_task", _fake_async_task)
 
     client.force_login(user)
     response = client.post(
@@ -271,6 +276,9 @@ def test_project_page_detail_view_refresh_action_redirects_after_success(client,
         "project_page_detail",
         kwargs={"project_pk": project.id, "page_pk": page.id},
     )
+    assert len(scheduled_tasks) == 1
+    assert scheduled_tasks[0][0][0] == "core.tasks.execute_project_page_analysis_run"
+    assert ProjectPageAnalysisRun.objects.filter(project_page=page).count() == 1
 
 
 @pytest.mark.django_db
@@ -290,9 +298,22 @@ def test_project_page_detail_view_refresh_action_redirects_after_failure(client,
         url="https://example.com/features",
         type_ai_guess="product page",
     )
+    ProjectPageAnalysisRun.objects.create(
+        project=project,
+        project_page=page,
+        requested_by=user.profile,
+        status=ProjectPageAnalysisRun.Status.FAILED,
+        finished_at=timezone.now(),
+    )
+
+    scheduled_tasks = []
+
+    def _fake_async_task(*args, **kwargs):
+        scheduled_tasks.append((args, kwargs))
+        return "task-id"
 
     monkeypatch.setattr(user.profile.__class__, "is_on_pro_plan", property(lambda _self: True))
-    monkeypatch.setattr(ProjectPage, "get_page_content", lambda _self: False)
+    monkeypatch.setattr("core.views.async_task", _fake_async_task)
 
     client.force_login(user)
     response = client.post(
@@ -308,6 +329,8 @@ def test_project_page_detail_view_refresh_action_redirects_after_failure(client,
         "project_page_detail",
         kwargs={"project_pk": project.id, "page_pk": page.id},
     )
+    assert len(scheduled_tasks) == 1
+    assert ProjectPageAnalysisRun.objects.filter(project_page=page).count() == 2
 
 
 @pytest.mark.django_db

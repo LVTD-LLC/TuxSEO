@@ -60,7 +60,6 @@ from core.models import (
 from core.outcome_attribution import get_project_reporting_snapshot
 from core.project_page_analysis_runs import (
     RERUN_COOLDOWN_SECONDS,
-    execute_run,
     get_latest_and_history,
     start_or_reuse_run,
 )
@@ -1915,21 +1914,15 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
                     "We couldn't refresh analysis. Please try again in a minute.",
                 )
         else:
-            completed_run = execute_run(run=start_result.run)
-            if completed_run.status == ProjectPageAnalysisRun.Status.SUCCEEDED:
-                messages.success(request, "Analysis refreshed successfully.")
-            else:
-                logger.warning(
-                    "[ProjectPageDetailView.post] SEO analysis run failed",
-                    page_id=self.object.id,
-                    project_id=self.object.project_id,
-                    run_id=completed_run.id,
-                    failure_message=completed_run.failure_message,
-                )
-                messages.error(
-                    request,
-                    "We couldn't refresh analysis. Check the latest run status below and retry.",
-                )
+            async_task(
+                "core.tasks.execute_project_page_analysis_run",
+                start_result.run.id,
+                group="project_page_analysis_runs",
+            )
+            messages.success(
+                request,
+                "Analysis rerun queued. Refresh in a few moments to see updated results.",
+            )
 
         return redirect(
             reverse(

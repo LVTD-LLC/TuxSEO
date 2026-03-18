@@ -85,7 +85,10 @@ def start_or_reuse_run(
 
         if cooldown_seconds > 0:
             latest_finished_run = (
-                ProjectPageAnalysisRun.objects.filter(project_page=locked_page)
+                ProjectPageAnalysisRun.objects.filter(
+                    project_page=locked_page,
+                    status=ProjectPageAnalysisRun.Status.SUCCEEDED,
+                )
                 .exclude(finished_at__isnull=True)
                 .order_by("-finished_at")
                 .first()
@@ -128,20 +131,30 @@ def start_or_reuse_run(
 
 
 def execute_run(*, run: ProjectPageAnalysisRun) -> ProjectPageAnalysisRun:
-    started_at = timezone.now()
-    run.status = ProjectPageAnalysisRun.Status.RUNNING
-    run.started_at = started_at
-    run.failure_message = ""
-    run.failure_details = {}
-    run.save(
-        update_fields=[
-            "status",
-            "started_at",
-            "failure_message",
-            "failure_details",
-            "updated_at",
-        ]
-    )
+    with transaction.atomic():
+        locked_run = (
+            ProjectPageAnalysisRun.objects.select_for_update()
+            .select_related("project_page")
+            .get(pk=run.pk)
+        )
+        if locked_run.status != ProjectPageAnalysisRun.Status.QUEUED:
+            return locked_run
+
+        locked_run.status = ProjectPageAnalysisRun.Status.RUNNING
+        locked_run.started_at = timezone.now()
+        locked_run.failure_message = ""
+        locked_run.failure_details = {}
+        locked_run.save(
+            update_fields=[
+                "status",
+                "started_at",
+                "failure_message",
+                "failure_details",
+                "updated_at",
+            ]
+        )
+
+    run = locked_run
 
     try:
         has_content = run.project_page.get_page_content()

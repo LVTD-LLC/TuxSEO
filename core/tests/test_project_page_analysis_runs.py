@@ -175,3 +175,77 @@ def test_execute_run_transitions_to_failed_and_captures_error(monkeypatch):
     assert completed.finished_at is not None
     assert "Failed to fetch page content" in completed.failure_message
     assert completed.failure_details["exception_type"] == "RuntimeError"
+
+
+@pytest.mark.django_db
+def test_execute_run_noops_when_run_not_queued(monkeypatch):
+    user = User.objects.create_user(
+        "analysis-run-guard",
+        "analysis-run-guard@example.com",
+        "secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/page",
+        type_ai_guess="product page",
+    )
+
+    running_run = ProjectPageAnalysisRun.objects.create(
+        project=project,
+        project_page=page,
+        requested_by=user.profile,
+        status=ProjectPageAnalysisRun.Status.RUNNING,
+        started_at=timezone.now(),
+    )
+
+    called = {"get_page_content": 0}
+
+    def _unexpected_call(_self):
+        called["get_page_content"] += 1
+        return True
+
+    monkeypatch.setattr(ProjectPage, "get_page_content", _unexpected_call)
+
+    result = execute_run(run=running_run)
+
+    assert result.id == running_run.id
+    assert result.status == ProjectPageAnalysisRun.Status.RUNNING
+    assert called["get_page_content"] == 0
+
+
+@pytest.mark.django_db
+def test_start_or_reuse_allows_retry_after_failed_run_during_cooldown_window():
+    user = User.objects.create_user(
+        "analysis-run-failed-retry",
+        "analysis-run-failed-retry@example.com",
+        "secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/page",
+        type_ai_guess="product page",
+    )
+
+    ProjectPageAnalysisRun.objects.create(
+        project=project,
+        project_page=page,
+        requested_by=user.profile,
+        status=ProjectPageAnalysisRun.Status.FAILED,
+        finished_at=timezone.now(),
+    )
+
+    result = start_or_reuse_run(project_page=page, requested_by=user.profile, cooldown_seconds=60)
+
+    assert result.created is True
+    assert result.reason == "created"
+    assert result.run.status == ProjectPageAnalysisRun.Status.QUEUED
