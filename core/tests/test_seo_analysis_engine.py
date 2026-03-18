@@ -42,6 +42,8 @@ def test_analyze_project_page_seo_scores_deterministic_checks():
 
     assert result["score"] == 83
     assert result["passed_checks"] == 5
+    assert result["warned_checks"] == 0
+    assert result["failed_checks"] == 1
     assert result["total_checks"] == 6
     assert result["issues"] == ["Meta description length"]
     assert result["json_ld"]["state"] == "missing"

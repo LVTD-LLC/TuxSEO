@@ -1865,6 +1865,47 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
             project_id=self.kwargs["project_pk"],
         )
 
+    def post(self, request, *args, **kwargs):
+        self.object = self.get_object()
+        if not request.user.profile.is_on_pro_plan:
+            return HttpResponse(status=403)
+
+        action = request.POST.get("action")
+        if action != "run_seo_analysis":
+            return redirect(
+                reverse(
+                    "project_page_detail",
+                    kwargs={
+                        "project_pk": self.object.project_id,
+                        "page_pk": self.object.id,
+                    },
+                )
+            )
+
+        try:
+            has_content = self.object.get_page_content()
+            if has_content and self.object.analyze_content():
+                messages.success(request, "Analysis refreshed successfully.")
+            else:
+                messages.error(request, "We couldn't refresh analysis. Please try again in a minute.")
+        except Exception:
+            logger.exception(
+                "[ProjectPageDetailView.post] Failed to refresh SEO analysis",
+                page_id=self.object.id,
+                project_id=self.object.project_id,
+            )
+            messages.error(request, "We couldn't refresh analysis. Please try again in a minute.")
+
+        return redirect(
+            reverse(
+                "project_page_detail",
+                kwargs={
+                    "project_pk": self.object.project_id,
+                    "page_pk": self.object.id,
+                },
+            )
+        )
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         project_page = self.object
@@ -1881,6 +1922,8 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
         context["project_page_path"] = page_parsed_url.path or "/"
         context["project_page_domain"] = page_parsed_url.netloc
         context["state"] = simulated_state
+        context["analysis_source_label"] = project_page.get_source_display()
+        context["analysis_last_run_at"] = project_page.date_analyzed
 
         has_analysis_inputs = any(
             [

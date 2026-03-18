@@ -191,12 +191,14 @@ def test_project_page_detail_view_renders_deterministic_seo_analysis(client, mon
     expected_analysis = analyze_project_page_seo(page)
 
     assert response.status_code == 200
-    assert "SEO Score:" in content
+    assert "Overall v1 score:" in content
     assert f"{expected_analysis['score']}/100" in content
     assert "Meta description length" in content
-    assert "Keep description between 120-160 characters." in content
-    assert "JSON-LD status: Missing (suggested starter available)" in content
-    assert "Starter suggestion (WebPage)" in content
+    assert "Why it matters:" in content
+    assert "How to fix:" in content
+    assert "JSON-LD recommendations" in content
+    assert "Detected schema summary:" in content
+    assert "Suggested starter block (copy and customize): WebPage" in content
 
 
 @pytest.mark.django_db
@@ -229,5 +231,110 @@ def test_project_page_detail_view_supports_explicit_error_state_for_shell(client
     content = response.content.decode()
     assert response.status_code == 200
     assert "We could not load this page overview right now. Please try again." in content
-    assert "SEO analysis failed to load. Please retry." in content
+    assert "SEO analysis failed to load. Please retry with “Refresh analysis”." in content
     assert "Could not load backlink opportunities. Please retry." in content
+
+
+@pytest.mark.django_db
+def test_project_page_detail_view_refresh_action_redirects_after_success(client, monkeypatch):
+    user = User.objects.create_user(
+        username="page-detail-refresh-success-user",
+        email="page-detail-refresh-success-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/features",
+        type_ai_guess="product page",
+    )
+
+    monkeypatch.setattr(user.profile.__class__, "is_on_pro_plan", property(lambda _self: True))
+    monkeypatch.setattr(ProjectPage, "get_page_content", lambda _self: True)
+    monkeypatch.setattr(ProjectPage, "analyze_content", lambda _self: True)
+
+    client.force_login(user)
+    response = client.post(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        ),
+        data={"action": "run_seo_analysis"},
+    )
+
+    assert response.status_code == 302
+    assert response.url == reverse(
+        "project_page_detail",
+        kwargs={"project_pk": project.id, "page_pk": page.id},
+    )
+
+
+@pytest.mark.django_db
+def test_project_page_detail_view_refresh_action_redirects_after_failure(client, monkeypatch):
+    user = User.objects.create_user(
+        username="page-detail-refresh-failed-user",
+        email="page-detail-refresh-failed-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/features",
+        type_ai_guess="product page",
+    )
+
+    monkeypatch.setattr(user.profile.__class__, "is_on_pro_plan", property(lambda _self: True))
+    monkeypatch.setattr(ProjectPage, "get_page_content", lambda _self: False)
+
+    client.force_login(user)
+    response = client.post(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        ),
+        data={"action": "run_seo_analysis"},
+    )
+
+    assert response.status_code == 302
+    assert response.url == reverse(
+        "project_page_detail",
+        kwargs={"project_pk": project.id, "page_pk": page.id},
+    )
+
+
+@pytest.mark.django_db
+def test_project_page_detail_view_refresh_action_forbidden_for_free_users(client):
+    user = User.objects.create_user(
+        username="page-detail-refresh-free-user",
+        email="page-detail-refresh-free-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/features",
+        type_ai_guess="product page",
+    )
+
+    client.force_login(user)
+    response = client.post(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        ),
+        data={"action": "run_seo_analysis"},
+    )
+
+    assert response.status_code == 403

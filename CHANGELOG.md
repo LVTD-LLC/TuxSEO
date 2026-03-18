@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - loading/empty/error UX states for the new page DetailView shell to support safe progressive rollout before analysis/recommendation internals are wired
   - SEO Analysis Engine v1 for single-page command centers with deterministic checks (title length, meta description length, H1 presence, body depth, internal links, summary coverage), score breakdown UI, and regression tests
   - JSON-LD schema analysis v1 in page SEO analysis (script detection, baseline validation, parse-error-safe reporting, and starter recommendations for WebPage/Article) with UI-visible state labels and template guidance
+  - page DetailView SEO Analysis UX upgrade: overall v1 scorecard, pass/warn/fail prioritization, beginner-friendly "why it matters" + "how to fix" guidance, JSON-LD detected-schema + issue-list subsection, copy-friendly starter block, and explicit freshness/source metadata with run/refresh CTA states (idle/analyzing/success/failed)
   - JSON-LD example payloads for UI consumers (`docs/json-ld-analysis-examples-v1.md`)
   - periodic sitemap sync for "Your Pages" across sitemap-enabled projects with per-project locking, sitemap index traversal, stale URL marking, and configurable scheduler interval
   - manual per-project sitemap "Sync now" API trigger for support/debugging
