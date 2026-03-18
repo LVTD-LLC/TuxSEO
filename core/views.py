@@ -1868,7 +1868,9 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
         context = super().get_context_data(**kwargs)
         project_page = self.object
         profile = self.request.user.profile
-        simulated_state = self.request.GET.get("state", "").lower()
+        simulated_state = ""
+        if self.request.user.is_staff:
+            simulated_state = self.request.GET.get("state", "").lower()
 
         page_parsed_url = urlparse(project_page.url)
 

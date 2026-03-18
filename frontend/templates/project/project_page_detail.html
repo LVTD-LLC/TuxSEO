@@ -87,9 +87,13 @@
           <div class="mt-4 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
             SEO analysis failed to load. Please retry.
           </div>
-        {% else %}
+        {% elif seo_state == "empty" %}
           <div class="mt-4 rounded-md border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
             No SEO insights yet. This section is scaffolded and ready for scoring, issue detection, and recommendations.
+          </div>
+        {% else %}
+          <div class="mt-4 rounded-md border border-green-200 bg-green-50 p-4 text-sm text-green-700">
+            SEO analysis data is available for this page.
           </div>
         {% endif %}
       </section>
@@ -105,9 +109,13 @@
           <div class="mt-4 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
             Could not load backlink opportunities. Please retry.
           </div>
-        {% else %}
+        {% elif backlink_state == "empty" %}
           <div class="mt-4 rounded-md border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
             No opportunities yet. This section is scaffolded for future discovery, qualification, and outreach workflows.
+          </div>
+        {% else %}
+          <div class="mt-4 rounded-md border border-green-200 bg-green-50 p-4 text-sm text-green-700">
+            Backlink opportunities are available for this page.
           </div>
         {% endif %}
       </section>

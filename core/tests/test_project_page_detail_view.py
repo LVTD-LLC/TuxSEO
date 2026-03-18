@@ -34,8 +34,8 @@ def test_project_pages_list_links_to_page_detail_view(client):
 
 
 @pytest.mark.django_db
-def test_project_page_detail_view_allows_pro_users(client):
-    user = User.objects.create_superuser(
+def test_project_page_detail_view_allows_paid_non_admin_users(client, monkeypatch):
+    user = User.objects.create_user(
         username="page-detail-pro-user",
         email="page-detail-pro-user@example.com",
         password="secret",
@@ -50,6 +50,12 @@ def test_project_page_detail_view_allows_pro_users(client):
         url="https://example.com/features",
         summary="Feature page summary",
         type_ai_guess="product page",
+    )
+
+    monkeypatch.setattr(
+        user.profile.__class__,
+        "is_on_pro_plan",
+        property(lambda _self: True),
     )
 
     client.force_login(user)
