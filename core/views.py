@@ -33,6 +33,7 @@ from weasyprint import HTML
 
 from core.acquisition import sync_profile_attribution_from_request
 from core.analytics import ANALYTICS_EVENTS
+from core.backlink_prospects import discover_backlink_prospects
 from core.choices import BlogPostStatus, ContentType, Language, OGImageStyle, ProfileStates
 from core.forms import (
     AutoSubmissionSettingForm,
@@ -1984,15 +1985,21 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
         else:
             seo_state = "loading"
         backlink_state = "empty"
+        backlink_candidates = []
 
         if simulated_state in {"loading", "empty", "error"}:
             overview_state = simulated_state
             seo_state = simulated_state
             backlink_state = simulated_state
+        elif profile.is_on_pro_plan and project_page.date_analyzed:
+            backlink_candidates = discover_backlink_prospects(project_page)
+            backlink_state = "ready" if backlink_candidates else "empty"
 
         context["overview_state"] = overview_state
         context["seo_state"] = seo_state
         context["backlink_state"] = backlink_state
+        context["backlink_candidates"] = backlink_candidates
+        context["backlink_candidates_count"] = len(backlink_candidates)
         context["seo_analysis"] = seo_analysis
 
         return context

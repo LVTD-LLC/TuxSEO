@@ -202,6 +202,56 @@ def test_project_page_detail_view_renders_deterministic_seo_analysis(client, mon
 
 
 @pytest.mark.django_db
+def test_project_page_detail_view_renders_backlink_candidates_for_pro_users(client, monkeypatch):
+    user = User.objects.create_superuser(
+        username="page-detail-backlink-user",
+        email="page-detail-backlink-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/features",
+        title="Features",
+        summary="Feature page summary",
+        type_ai_guess="product page",
+        date_analyzed=timezone.now(),
+    )
+
+    monkeypatch.setattr(
+        "core.views.discover_backlink_prospects",
+        lambda _project_page: [
+            {
+                "url": "https://developers.google.com/search/docs/fundamentals/seo-starter-guide",
+                "domain": "developers.google.com",
+                "title": "Google SEO Starter Guide",
+                "snippet": "Technical SEO indexing best practices",
+                "topic": "technical seo",
+                "source": "exa",
+            }
+        ],
+    )
+
+    client.force_login(user)
+    response = client.get(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        )
+    )
+
+    content = response.content.decode()
+    assert response.status_code == 200
+    assert "Google SEO Starter Guide" in content
+    assert "1 relevant prospects found" in content
+    assert "Topic: technical seo" in content
+
+
+@pytest.mark.django_db
 def test_project_page_detail_view_supports_explicit_error_state_for_shell(client):
     user = User.objects.create_superuser(
         username="page-detail-state-user",
