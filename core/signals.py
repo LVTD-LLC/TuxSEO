@@ -1,4 +1,5 @@
 from allauth.account.signals import email_confirmed, user_logged_in, user_signed_up
+from django.conf import settings
 from django.contrib.auth.models import User
 from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
@@ -142,6 +143,13 @@ def parse_sitemap_on_save(sender, instance, created, **kwargs):
                 instance.id,
                 group="Parse Sitemap",
             )
+
+    if created and settings.TWENTY_SIGNUP_SYNC_ENABLED:
+        async_task(
+            "core.tasks.sync_signup_project_to_twenty",
+            instance.id,
+            group="Twenty CRM Signup Sync",
+        )
 
 
 @receiver(post_save, sender=GeneratedBlogPost)

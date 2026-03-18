@@ -38,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Feedback email (for profiles with one product)
   - create project reminder for signed up users without project
   - project successfully created email
+- CRM
+  - Added dedicated Twenty signup sync on project creation to upsert warm leads (`core.twenty_signup_sync.sync_signup_project_to_twenty`) with idempotent person/company matching and feature-flagged execution (`TWENTY_SIGNUP_SYNC_ENABLED`).
+  - Added async task wiring for project-created trigger (`core.tasks.sync_signup_project_to_twenty`) and CRM config settings (`TWENTY_CRM_BASE_URL`, `TWENTY_CRM_API_KEY`, `TWENTY_SIGNUP_SYNC_TIMEOUT_SECONDS`, `TWENTY_SIGNUP_SYNC_MAX_RETRIES`).
 
 ### Fixed
 - Analytics
