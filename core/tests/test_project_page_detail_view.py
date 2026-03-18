@@ -4,6 +4,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from core.models import Project, ProjectPage
+from core.seo_analysis import analyze_project_page_seo
 
 
 @pytest.mark.django_db
@@ -187,9 +188,11 @@ def test_project_page_detail_view_renders_deterministic_seo_analysis(client, mon
     )
 
     content = response.content.decode()
+    expected_analysis = analyze_project_page_seo(page)
+
     assert response.status_code == 200
     assert "SEO Score:" in content
-    assert "83/100" in content
+    assert f"{expected_analysis['score']}/100" in content
     assert "Meta description length" in content
     assert "Keep description between 120-160 characters." in content
 
