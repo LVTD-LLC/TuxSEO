@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - JSON-LD schema analysis v1 in page SEO analysis (script detection, baseline validation, parse-error-safe reporting, and starter recommendations for WebPage/Article) with UI-visible state labels and template guidance
   - page DetailView SEO Analysis UX upgrade: overall v1 scorecard, pass/warn/fail prioritization, beginner-friendly "why it matters" + "how to fix" guidance, JSON-LD detected-schema + issue-list subsection, copy-friendly starter block, and explicit freshness/source metadata with run/refresh CTA states (idle/analyzing/success/failed)
   - JSON-LD example payloads for UI consumers (`docs/json-ld-analysis-examples-v1.md`)
+  - persisted per-page SEO analysis run history (`ProjectPageAnalysisRun`) with queued/running/succeeded/failed lifecycle states, active-run dedupe lock, rerun cooldown guardrails, failure diagnostics, compact payload snapshots, and DetailView history/status UI (`docs/seo-analysis-run-retention.md`)
   - periodic sitemap sync for "Your Pages" across sitemap-enabled projects with per-project locking, sitemap index traversal, stale URL marking, and configurable scheduler interval
   - manual per-project sitemap "Sync now" API trigger for support/debugging
 - Monitoring

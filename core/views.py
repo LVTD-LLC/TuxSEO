@@ -55,8 +55,15 @@ from core.models import (
     ProjectEarnedLink,
     ProjectIntegration,
     ProjectPage,
+    ProjectPageAnalysisRun,
 )
 from core.outcome_attribution import get_project_reporting_snapshot
+from core.project_page_analysis_runs import (
+    RERUN_COOLDOWN_SECONDS,
+    execute_run,
+    get_latest_and_history,
+    start_or_reuse_run,
+)
 from core.seo_analysis import analyze_project_page_seo
 from core.tasks import (
     track_event,
@@ -1882,19 +1889,47 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
                 )
             )
 
-        try:
-            has_content = self.object.get_page_content()
-            if has_content and self.object.analyze_content():
+        start_result = start_or_reuse_run(
+            project_page=self.object,
+            requested_by=request.user.profile,
+            trigger=ProjectPageAnalysisRun.Trigger.MANUAL,
+        )
+
+        if not start_result.created:
+            if start_result.reason == "active_lock":
+                messages.info(
+                    request,
+                    "Analysis is already running for this page. Please wait for it to complete.",
+                )
+            elif start_result.reason == "cooldown":
+                messages.info(
+                    request,
+                    (
+                        "Analysis was just run. Please wait "
+                        f"{RERUN_COOLDOWN_SECONDS} seconds before rerunning."
+                    ),
+                )
+            else:
+                messages.error(
+                    request,
+                    "We couldn't refresh analysis. Please try again in a minute.",
+                )
+        else:
+            completed_run = execute_run(run=start_result.run)
+            if completed_run.status == ProjectPageAnalysisRun.Status.SUCCEEDED:
                 messages.success(request, "Analysis refreshed successfully.")
             else:
-                messages.error(request, "We couldn't refresh analysis. Please try again in a minute.")
-        except Exception:
-            logger.exception(
-                "[ProjectPageDetailView.post] Failed to refresh SEO analysis",
-                page_id=self.object.id,
-                project_id=self.object.project_id,
-            )
-            messages.error(request, "We couldn't refresh analysis. Please try again in a minute.")
+                logger.warning(
+                    "[ProjectPageDetailView.post] SEO analysis run failed",
+                    page_id=self.object.id,
+                    project_id=self.object.project_id,
+                    run_id=completed_run.id,
+                    failure_message=completed_run.failure_message,
+                )
+                messages.error(
+                    request,
+                    "We couldn't refresh analysis. Check the latest run status below and retry.",
+                )
 
         return redirect(
             reverse(
@@ -1922,21 +1957,39 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
         context["project_page_path"] = page_parsed_url.path or "/"
         context["project_page_domain"] = page_parsed_url.netloc
         context["state"] = simulated_state
-        context["analysis_source_label"] = project_page.get_source_display()
-        context["analysis_last_run_at"] = project_page.date_analyzed
+        latest_run, run_history = get_latest_and_history(project_page=project_page)
+        latest_successful_run = project_page.get_latest_successful_analysis_run()
 
-        has_analysis_inputs = any(
+        seo_analysis = None
+        if latest_successful_run and latest_successful_run.analysis_payload:
+            seo_analysis = latest_successful_run.analysis_payload
+        elif project_page.date_analyzed and any(
             [
                 project_page.title,
                 project_page.description,
                 project_page.markdown_content,
                 project_page.summary,
-                project_page.date_analyzed,
             ]
+        ):
+            # Backward compatibility for pages analyzed before run persistence existed.
+            seo_analysis = analyze_project_page_seo(project_page)
+
+        context["analysis_source_label"] = project_page.get_source_display()
+        context["analysis_last_run_at"] = (
+            latest_successful_run.finished_at
+            if latest_successful_run
+            else project_page.date_analyzed
         )
+        context["latest_analysis_run"] = latest_run
+        context["analysis_run_history"] = run_history
 
         overview_state = "ready" if project_page.date_analyzed else "loading"
-        seo_state = "ready" if has_analysis_inputs else "loading"
+        if seo_analysis:
+            seo_state = "ready"
+        elif latest_run and latest_run.status == ProjectPageAnalysisRun.Status.FAILED:
+            seo_state = "error"
+        else:
+            seo_state = "loading"
         backlink_state = "empty"
 
         if simulated_state in {"loading", "empty", "error"}:
@@ -1947,9 +2000,7 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
         context["overview_state"] = overview_state
         context["seo_state"] = seo_state
         context["backlink_state"] = backlink_state
-        context["seo_analysis"] = (
-            analyze_project_page_seo(project_page) if seo_state == "ready" else None
-        )
+        context["seo_analysis"] = seo_analysis
 
         return context
 
