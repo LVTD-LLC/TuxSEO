@@ -37,6 +37,9 @@ _COMMON_TYPE_REQUIRED_KEYS = {
     "Article": ["headline", "author", "datePublished"],
 }
 
+_STATUS_PRIORITY = {"fail": 0, "warn": 1, "pass": 2}
+_SCORE_POINTS = {"fail": 0.0, "warn": 0.5, "pass": 1.0}
+
 
 def analyze_project_page_seo(project_page: ProjectPage) -> dict[str, Any]:
     markdown_content = project_page.markdown_content or ""
@@ -63,74 +66,93 @@ def analyze_project_page_seo(project_page: ProjectPage) -> dict[str, Any]:
         _check_item(
             key="title_length",
             label="Title length",
-            passed=_TITLE_MIN_LENGTH <= title_length <= _TITLE_MAX_LENGTH,
+            status=_status_for_range(title_length, good_min=_TITLE_MIN_LENGTH, good_max=_TITLE_MAX_LENGTH, hard_min=20, hard_max=70),
             value=f"{title_length} chars",
-            recommendation=f"Keep title between {_TITLE_MIN_LENGTH}-{_TITLE_MAX_LENGTH} characters.",
+            why_it_matters="The title is often what people and search engines see first in results.",
+            how_to_fix=f"Keep title between {_TITLE_MIN_LENGTH}-{_TITLE_MAX_LENGTH} characters and include the main topic early.",
         ),
         _check_item(
             key="meta_description_length",
             label="Meta description length",
-            passed=_DESCRIPTION_MIN_LENGTH <= description_length <= _DESCRIPTION_MAX_LENGTH,
+            status=_status_for_range(description_length, good_min=_DESCRIPTION_MIN_LENGTH, good_max=_DESCRIPTION_MAX_LENGTH, hard_min=90, hard_max=180),
             value=f"{description_length} chars",
-            recommendation=(
-                f"Keep description between {_DESCRIPTION_MIN_LENGTH}-{_DESCRIPTION_MAX_LENGTH} characters."
+            why_it_matters="A clear description helps people decide to click your page in search results.",
+            how_to_fix=(
+                f"Keep description between {_DESCRIPTION_MIN_LENGTH}-{_DESCRIPTION_MAX_LENGTH} characters with one clear benefit."
             ),
         ),
         _check_item(
             key="h1_presence",
-            label="H1 heading",
-            passed=h1_count >= 1,
+            label="Main heading (H1)",
+            status="fail" if h1_count == 0 else ("warn" if h1_count > 1 else "pass"),
             value=f"{h1_count} found",
-            recommendation="Add a single clear H1 heading near the top of the page.",
+            why_it_matters="One clear main heading helps visitors and search engines understand page focus.",
+            how_to_fix="Use a single descriptive H1 near the top of the page.",
         ),
         _check_item(
             key="body_word_count",
             label="Body content depth",
-            passed=body_word_count >= _MIN_BODY_WORD_COUNT,
+            status="pass" if body_word_count >= _MIN_BODY_WORD_COUNT else ("warn" if body_word_count >= 150 else "fail"),
             value=f"{body_word_count} words",
-            recommendation=f"Expand body copy to at least {_MIN_BODY_WORD_COUNT} words.",
+            why_it_matters="Thin pages are harder to rank because they often miss important context.",
+            how_to_fix=f"Expand the core section to at least {_MIN_BODY_WORD_COUNT} meaningful words.",
         ),
         _check_item(
             key="internal_links",
             label="Internal links",
-            passed=internal_link_count >= _MIN_INTERNAL_LINKS,
+            status="pass" if internal_link_count >= _MIN_INTERNAL_LINKS else ("warn" if internal_link_count == 1 else "fail"),
             value=f"{internal_link_count} links",
-            recommendation=(
-                f"Add at least {_MIN_INTERNAL_LINKS} relevant internal links to strengthen crawl paths."
+            why_it_matters="Internal links help search engines discover related pages and share authority.",
+            how_to_fix=(
+                f"Add at least {_MIN_INTERNAL_LINKS} relevant links to other important pages on your site."
             ),
         ),
         _check_item(
             key="summary_quality",
             label="Summary coverage",
-            passed=summary_word_count >= _MIN_SUMMARY_WORD_COUNT,
+            status="pass" if summary_word_count >= _MIN_SUMMARY_WORD_COUNT else ("warn" if summary_word_count >= 10 else "fail"),
             value=f"{summary_word_count} words",
-            recommendation="Provide a richer summary with key intent and page purpose.",
+            why_it_matters="A clear summary helps AI and search systems quickly understand your page intent.",
+            how_to_fix="Add a short summary that explains who this page is for and what it helps with.",
         ),
     ]
 
     if json_ld_analysis["is_scorable"]:
+        json_ld_status = (
+            "pass"
+            if json_ld_analysis["state"] == _JSONLD_STATE_OK
+            else ("warn" if json_ld_analysis["state"] == _JSONLD_STATE_ISSUES else "fail")
+        )
         checks.append(
             _check_item(
                 key="json_ld_schema",
                 label="JSON-LD schema",
-                passed=json_ld_analysis["state"] == _JSONLD_STATE_OK,
+                status=json_ld_status,
                 value=json_ld_analysis["status_label"],
-                recommendation=(
-                    "Use valid JSON-LD with @context and @type. Apply the starter suggestion and customize fields."
+                why_it_matters="Schema markup can unlock richer search result features and clearer machine understanding.",
+                how_to_fix=(
+                    "Use valid JSON-LD with @context and @type. Start with the suggested block, then customize key fields."
                 ),
             )
         )
 
-    passed_checks = sum(1 for check in checks if check["passed"])
+    checks = sorted(checks, key=lambda check: (_STATUS_PRIORITY[check["status"]], check["label"]))
+
+    passed_checks = sum(1 for check in checks if check["status"] == "pass")
+    warned_checks = sum(1 for check in checks if check["status"] == "warn")
+    failed_checks = sum(1 for check in checks if check["status"] == "fail")
     total_checks = len(checks)
-    score = round((passed_checks / total_checks) * 100) if total_checks else 0
+    earned_points = sum(_SCORE_POINTS[check["status"]] for check in checks)
+    score = round((earned_points / total_checks) * 100) if total_checks else 0
 
     return {
         "score": score,
         "passed_checks": passed_checks,
+        "warned_checks": warned_checks,
+        "failed_checks": failed_checks,
         "total_checks": total_checks,
         "checks": checks,
-        "issues": [check["label"] for check in checks if not check["passed"]],
+        "issues": [check["label"] for check in checks if check["status"] != "pass"],
         "json_ld": json_ld_analysis,
     }
 
@@ -189,6 +211,20 @@ def analyze_json_ld_schema(
 
     is_scorable = has_html_markup or len(script_blocks) > 0
 
+    detected_types = sorted({item["type"] for item in items if item.get("type") and item["type"] != "Unknown"})
+    issue_list = list(parse_errors)
+    for item in items:
+        for issue in item["issues"]:
+            issue_list.append(
+                f"Item {item['item_index']} in block {item['block_index']} ({item['type']}): {issue}"
+            )
+
+    summary_parts: list[str] = [f"{len(script_blocks)} JSON-LD script block(s)"]
+    if items:
+        summary_parts.append(f"{len(items)} schema item(s)")
+    if detected_types:
+        summary_parts.append(f"types: {', '.join(detected_types)}")
+
     return {
         "state": state,
         "status_label": _JSONLD_STATE_LABELS[state],
@@ -197,7 +233,10 @@ def analyze_json_ld_schema(
         "detected_script_blocks": len(script_blocks),
         "valid_items": sum(1 for item in items if item["is_valid"]),
         "total_items": len(items),
+        "detected_types": detected_types,
+        "detected_summary": " · ".join(summary_parts),
         "parse_errors": parse_errors,
+        "issue_list": issue_list,
         "items": items,
         "starter_suggestion": (
             build_json_ld_starter_suggestion(
@@ -319,18 +358,29 @@ def _check_item(
     *,
     key: str,
     label: str,
-    passed: bool,
+    status: str,
     value: str,
-    recommendation: str,
+    why_it_matters: str,
+    how_to_fix: str,
 ) -> dict[str, Any]:
     return {
         "key": key,
         "label": label,
-        "passed": passed,
-        "status": "pass" if passed else "fail",
+        "passed": status == "pass",
+        "status": status,
         "value": value,
-        "recommendation": recommendation,
+        "why_it_matters": why_it_matters,
+        "how_to_fix": how_to_fix,
+        "recommendation": how_to_fix,
     }
+
+
+def _status_for_range(value: int, *, good_min: int, good_max: int, hard_min: int, hard_max: int) -> str:
+    if good_min <= value <= good_max:
+        return "pass"
+    if hard_min <= value <= hard_max:
+        return "warn"
+    return "fail"
 
 
 def _word_count(value: str) -> int:
