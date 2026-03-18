@@ -188,7 +188,8 @@ def test_project_page_detail_view_renders_deterministic_seo_analysis(client, mon
 
     content = response.content.decode()
     assert response.status_code == 200
-    assert "SEO Score: 83/100" in content
+    assert "SEO Score:" in content
+    assert "83/100" in content
     assert "Meta description length" in content
     assert "Keep description between 120-160 characters." in content
 

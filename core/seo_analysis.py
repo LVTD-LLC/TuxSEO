@@ -19,6 +19,7 @@ _H1_RE = re.compile(r"^\s*#\s+\S", re.MULTILINE)
 
 def analyze_project_page_seo(project_page: ProjectPage) -> dict[str, Any]:
     markdown_content = project_page.markdown_content or ""
+    markdown_without_fenced_code = _strip_fenced_code_blocks(markdown_content)
     title = (project_page.title or "").strip()
     description = (project_page.description or "").strip()
     summary = (project_page.summary or "").strip()
@@ -26,8 +27,8 @@ def analyze_project_page_seo(project_page: ProjectPage) -> dict[str, Any]:
     title_length = len(title)
     description_length = len(description)
     summary_word_count = _word_count(summary)
-    body_word_count = _word_count(_strip_markdown(markdown_content))
-    h1_count = len(_H1_RE.findall(markdown_content))
+    body_word_count = _word_count(_strip_markdown(markdown_without_fenced_code))
+    h1_count = len(_H1_RE.findall(markdown_without_fenced_code))
     internal_link_count = _count_internal_links(markdown_content, project_page.url)
 
     checks = [
@@ -114,6 +115,12 @@ def _word_count(value: str) -> int:
     if not value:
         return 0
     return len(_WORD_RE.findall(value))
+
+
+def _strip_fenced_code_blocks(content: str) -> str:
+    if not content:
+        return ""
+    return re.sub(r"```.*?```", " ", content, flags=re.DOTALL)
 
 
 def _strip_markdown(content: str) -> str:

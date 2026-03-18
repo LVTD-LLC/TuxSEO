@@ -47,6 +47,46 @@ def test_analyze_project_page_seo_scores_deterministic_checks():
 
 
 @pytest.mark.django_db
+def test_analyze_project_page_seo_ignores_fenced_code_for_h1_and_word_count():
+    user = User.objects.create_user(
+        username="seo-analysis-code-fence-user",
+        email="seo-analysis-code-fence-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+
+    project_page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/dev-docs",
+        title="Developer docs with snippets and minimal prose",
+        description="A" * 130,
+        summary="This is a short summary that still provides enough intent words for deterministic summary checks.",
+        markdown_content="\n".join(
+            [
+                "```python",
+                "# this is a comment, not a markdown heading",
+                "print('hello world')",
+                "```",
+                "Tiny paragraph.",
+            ]
+        ),
+        type_ai_guess="documentation",
+    )
+
+    result = analyze_project_page_seo(project_page)
+
+    h1_check = next(check for check in result["checks"] if check["key"] == "h1_presence")
+    body_check = next(check for check in result["checks"] if check["key"] == "body_word_count")
+
+    assert h1_check["passed"] is False
+    assert body_check["passed"] is False
+
+
+@pytest.mark.django_db
 def test_analyze_project_page_seo_reports_failures_when_page_is_sparse():
     user = User.objects.create_user(
         username="seo-analysis-empty-user",
