@@ -195,6 +195,8 @@ def test_project_page_detail_view_renders_deterministic_seo_analysis(client, mon
     assert f"{expected_analysis['score']}/100" in content
     assert "Meta description length" in content
     assert "Keep description between 120-160 characters." in content
+    assert "JSON-LD status: Missing (suggested starter available)" in content
+    assert "Starter suggestion (WebPage)" in content
 
 
 @pytest.mark.django_db
