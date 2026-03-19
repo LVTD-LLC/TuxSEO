@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Backlink Opportunities DetailView UX v1: ranked scannable table, relevance/type reasoning, quick actions (open source + copy contact data), filters/sorts (highest relevance, has contact, newest discovered), and safe refresh-state handling while discovery jobs run
   - JSON-LD example payloads for UI consumers (`docs/json-ld-analysis-examples-v1.md`)
   - persisted per-page SEO analysis run history (`ProjectPageAnalysisRun`) with queued/running/succeeded/failed lifecycle states, active-run dedupe lock, rerun cooldown guardrails, failure diagnostics, compact payload snapshots, and DetailView history/status UI (`docs/seo-analysis-run-retention.md`)
+  - paid DetailView guardrails for page command center modules: feature flags (`seo_analysis`, `backlink_discovery`, `contact_enrichment`), per-profile daily quotas, backlink cooldowns, and API-layer action rate limiting with user-safe messaging
+  - page DetailView staff-only debug panel for failed SEO runs + backlink discovery failure context
   - periodic sitemap sync for "Your Pages" across sitemap-enabled projects with per-project locking, sitemap index traversal, stale URL marking, and configurable scheduler interval
   - manual per-project sitemap "Sync now" API trigger for support/debugging
 - Monitoring
@@ -41,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - paid-acquisition attribution foundation (Meta/Google/Reddit/X): first-touch/latest-touch persistence on Profile+Project, UTM/click-id ingestion, canonical campaign/ad/creative/copy schema, and server-side attribution enrichment for funnel/revenue events
   - new PostHog canonical events for activation/revenue attribution coverage: `onboarding_completed`, `first_content_generated`, `subscription_started`, `paid_conversion`
   - paid acquisition dashboard pack extension with channel, campaign/adset/ad, copy/creative, and signup→paid conversion timing tiles
+  - DetailView paid-module telemetry expansion: `detail_view_opened`, `seo_analysis_run_started/completed/failed`, `backlink_discovery_started/completed/failed`, `opportunities_viewed`, and `contact_method_copied` with schema docs + ops runbook (`docs/detail-view-analytics-events.md`, `docs/detail-view-ops-notes.md`)
 - Posts
   - custom post types per project with validated name + prompt guidance, CRUD management UI, and Posts navigation integration
   - custom post types can be selected in navigation and applied as generation guidance for title suggestions

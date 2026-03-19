@@ -216,6 +216,93 @@
       "stage": "revenue",
       "description": "Subscription ended or was removed."
     },
+    "detail_view_opened": {
+      "stage": "engagement",
+      "description": "A user opened a project page detail workspace.",
+      "required_properties": [
+        "project_id",
+        "project_page_id",
+        "result_status"
+      ]
+    },
+    "seo_analysis_run_started": {
+      "stage": "engagement",
+      "description": "A project page SEO analysis run was requested.",
+      "required_properties": [
+        "project_id",
+        "project_page_id",
+        "trigger",
+        "result_status"
+      ]
+    },
+    "seo_analysis_run_completed": {
+      "stage": "engagement",
+      "description": "A project page SEO analysis run completed successfully.",
+      "required_properties": [
+        "project_id",
+        "project_page_id",
+        "run_id",
+        "result_status"
+      ]
+    },
+    "seo_analysis_run_failed": {
+      "stage": "risk",
+      "description": "A project page SEO analysis run failed.",
+      "required_properties": [
+        "project_id",
+        "project_page_id",
+        "run_id",
+        "result_status"
+      ]
+    },
+    "backlink_discovery_started": {
+      "stage": "engagement",
+      "description": "A backlink discovery refresh was requested.",
+      "required_properties": [
+        "project_id",
+        "project_page_id",
+        "trigger",
+        "result_status"
+      ]
+    },
+    "backlink_discovery_completed": {
+      "stage": "engagement",
+      "description": "A backlink discovery refresh completed.",
+      "required_properties": [
+        "project_id",
+        "project_page_id",
+        "result_status"
+      ]
+    },
+    "backlink_discovery_failed": {
+      "stage": "risk",
+      "description": "A backlink discovery refresh failed.",
+      "required_properties": [
+        "project_id",
+        "project_page_id",
+        "result_status"
+      ]
+    },
+    "opportunities_viewed": {
+      "stage": "engagement",
+      "description": "A user viewed backlink opportunities on page detail.",
+      "required_properties": [
+        "project_id",
+        "project_page_id",
+        "opportunities_count",
+        "result_status"
+      ]
+    },
+    "contact_method_copied": {
+      "stage": "engagement",
+      "description": "A user copied a discovered contact method from an opportunity.",
+      "required_properties": [
+        "project_id",
+        "project_page_id",
+        "contact_method",
+        "result_status"
+      ]
+    },
     "abuse_guardrail_triggered": {
       "stage": "risk",
       "description": "A signup or expensive-action abuse guardrail blocked a request."

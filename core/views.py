@@ -33,10 +33,20 @@ from djstripe import models as djstripe_models
 from weasyprint import HTML
 
 from core.acquisition import sync_profile_attribution_from_request
-from core.analytics import ANALYTICS_EVENTS
+from core.analytics import ANALYTICS_EVENTS, enqueue_track_event
 from core.backlink_prospects import (
+    get_backlink_discovery_debug_state,
     get_backlink_prospects_refresh_lock_key,
     get_cached_backlink_prospects,
+)
+from core.detail_view_controls import (
+    MODULE_BACKLINK_DISCOVERY,
+    MODULE_SEO_ANALYSIS,
+    consume_action_rate_limit,
+    consume_cooldown,
+    consume_daily_quota,
+    get_detail_view_feature_flags,
+    is_module_enabled,
 )
 from core.choices import BlogPostStatus, ContentType, Language, OGImageStyle, ProfileStates
 from core.forms import (
@@ -1995,7 +2005,73 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
             return HttpResponse(status=403)
 
         action = request.POST.get("action")
+        if action not in {"run_seo_analysis", "run_backlink_refresh"}:
+            messages.error(request, "Unknown action.")
+            return redirect(
+                reverse(
+                    "project_page_detail",
+                    kwargs={
+                        "project_pk": self.object.project_id,
+                        "page_pk": self.object.id,
+                    },
+                )
+            )
+
+        rate_limit_result = consume_action_rate_limit(
+            profile_id=request.user.profile.id,
+            action=action,
+        )
+        if not rate_limit_result.allowed:
+            messages.info(
+                request,
+                "Too many requests in a short window. Please wait a minute and retry.",
+            )
+            return redirect(
+                reverse(
+                    "project_page_detail",
+                    kwargs={
+                        "project_pk": self.object.project_id,
+                        "page_pk": self.object.id,
+                    },
+                )
+            )
+
         if action == "run_seo_analysis":
+            if not is_module_enabled(MODULE_SEO_ANALYSIS):
+                messages.info(
+                    request,
+                    "SEO analysis is temporarily disabled by feature flag.",
+                )
+                return redirect(
+                    reverse(
+                        "project_page_detail",
+                        kwargs={
+                            "project_pk": self.object.project_id,
+                            "page_pk": self.object.id,
+                        },
+                    )
+                )
+
+            quota_result = consume_daily_quota(
+                profile_id=request.user.profile.id,
+                module=MODULE_SEO_ANALYSIS,
+                limit=int(getattr(settings, "DETAIL_VIEW_SEO_ANALYSIS_DAILY_LIMIT", 20)),
+            )
+            if not quota_result.allowed:
+                messages.info(
+                    request,
+                    "You've reached today's SEO analysis run limit. Please try again tomorrow.",
+                )
+                return redirect(
+                    reverse(
+                        "project_page_detail",
+                        kwargs={
+                            "project_pk": self.object.project_id,
+                            "page_pk": self.object.id,
+                        },
+                    )
+                )
+
             start_result = start_or_reuse_run(
                 project_page=self.object,
                 requested_by=request.user.profile,
@@ -2027,12 +2103,84 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
                     start_result.run.id,
                     group="project_page_analysis_runs",
                 )
+                enqueue_track_event(
+                    profile_id=request.user.profile.id,
+                    event_name=ANALYTICS_EVENTS.SEO_ANALYSIS_RUN_STARTED,
+                    properties={
+                        "project_id": self.object.project_id,
+                        "project_page_id": self.object.id,
+                        "run_id": start_result.run.id,
+                        "trigger": ProjectPageAnalysisRun.Trigger.MANUAL,
+                        "result_status": "queued",
+                    },
+                    source_function="ProjectPageDetailView.post",
+                )
                 messages.success(
                     request,
                     "Analysis rerun queued. Refresh in a few moments to see updated results.",
                 )
 
         elif action == "run_backlink_refresh":
+            if not is_module_enabled(MODULE_BACKLINK_DISCOVERY):
+                messages.info(
+                    request,
+                    "Backlink discovery is temporarily disabled by feature flag.",
+                )
+                return redirect(
+                    reverse(
+                        "project_page_detail",
+                        kwargs={
+                            "project_pk": self.object.project_id,
+                            "page_pk": self.object.id,
+                        },
+                    )
+                )
+
+            cooldown_result = consume_cooldown(
+                profile_id=request.user.profile.id,
+                module=MODULE_BACKLINK_DISCOVERY,
+                page_id=self.object.id,
+                cooldown_seconds=int(
+                    getattr(settings, "DETAIL_VIEW_BACKLINK_DISCOVERY_COOLDOWN_SECONDS", 45)
+                ),
+            )
+            if not cooldown_result.allowed:
+                messages.info(
+                    request,
+                    "Backlink discovery was just run. Please wait before retrying.",
+                )
+                return redirect(
+                    reverse(
+                        "project_page_detail",
+                        kwargs={
+                            "project_pk": self.object.project_id,
+                            "page_pk": self.object.id,
+                        },
+                    )
+                )
+
+            quota_result = consume_daily_quota(
+                profile_id=request.user.profile.id,
+                module=MODULE_BACKLINK_DISCOVERY,
+                limit=int(
+                    getattr(settings, "DETAIL_VIEW_BACKLINK_DISCOVERY_DAILY_LIMIT", 12)
+                ),
+            )
+            if not quota_result.allowed:
+                messages.info(
+                    request,
+                    "You've reached today's backlink discovery run limit. Please try again tomorrow.",
+                )
+                return redirect(
+                    reverse(
+                        "project_page_detail",
+                        kwargs={
+                            "project_pk": self.object.project_id,
+                            "page_pk": self.object.id,
+                        },
+                    )
+                )
+
             if not self.object.date_analyzed:
                 messages.info(
                     request,
@@ -2041,6 +2189,17 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
             else:
                 queued, reason = self._enqueue_backlink_refresh(project_page=self.object)
                 if queued:
+                    enqueue_track_event(
+                        profile_id=request.user.profile.id,
+                        event_name=ANALYTICS_EVENTS.BACKLINK_DISCOVERY_STARTED,
+                        properties={
+                            "project_id": self.object.project_id,
+                            "project_page_id": self.object.id,
+                            "trigger": "manual",
+                            "result_status": "queued",
+                        },
+                        source_function="ProjectPageDetailView.post",
+                    )
                     messages.success(
                         request,
                         "Backlink discovery queued. Existing opportunities stay visible while we refresh.",
@@ -2070,6 +2229,7 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
         context = super().get_context_data(**kwargs)
         project_page = self.object
         profile = self.request.user.profile
+        feature_flags = get_detail_view_feature_flags()
         simulated_state = ""
         if self.request.user.is_staff:
             simulated_state = self.request.GET.get("state", "").lower()
@@ -2082,6 +2242,7 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
         context["project_page_path"] = page_parsed_url.path or "/"
         context["project_page_domain"] = page_parsed_url.netloc
         context["state"] = simulated_state
+        context["detail_view_feature_flags"] = feature_flags
         latest_run, run_history = get_latest_and_history(project_page=project_page)
         latest_successful_run = project_page.get_latest_successful_analysis_run()
 
@@ -2109,13 +2270,15 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
         context["analysis_run_history"] = run_history
 
         overview_state = "ready" if project_page.date_analyzed else "loading"
-        if seo_analysis:
+        if not feature_flags[MODULE_SEO_ANALYSIS]:
+            seo_state = "disabled"
+        elif seo_analysis:
             seo_state = "ready"
         elif latest_run and latest_run.status == ProjectPageAnalysisRun.Status.FAILED:
             seo_state = "error"
         else:
             seo_state = "loading"
-        backlink_state = "empty"
+        backlink_state = "disabled" if not feature_flags[MODULE_BACKLINK_DISCOVERY] else "empty"
         backlink_candidates = []
         backlink_refresh_in_progress = False
         backlink_sort = self.request.GET.get("backlink_sort", "relevance")
@@ -2127,7 +2290,11 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
             overview_state = simulated_state
             seo_state = simulated_state
             backlink_state = simulated_state
-        elif profile.is_on_pro_plan and project_page.date_analyzed:
+        elif (
+            feature_flags[MODULE_BACKLINK_DISCOVERY]
+            and profile.is_on_pro_plan
+            and project_page.date_analyzed
+        ):
             lock_key = get_backlink_prospects_refresh_lock_key(project_page.id)
             backlink_refresh_in_progress = bool(cache.get(lock_key))
 
@@ -2171,6 +2338,48 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
         context["backlink_sort"] = backlink_sort
         context["backlink_has_contact_only"] = backlink_has_contact_only
         context["seo_analysis"] = seo_analysis
+
+        if profile.is_on_pro_plan:
+            enqueue_track_event(
+                profile_id=profile.id,
+                event_name=ANALYTICS_EVENTS.DETAIL_VIEW_OPENED,
+                properties={
+                    "project_id": project_page.project_id,
+                    "project_page_id": project_page.id,
+                    "seo_state": seo_state,
+                    "backlink_state": backlink_state,
+                    "result_status": "succeeded",
+                },
+                source_function="ProjectPageDetailView.get_context_data",
+            )
+            if backlink_state == "ready":
+                enqueue_track_event(
+                    profile_id=profile.id,
+                    event_name=ANALYTICS_EVENTS.OPPORTUNITIES_VIEWED,
+                    properties={
+                        "project_id": project_page.project_id,
+                        "project_page_id": project_page.id,
+                        "opportunities_count": len(backlink_candidates),
+                        "sort_mode": backlink_sort,
+                        "has_contact_only": backlink_has_contact_only,
+                        "result_status": "succeeded",
+                    },
+                    source_function="ProjectPageDetailView.get_context_data",
+                )
+
+        if self.request.user.is_staff:
+            context["backlink_debug_state"] = get_backlink_discovery_debug_state(project_page.id)
+            context["failed_analysis_debug_runs"] = list(
+                project_page.analysis_runs.filter(status=ProjectPageAnalysisRun.Status.FAILED)
+                .order_by("-created_at")[:5]
+                .values(
+                    "id",
+                    "created_at",
+                    "finished_at",
+                    "failure_message",
+                    "failure_details",
+                )
+            )
 
         return context
 

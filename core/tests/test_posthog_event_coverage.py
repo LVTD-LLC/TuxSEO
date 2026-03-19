@@ -27,6 +27,15 @@ def test_p1_event_coverage_matrix_events_exist_in_taxonomy():
         "link_exchange_toggled",
         "plan_upgraded",
         "plan_cancelled",
+        "detail_view_opened",
+        "seo_analysis_run_started",
+        "seo_analysis_run_completed",
+        "seo_analysis_run_failed",
+        "backlink_discovery_started",
+        "backlink_discovery_completed",
+        "backlink_discovery_failed",
+        "opportunities_viewed",
+        "contact_method_copied",
     }
 
     taxonomy_events = set(EVENT_TAXONOMY["events"].keys())
