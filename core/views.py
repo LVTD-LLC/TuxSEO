@@ -2003,12 +2003,23 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
             else:
                 lock_key = get_backlink_prospects_refresh_lock_key(project_page.id)
                 if cache.add(lock_key, True, timeout=5 * 60):
-                    async_task(
-                        "core.tasks.refresh_backlink_prospects_cache",
-                        project_page.id,
-                        group="backlink_prospects",
-                    )
-                backlink_state = "loading"
+                    try:
+                        async_task(
+                            "core.tasks.refresh_backlink_prospects_cache",
+                            project_page.id,
+                            group="backlink_prospects",
+                        )
+                    except Exception as error:
+                        cache.delete(lock_key)
+                        logger.warning(
+                            "[BacklinkProspects] Failed to enqueue async refresh",
+                            project_page_id=project_page.id,
+                            project_id=project_page.project_id,
+                            error=str(error),
+                            exc_info=True,
+                        )
+                        backlink_state = "error"
+                backlink_state = backlink_state if backlink_state == "error" else "loading"
 
         context["overview_state"] = overview_state
         context["seo_state"] = seo_state
