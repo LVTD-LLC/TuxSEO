@@ -1556,7 +1556,7 @@ class ProjectCustomPostTypeUpdateView(LoginRequiredMixin, View):
                 if request.POST.get("clear_logo") and not request.FILES.get("logo"):
                     if updated_post_type.logo:
                         updated_post_type.logo.delete(save=False)
-                    updated_post_type.logo = None
+                    updated_post_type.logo = ""
                     updated_post_type.save(update_fields=["logo"])
                 messages.success(request, f"Updated custom post type '{custom_post_type.name}'.")
             except ValidationError as error:

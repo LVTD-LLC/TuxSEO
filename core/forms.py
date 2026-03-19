@@ -397,7 +397,7 @@ class ProjectCustomPostTypeForm(forms.ModelForm):
         if self.cleaned_data.get("clear_logo") and not self.files.get("logo"):
             if instance.logo:
                 instance.logo.delete(save=False)
-            instance.logo = None
+            instance.logo = ""
 
         if commit:
             instance.save()
