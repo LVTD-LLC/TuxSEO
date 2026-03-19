@@ -136,7 +136,13 @@ TuxSEO API key: {{ request.user.profile.key }}</textarea>
             <h3 class="text-base font-semibold text-gray-900">Analytics (GA4/GSC/Plausible)</h3>
             <p class="mt-1 text-sm text-gray-600">Connected source health, 30-day rollups, and concrete opportunities to improve SEO outcomes.</p>
           </div>
-          <div class="flex flex-wrap gap-2">
+          <div class="flex flex-wrap gap-2 items-center">
+            <a
+              href="{% url 'project_analytics' project.id %}"
+              class="inline-flex items-center px-2.5 py-1 text-xs font-medium text-gray-700 bg-gray-50 rounded-full border border-gray-300 hover:bg-gray-100"
+            >
+              Open Analytics page
+            </a>
             {% for provider in analytics_snapshot_state.providers %}
               <span class="inline-flex items-center px-2.5 py-1 text-xs font-medium rounded-full {% if provider.is_connected %}text-green-800 bg-green-100{% else %}text-gray-700 bg-gray-100{% endif %}">
                 {{ provider.label }} {% if provider.is_connected %}Connected{% else %}Not connected{% endif %}

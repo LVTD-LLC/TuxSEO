@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - retry/backoff handling for transient provider failures and rate limits with cursor/snapshot observability
   - tests for incremental cursor behavior, idempotent upserts, and failure recording
   - Project Home "Analytics (GA4/GSC/Plausible)" UI section with provider connection badges, 30-day rollups, derived rates, 7-day trend deltas, and top low-CTR/high-impression SEO opportunities
+  - new per-project Analytics page foundation (`/project/<pk>/analytics/`) with project-scoped access control, navigation wiring, integration-aware empty states/CTA, and section shells for Overview KPIs, Traffic/Engagement, Conversions/Revenue, and Data source health/status
 - Pages
   - added changelog page
   - features to the pro plan on pricing page
