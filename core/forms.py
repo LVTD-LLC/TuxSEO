@@ -380,6 +380,11 @@ class ProjectCustomPostTypeForm(forms.ModelForm):
         if not logo:
             return logo
 
+        # Existing persisted files (when editing without uploading a new file)
+        # should pass through untouched.
+        if not hasattr(logo, "content_type"):
+            return logo
+
         content_type = getattr(logo, "content_type", "")
         if content_type not in ProjectCustomPostType.logo_allowed_content_types:
             raise forms.ValidationError(
