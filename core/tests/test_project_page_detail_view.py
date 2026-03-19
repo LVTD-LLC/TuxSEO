@@ -779,6 +779,7 @@ def test_project_page_detail_view_enforces_daily_seo_quota(client, monkeypatch):
     page = ProjectPage.objects.create(project=project, url="https://example.com/page")
 
     monkeypatch.setattr(user.profile.__class__, "is_on_pro_plan", property(lambda _self: True))
+    monkeypatch.setattr("core.views.async_task", lambda *_args, **_kwargs: "task-id")
 
     client.force_login(user)
     first = client.post(

@@ -39,6 +39,20 @@ def test_discover_backlink_prospects_skips_contact_enrichment_when_flag_off(monk
             }
         ],
     )
+    monkeypatch.setattr(
+        "core.backlink_prospects._rank_backlink_candidates",
+        lambda *_args, **_kwargs: [
+            {
+                "url": "https://docs.python.org/3/tutorial/",
+                "title": "Python docs tutorial",
+                "domain": "docs.python.org",
+                "snippet": "tutorial",
+                "topic": "seo",
+                "source": "exa",
+                "relevance_score": 0.9,
+            }
+        ],
+    )
 
     called = {"enrich": 0}
 
