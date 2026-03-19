@@ -1,6 +1,8 @@
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from functools import partial
 from html import unescape
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
@@ -59,6 +61,8 @@ _DEFAULT_SCORING_CONFIG = {
     "OVERCOLLECT_FACTOR": 3,
     "CACHE_TTL_SECONDS": 6 * 60 * 60,
     "REFRESH_LOCK_TTL_SECONDS": 5 * 60,
+    "ENRICH_FETCH_TIMEOUT_SECONDS": 5,
+    "ENRICH_TOTAL_BUDGET_SECONDS": 20,
     "SCORING_WEIGHTS": {
         "topic_match": 0.45,
         "content_type_fit": 0.2,
@@ -150,6 +154,13 @@ _CONTACT_METHOD_LABELS = {
 }
 
 _EMAIL_REGEX = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+_PLACEHOLDER_EMAIL_DOMAINS = {
+    "example.com",
+    "example.org",
+    "example.net",
+    "test.com",
+    "localhost",
+}
 _SOCIAL_SKIP_PATH_PREFIXES = (
     "share",
     "intent",
@@ -475,6 +486,11 @@ def _matches_any_pattern(value: str, patterns: tuple[str, ...]) -> bool:
     return any(re.search(pattern, value) for pattern in patterns)
 
 
+def _is_placeholder_email(email: str) -> bool:
+    domain = (email or "").split("@")[-1].lower().strip()
+    return domain in _PLACEHOLDER_EMAIL_DOMAINS
+
+
 def _is_author_profile_signal(*, absolute_url: str, label_lower: str) -> bool:
     parsed = urlparse(absolute_url)
     path_lower = (parsed.path or "").lower()
@@ -602,7 +618,7 @@ def _extract_public_contact_methods(*, candidate_url: str, html: str) -> tuple[l
 
     if methods_by_type["public_email"]["status"] == "not_found":
         email_match = _EMAIL_REGEX.search(raw_text or "")
-        if email_match:
+        if email_match and not _is_placeholder_email(email_match.group(0)):
             _set_contact_method(
                 methods_by_type,
                 method_type="public_email",
@@ -624,10 +640,25 @@ def _extract_public_contact_methods(*, candidate_url: str, html: str) -> tuple[l
     return methods, actionable_paths
 
 
-def _enrich_candidate_contacts(candidate: dict) -> tuple[list[dict], list[dict]]:
+def _enrich_candidate_contacts(
+    candidate: dict,
+    *,
+    deadline_monotonic: float | None = None,
+    fetch_timeout_seconds: float = 5,
+) -> tuple[list[dict], list[dict]]:
     url = (candidate.get("url") or "").strip()
     if not url:
         methods = [_init_contact_method(method_type, "") for method_type in _CONTACT_METHOD_ORDER]
+        return methods, []
+
+    if deadline_monotonic is not None and time.monotonic() > deadline_monotonic:
+        methods = [_init_contact_method(method_type, url) for method_type in _CONTACT_METHOD_ORDER]
+        for method in methods:
+            method["source_trace"] = {
+                "source_url": url,
+                "signal": "budget_exceeded",
+                "evidence": "Skipped enrichment because total fetch budget was exceeded.",
+            }
         return methods, []
 
     try:
@@ -637,7 +668,7 @@ def _enrich_candidate_contacts(candidate: dict) -> tuple[list[dict], list[dict]]
                 "User-Agent": "TuxSEO/BacklinkProspectsBot (+https://tuxseo.com)",
                 "Accept": "text/html,application/xhtml+xml",
             },
-            timeout=8,
+            timeout=max(1, float(fetch_timeout_seconds)),
         )
         response.raise_for_status()
         html = response.text or ""
@@ -1008,10 +1039,24 @@ def discover_backlink_prospects(
         selected = candidates[:max_candidates]
         if selected:
             max_workers = max(1, min(4, len(selected)))
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                enrichment_results = list(executor.map(_enrich_candidate_contacts, selected))
+            total_budget_seconds = max(1.0, float(config.get("ENRICH_TOTAL_BUDGET_SECONDS", 20)))
+            deadline_monotonic = time.monotonic() + total_budget_seconds
+            fetch_timeout_seconds = float(config.get("ENRICH_FETCH_TIMEOUT_SECONDS", 5))
 
-            for candidate, (contact_methods, actionable_paths) in zip(selected, enrichment_results):
+            enrichment_func = partial(
+                _enrich_candidate_contacts,
+                deadline_monotonic=deadline_monotonic,
+                fetch_timeout_seconds=fetch_timeout_seconds,
+            )
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                enrichment_results = list(executor.map(enrichment_func, selected))
+
+            for candidate, (contact_methods, actionable_paths) in zip(
+                selected,
+                enrichment_results,
+                strict=True,
+            ):
                 candidate["contact_methods"] = contact_methods
                 candidate["actionable_outreach_paths"] = actionable_paths
                 candidate["actionable_outreach_count"] = len(actionable_paths)

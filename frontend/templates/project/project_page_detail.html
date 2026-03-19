@@ -263,7 +263,7 @@
                         <li class="flex flex-wrap items-center gap-2">
                           <span class="font-medium text-gray-800">{{ method.label }}:</span>
                           {% if method.status == "found" and method.value %}
-                            {% if method.value|slice:":4" == "http" %}
+                            {% if method.value|lower|slice:":4" == "http" %}
                               <a href="{{ method.value }}" target="_blank" rel="noopener noreferrer" class="text-indigo-700 hover:text-indigo-800 underline break-all">
                                 {{ method.value }}
                               </a>
