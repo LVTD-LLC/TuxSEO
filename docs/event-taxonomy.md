@@ -31,7 +31,7 @@ For critical outcomes, capture is done server-side (not client-only).
 
 ## Canonical events (v2 highlights)
 
-### P1 funnel coverage
+### P1/P2 funnel + product coverage
 
 - `signup_completed`
 - `login_succeeded`
@@ -49,6 +49,10 @@ For critical outcomes, capture is done server-side (not client-only).
 - `link_exchange_toggled`
 - `plan_upgraded`
 - `plan_cancelled`
+- `analytics_page_viewed`
+- `analytics_date_range_changed`
+- `analytics_refresh_clicked`
+- `analytics_source_error_shown`
 
 See `event_taxonomy.json` for full list + required properties per event.
 

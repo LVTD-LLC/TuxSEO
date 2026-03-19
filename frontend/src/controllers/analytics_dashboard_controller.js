@@ -33,6 +33,10 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
+function toRangeFingerprint(startDate, endDate) {
+  return `${startDate || ""}:${endDate || ""}`;
+}
+
 export default class extends Controller {
   static targets = [
     "preset",
@@ -59,11 +63,21 @@ export default class extends Controller {
   };
 
   connect() {
-    const { start, end } = this.rangeFromPreset(this.currentPreset());
+    const defaultPreset = this.currentPreset();
+    const { start, end } = this.rangeFromPreset(defaultPreset);
     this.startDateTarget.value = start;
     this.endDateTarget.value = end;
-    this.setPresetUi(this.currentPreset());
-    this.load();
+    this.setPresetUi(defaultPreset);
+
+    this.lastRangeFingerprint = toRangeFingerprint(start, end);
+    this.sourceErrorFingerprintsSeen = new Set();
+
+    this.captureEvent("analytics_page_viewed", {
+      ...this.currentRangeTelemetry(),
+      selected_preset_days: Number(defaultPreset || 30),
+    });
+
+    this.load({ triggerSource: "initial_page_load" });
   }
 
   async refresh(event) {
@@ -71,7 +85,17 @@ export default class extends Controller {
       event.preventDefault();
     }
     this.setPresetUi("custom");
-    await this.load();
+
+    this.captureEvent("analytics_refresh_clicked", {
+      ...this.currentRangeTelemetry(),
+      trigger_source: "refresh_button",
+    });
+
+    this.captureDateRangeChangedIfNeeded({
+      change_source: "custom_date_refresh",
+    });
+
+    await this.load({ triggerSource: "refresh_button" });
   }
 
   async applyPreset(event) {
@@ -85,16 +109,25 @@ export default class extends Controller {
     this.startDateTarget.value = start;
     this.endDateTarget.value = end;
     this.setPresetUi(days);
-    await this.load();
+
+    this.captureDateRangeChangedIfNeeded({
+      change_source: "preset_click",
+      selected_preset_days: Number(days),
+    });
+
+    await this.load({ triggerSource: "preset_click" });
   }
 
-  async load() {
+  async load({ triggerSource = "unknown" } = {}) {
     this.errorTarget.classList.add("hidden");
+    this.sourceErrorFingerprintsSeen = new Set();
 
     const startDate = this.startDateTarget.value;
     const endDate = this.endDateTarget.value;
     if (!startDate || !endDate) {
-      this.renderError("Pick both start and end dates.");
+      this.renderError("Pick both start and end dates.", {
+        captureTelemetry: false,
+      });
       return;
     }
 
@@ -108,12 +141,22 @@ export default class extends Controller {
       const payload = await response.json();
 
       if (!response.ok || payload.status !== "success") {
-        throw new Error(payload.message || "Failed to load analytics.");
+        const error = new Error(payload.message || "Failed to load analytics.");
+        error.telemetryMeta = {
+          source: "dashboard_api",
+          source_status: response.status,
+          trigger_source: triggerSource,
+        };
+        throw error;
       }
 
       this.render(payload);
     } catch (error) {
-      this.renderError(error.message || "Failed to load analytics.");
+      this.renderError(error.message || "Failed to load analytics.", {
+        source: "dashboard_api",
+        trigger_source: triggerSource,
+        source_status: error?.telemetryMeta?.source_status || "fetch_failed",
+      });
     }
   }
 
@@ -148,6 +191,21 @@ export default class extends Controller {
         const source = (row.source || "unknown").toUpperCase();
         const badge = this.healthBadge(row);
         const detail = this.healthDetail(row);
+
+        if (row.last_error) {
+          const fingerprint = `${row.source || "unknown"}:${row.status || "unknown"}:${row.last_error}`;
+          if (!this.sourceErrorFingerprintsSeen.has(fingerprint)) {
+            this.sourceErrorFingerprintsSeen.add(fingerprint);
+            this.captureEvent("analytics_source_error_shown", {
+              ...this.currentRangeTelemetry(),
+              source: row.source || "unknown",
+              source_status: row.status || "unknown",
+              stale_days: row.stale_days,
+              error_message: row.last_error,
+              result_status: "shown",
+            });
+          }
+        }
 
         return `
           <li class="flex flex-wrap gap-2 justify-between items-center px-3 py-2 rounded-md border border-gray-200 bg-gray-50">
@@ -289,9 +347,68 @@ export default class extends Controller {
       : `Connected, no rows in selected range. Last synced ${row.stale_days} day(s) ago.`;
   }
 
-  renderError(message) {
+  renderError(message, { source = "dashboard_ui", trigger_source = "unknown", source_status = "error", captureTelemetry = true } = {}) {
     this.errorTarget.textContent = message;
     this.errorTarget.classList.remove("hidden");
+
+    if (!captureTelemetry) {
+      return;
+    }
+
+    this.captureEvent("analytics_source_error_shown", {
+      ...this.currentRangeTelemetry(),
+      source,
+      source_status,
+      trigger_source,
+      error_message: message,
+      result_status: "shown",
+    });
+  }
+
+  captureDateRangeChangedIfNeeded(properties = {}) {
+    const nextFingerprint = toRangeFingerprint(this.startDateTarget.value, this.endDateTarget.value);
+    if (!this.startDateTarget.value || !this.endDateTarget.value || nextFingerprint === this.lastRangeFingerprint) {
+      return;
+    }
+
+    this.lastRangeFingerprint = nextFingerprint;
+    this.captureEvent("analytics_date_range_changed", {
+      ...this.currentRangeTelemetry(),
+      ...properties,
+    });
+  }
+
+  currentRangeTelemetry() {
+    const startDate = this.startDateTarget.value;
+    const endDate = this.endDateTarget.value;
+
+    return {
+      project_id: this.projectIdValue,
+      date_range_start: startDate,
+      date_range_end: endDate,
+      range_days: this.rangeDays(startDate, endDate),
+    };
+  }
+
+  rangeDays(startDate, endDate) {
+    if (!startDate || !endDate) {
+      return null;
+    }
+
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      return null;
+    }
+
+    return Math.floor((end.getTime() - start.getTime()) / DAY) + 1;
+  }
+
+  captureEvent(eventName, properties = {}) {
+    if (!window.posthog || typeof window.posthog.capture !== "function") {
+      return;
+    }
+    window.posthog.capture(eventName, properties);
   }
 
   currentPreset() {

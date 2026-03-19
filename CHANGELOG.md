@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - project analytics aggregation API contract (`GET /api/projects/{project_id}/analytics/aggregation`) with validated date-range controls, normalized overview/source/source-health response blocks, cursor-aware partial-source health metadata, and short-lived cache hydration
   - v1 detailed analytics experience on the dedicated Analytics page: date-range presets/custom picker with refresh, API-driven KPI cards, source health badges (connected/stale/missing), sessions trend bars, provider breakdown table, and top-page breakdown table
   - project analytics aggregation API now includes `daily_trend` and `page_breakdown` blocks for UI chart/table rendering on date-range changes
+  - analytics page v1 interaction/error telemetry via PostHog: `analytics_page_viewed`, `analytics_date_range_changed`, `analytics_refresh_clicked`, `analytics_source_error_shown`
+  - Analytics page QA data-correctness checklist + production troubleshooting runbook (`docs/analytics-page-data-correctness-checklist.md`)
   - Project Home analytics simplified to summary-only snippets + clear "View detailed analytics" CTA to avoid duplicate dense analytics blocks
 - Pages
   - added changelog page

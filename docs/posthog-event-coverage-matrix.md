@@ -1,6 +1,6 @@
 # PostHog Event Coverage Matrix (TuxSEO)
 
-Last updated: 2026-03-17
+Last updated: 2026-03-19
 
 ## Scope
 
@@ -26,6 +26,7 @@ Critical P1 funnel and product actions requested for reliable conversion/product
 | Onboarding complete | `onboarding_completed` | Server (`Profile.get_or_create_project`, first project only) | (taxonomy optional) |
 | First content generated | `first_content_generated` | Server (`BlogPostTitleSuggestion.generate_content`, first generated post) | (taxonomy optional) |
 | Subscription start | `subscription_created`, `subscription_started`, `paid_conversion` | Server webhook (`handle_created_subscription`) | (taxonomy optional) |
+| Analytics page usage telemetry | `analytics_page_viewed`, `analytics_date_range_changed`, `analytics_refresh_clicked`, `analytics_source_error_shown` | Frontend (`frontend/src/controllers/analytics_dashboard_controller.js`) | page viewed: `project_id`, `date_range_start`, `date_range_end`, `range_days`; date range changed: + `change_source`; refresh clicked: same as page viewed; source error shown: `project_id`, `source`, `error_message`, `result_status` |
 
 ## Audit summary (before this change)
 
