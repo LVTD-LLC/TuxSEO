@@ -460,6 +460,128 @@ def test_project_page_detail_view_backlink_refresh_action_queues_task(client, mo
 
 
 @pytest.mark.django_db
+def test_project_page_detail_view_backlink_refresh_forbidden_for_free_users(client):
+    user = User.objects.create_user(
+        username="page-detail-backlink-refresh-free-user",
+        email="page-detail-backlink-refresh-free-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/features",
+        type_ai_guess="product page",
+        date_analyzed=timezone.now(),
+    )
+
+    client.force_login(user)
+    response = client.post(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        ),
+        data={"action": "run_backlink_refresh"},
+    )
+
+    assert response.status_code == 403
+
+
+@pytest.mark.django_db
+def test_project_page_detail_view_backlink_refresh_requires_completed_analysis(client, monkeypatch):
+    user = User.objects.create_user(
+        username="page-detail-backlink-refresh-needs-analysis-user",
+        email="page-detail-backlink-refresh-needs-analysis-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/features",
+        type_ai_guess="product page",
+    )
+
+    scheduled_tasks = []
+
+    def _fake_async_task(*args, **kwargs):
+        scheduled_tasks.append((args, kwargs))
+        return "task-id"
+
+    monkeypatch.setattr(user.profile.__class__, "is_on_pro_plan", property(lambda _self: True))
+    monkeypatch.setattr("core.views.async_task", _fake_async_task)
+
+    client.force_login(user)
+    response = client.post(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        ),
+        data={"action": "run_backlink_refresh"},
+    )
+
+    assert response.status_code == 302
+    assert response["Location"].endswith(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        )
+    )
+    assert scheduled_tasks == []
+
+
+@pytest.mark.django_db
+def test_project_page_detail_view_get_auto_queues_backlink_refresh_when_cache_missing(client, monkeypatch):
+    user = User.objects.create_user(
+        username="page-detail-backlink-autorefresh-user",
+        email="page-detail-backlink-autorefresh-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/features",
+        type_ai_guess="product page",
+        date_analyzed=timezone.now(),
+    )
+
+    scheduled_tasks = []
+
+    def _fake_async_task(*args, **kwargs):
+        scheduled_tasks.append((args, kwargs))
+        return "task-id"
+
+    monkeypatch.setattr(user.profile.__class__, "is_on_pro_plan", property(lambda _self: True))
+    monkeypatch.setattr("core.views.get_cached_backlink_prospects", lambda _project_page_id: None)
+    monkeypatch.setattr("core.views.async_task", _fake_async_task)
+
+    client.force_login(user)
+    response = client.get(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        )
+    )
+
+    content = response.content.decode()
+    assert response.status_code == 200
+    assert len(scheduled_tasks) == 1
+    assert scheduled_tasks[0][0][0] == "core.tasks.refresh_backlink_prospects_cache"
+    assert "Backlink opportunities are being prepared." in content
+    assert "Refresh in progress" in content
+
+
+@pytest.mark.django_db
 def test_project_page_detail_view_supports_explicit_error_state_for_shell(client):
     user = User.objects.create_superuser(
         username="page-detail-state-user",

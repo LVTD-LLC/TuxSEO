@@ -3,7 +3,15 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from django.contrib.auth.models import User
 
-from core.backlink_prospects import discover_backlink_prospects, extract_backlink_topics
+from django.core.cache import cache
+
+from core.backlink_prospects import (
+    discover_backlink_prospects,
+    extract_backlink_topics,
+    get_backlink_prospects_cache_key,
+    get_backlink_prospects_refresh_lock_key,
+    refresh_backlink_prospects_cache,
+)
 from core.models import Project, ProjectPage
 
 
@@ -558,6 +566,102 @@ def test_discover_backlink_prospects_avoids_common_false_positive_contact_hints(
     methods_by_type = {method["type"]: method for method in candidates[0]["contact_methods"]}
     assert methods_by_type["contact_page_url"]["status"] == "not_found"
     assert methods_by_type["author_profile"]["status"] == "not_found"
+
+
+@pytest.mark.django_db
+def test_refresh_backlink_prospects_cache_smoke_sets_cache_and_clears_lock(monkeypatch):
+    user = User.objects.create_user(
+        username="prospect-refresh-cache-user",
+        email="prospect-refresh-cache-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://tuxseo.com",
+        name="TuxSEO",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://tuxseo.com/features/seo",
+        title="SEO Features",
+        type_ai_guess="Product page",
+    )
+
+    expected_candidates = [
+        {
+            "url": "https://example.org/seo-guide",
+            "domain": "example.org",
+            "canonical_domain": "example.org",
+            "title": "SEO Guide",
+            "snippet": "Great SEO guide",
+            "topic": "seo workflows",
+            "source": "exa",
+            "relevance_score": 0.91,
+            "score_breakdown": {
+                "topic_match_strength": 0.9,
+                "content_type_fit": 0.8,
+                "domain_credibility": 0.7,
+                "freshness_signal": 1.0,
+                "topic_overlap_ratio": 0.8,
+                "exa_score": 0.9,
+            },
+            "explanation": {"summary": "Topical and authority signals align."},
+            "discovered_at": datetime.now(tz=timezone.utc).isoformat(),
+            "contact_methods": [],
+            "actionable_outreach_paths": [],
+            "actionable_outreach_count": 0,
+        }
+    ]
+
+    monkeypatch.setattr(
+        "core.backlink_prospects.discover_backlink_prospects",
+        lambda _project_page: expected_candidates,
+    )
+
+    lock_key = get_backlink_prospects_refresh_lock_key(page.id)
+    cache.set(lock_key, True, timeout=60)
+
+    cached_candidates = refresh_backlink_prospects_cache(page)
+
+    assert cached_candidates == expected_candidates
+    assert cache.get(lock_key) is None
+
+    cached_payload = cache.get(get_backlink_prospects_cache_key(page.id))
+    assert cached_payload is not None
+    assert cached_payload["candidates"] == expected_candidates
+
+
+@pytest.mark.django_db
+def test_refresh_backlink_prospects_cache_clears_lock_on_discovery_error(monkeypatch):
+    user = User.objects.create_user(
+        username="prospect-refresh-error-user",
+        email="prospect-refresh-error-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://tuxseo.com",
+        name="TuxSEO",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://tuxseo.com/features/seo",
+        title="SEO Features",
+        type_ai_guess="Product page",
+    )
+
+    def _raise_error(_project_page):
+        raise RuntimeError("simulated refresh failure")
+
+    monkeypatch.setattr("core.backlink_prospects.discover_backlink_prospects", _raise_error)
+
+    lock_key = get_backlink_prospects_refresh_lock_key(page.id)
+    cache.set(lock_key, True, timeout=60)
+
+    with pytest.raises(RuntimeError, match="simulated refresh failure"):
+        refresh_backlink_prospects_cache(page)
+
+    assert cache.get(lock_key) is None
 
 
 @pytest.mark.django_db
