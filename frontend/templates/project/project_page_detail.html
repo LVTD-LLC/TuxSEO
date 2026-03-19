@@ -255,6 +255,41 @@
                     {{ candidate.source }}
                   </span>
                 </div>
+                {% if candidate.contact_methods %}
+                  <div class="mt-3 rounded-md border border-gray-100 bg-gray-50 p-3">
+                    <p class="text-xs font-semibold uppercase tracking-wide text-gray-600">Outreach signals (public web only)</p>
+                    <ul class="mt-2 space-y-2 text-xs text-gray-700">
+                      {% for method in candidate.contact_methods %}
+                        <li class="flex flex-wrap items-center gap-2">
+                          <span class="font-medium text-gray-800">{{ method.label }}:</span>
+                          {% if method.status == "found" and method.value %}
+                            {% if method.value|lower|slice:":4" == "http" %}
+                              <a href="{{ method.value }}" target="_blank" rel="noopener noreferrer" class="text-indigo-700 hover:text-indigo-800 underline break-all">
+                                {{ method.value }}
+                              </a>
+                            {% elif method.type == "public_email" %}
+                              <a href="mailto:{{ method.value }}" class="text-indigo-700 hover:text-indigo-800 underline break-all">
+                                {{ method.value }}
+                              </a>
+                            {% else %}
+                              <span class="break-all">{{ method.value }}</span>
+                            {% endif %}
+                          {% elif method.status == "low_confidence" and method.value %}
+                            <span class="break-all">{{ method.value }}</span>
+                          {% else %}
+                            <span>Not found</span>
+                          {% endif %}
+                          <span class="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold {% if method.status == 'found' %}bg-emerald-100 text-emerald-800{% elif method.status == 'low_confidence' %}bg-amber-100 text-amber-800{% else %}bg-gray-200 text-gray-600{% endif %}">
+                            {{ method.status|title }} · {{ method.confidence }}
+                          </span>
+                          {% if method.source_trace.evidence %}
+                            <span class="text-[10px] text-gray-500">{{ method.source_trace.evidence }}</span>
+                          {% endif %}
+                        </li>
+                      {% endfor %}
+                    </ul>
+                  </div>
+                {% endif %}
                 {% if candidate.explanation.summary %}
                   <p class="mt-2 text-xs text-gray-500">{{ candidate.explanation.summary }}</p>
                 {% endif %}

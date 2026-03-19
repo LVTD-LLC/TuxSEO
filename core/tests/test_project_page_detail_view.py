@@ -232,6 +232,29 @@ def test_project_page_detail_view_renders_backlink_candidates_for_pro_users(clie
                 "snippet": "Technical SEO indexing best practices",
                 "topic": "technical seo",
                 "source": "exa",
+                "relevance_score": 0.92,
+                "contact_methods": [
+                    {
+                        "type": "contact_page_url",
+                        "label": "Contact page",
+                        "status": "found",
+                        "confidence": "high",
+                        "value": "https://developers.google.com/contact",
+                        "source_trace": {
+                            "evidence": "Anchor text 'Contact us' links to contact-related URL.",
+                        },
+                    },
+                    {
+                        "type": "public_email",
+                        "label": "Public email",
+                        "status": "not_found",
+                        "confidence": "none",
+                        "value": "",
+                        "source_trace": {
+                            "evidence": "No reliable public signal detected.",
+                        },
+                    },
+                ],
             }
         ],
     )
@@ -249,6 +272,11 @@ def test_project_page_detail_view_renders_backlink_candidates_for_pro_users(clie
     assert "Google SEO Starter Guide" in content
     assert "1 relevant prospects found" in content
     assert "Topic: technical seo" in content
+    assert "Outreach signals (public web only)" in content
+    assert "Contact page:" in content
+    assert "Found · high" in content
+    assert "Public email:" in content
+    assert "none" in content
 
 
 @pytest.mark.django_db

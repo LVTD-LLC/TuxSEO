@@ -1,6 +1,10 @@
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from functools import partial
+from html import unescape
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import requests
 from django.conf import settings
@@ -57,6 +61,8 @@ _DEFAULT_SCORING_CONFIG = {
     "OVERCOLLECT_FACTOR": 3,
     "CACHE_TTL_SECONDS": 6 * 60 * 60,
     "REFRESH_LOCK_TTL_SECONDS": 5 * 60,
+    "ENRICH_FETCH_TIMEOUT_SECONDS": 5,
+    "ENRICH_TOTAL_BUDGET_SECONDS": 20,
     "SCORING_WEIGHTS": {
         "topic_match": 0.45,
         "content_type_fit": 0.2,
@@ -130,6 +136,58 @@ _CONTENT_TYPE_HINTS = {
 
 _QUERY_STRIP_PREFIXES = ("utm_",)
 _QUERY_STRIP_EXACT = {"fbclid", "gclid", "mc_cid", "mc_eid", "ref", "source"}
+
+_CONTACT_METHOD_ORDER = (
+    "contact_page_url",
+    "public_email",
+    "x_twitter",
+    "linkedin",
+    "author_profile",
+)
+
+_CONTACT_METHOD_LABELS = {
+    "contact_page_url": "Contact page",
+    "public_email": "Public email",
+    "x_twitter": "X/Twitter",
+    "linkedin": "LinkedIn",
+    "author_profile": "Author profile",
+}
+
+_EMAIL_REGEX = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+_PLACEHOLDER_EMAIL_DOMAINS = {
+    "example.com",
+    "example.org",
+    "example.net",
+    "test.com",
+    "localhost",
+}
+_SOCIAL_SKIP_PATH_PREFIXES = (
+    "share",
+    "intent",
+    "home",
+    "search",
+    "hashtag",
+    "status",
+    "i/",
+)
+
+_CONTACT_HINT_PATTERNS = (
+    r"\bcontact\b",
+    r"\bget\s+in\s+touch\b",
+    r"\breach\s+out\b",
+    r"\breach\s+us\b",
+    r"\bsupport\b",
+)
+_LOW_CONTACT_HINT_PATTERNS = (
+    r"\babout\b",
+    r"\bteam\b",
+    r"\bcompany\b",
+)
+_AUTHOR_HINT_PATTERNS = (
+    r"\bauthor\b",
+    r"\bprofile\b",
+    r"\babout\s+the\s+author\b",
+)
 
 
 def _get_scoring_config() -> dict:
@@ -320,6 +378,311 @@ def _normalize_candidate_url(url: str) -> str:
             "",
         )
     )
+
+
+def _extract_anchor_hrefs(html: str) -> list[tuple[str, str]]:
+    hrefs: list[tuple[str, str]] = []
+    if not html:
+        return hrefs
+
+    for match in re.finditer(
+        r"<a\b[^>]*href\s*=\s*([\"'])(.*?)\1[^>]*>(.*?)</a>",
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    ):
+        href = unescape((match.group(2) or "").strip())
+        inner_html = match.group(3) or ""
+        text = re.sub(r"<[^>]+>", " ", inner_html)
+        text = _normalize_phrase(unescape(text))
+        if href:
+            hrefs.append((href, text))
+
+    return hrefs
+
+
+def _init_contact_method(method_type: str, candidate_url: str) -> dict:
+    return {
+        "type": method_type,
+        "label": _CONTACT_METHOD_LABELS.get(method_type, method_type),
+        "status": "not_found",
+        "confidence": "none",
+        "value": "",
+        "source_trace": {
+            "source_url": candidate_url,
+            "signal": "none",
+            "evidence": "No reliable public signal detected.",
+        },
+    }
+
+
+def _set_contact_method(
+    methods_by_type: dict[str, dict],
+    *,
+    method_type: str,
+    status: str,
+    confidence: str,
+    value: str,
+    signal: str,
+    evidence: str,
+    source_url: str,
+) -> None:
+    methods_by_type[method_type] = {
+        "type": method_type,
+        "label": _CONTACT_METHOD_LABELS.get(method_type, method_type),
+        "status": status,
+        "confidence": confidence,
+        "value": value or "",
+        "source_trace": {
+            "source_url": source_url,
+            "signal": signal,
+            "evidence": _normalize_phrase(evidence) or "Public signal extracted from page HTML.",
+        },
+    }
+
+
+def _normalize_social_profile_url(url: str, *, kind: str) -> str:
+    normalized = _normalize_candidate_url(url)
+    if not normalized:
+        return ""
+
+    parsed = urlparse(normalized)
+    host = (parsed.hostname or "").lower()
+    path = (parsed.path or "").strip("/")
+    if not path:
+        return ""
+
+    path_lower = path.lower()
+    if any(path_lower.startswith(prefix) for prefix in _SOCIAL_SKIP_PATH_PREFIXES):
+        return ""
+
+    if kind == "x_twitter":
+        if not (
+            host in {"x.com", "twitter.com"}
+            or host.endswith(".x.com")
+            or host.endswith(".twitter.com")
+        ):
+            return ""
+
+        username = path.split("/")[0]
+        if not re.fullmatch(r"[A-Za-z0-9_]{1,15}", username):
+            return ""
+
+        return f"https://x.com/{username}"
+
+    if kind == "linkedin":
+        if not (host == "linkedin.com" or host.endswith(".linkedin.com")):
+            return ""
+
+        top_segment = path.split("/")[0].lower()
+        if top_segment not in {"company", "in", "school"}:
+            return ""
+
+        return f"https://www.linkedin.com/{path}"
+
+    return ""
+
+
+def _matches_any_pattern(value: str, patterns: tuple[str, ...]) -> bool:
+    return any(re.search(pattern, value) for pattern in patterns)
+
+
+def _is_placeholder_email(email: str) -> bool:
+    domain = (email or "").split("@")[-1].lower().strip()
+    return domain in _PLACEHOLDER_EMAIL_DOMAINS
+
+
+def _is_author_profile_signal(*, absolute_url: str, label_lower: str) -> bool:
+    parsed = urlparse(absolute_url)
+    path_lower = (parsed.path or "").lower()
+
+    if any(token in path_lower for token in ("/author", "/authors", "/profile", "/profiles")):
+        return True
+
+    combined = f"{absolute_url} {label_lower}"
+    return _matches_any_pattern(combined, _AUTHOR_HINT_PATTERNS)
+
+
+def _extract_public_contact_methods(*, candidate_url: str, html: str) -> tuple[list[dict], list[dict]]:
+    """Extract outreach contact signals from public HTML only.
+
+    Ethical boundary: we only parse publicly visible page HTML and outgoing links.
+    We do not query private databases, gated APIs, or infer/fabricate personal data.
+
+    Confidence labels (v1):
+    - found/high: explicit and well-formed signal (mailto, social profile URL pattern, contact page).
+    - low_confidence/low: weak signal that may be relevant but ambiguous.
+    - not_found/none: no signal detected.
+    """
+
+    methods_by_type = {
+        method_type: _init_contact_method(method_type, candidate_url)
+        for method_type in _CONTACT_METHOD_ORDER
+    }
+    anchors = _extract_anchor_hrefs(html)
+    raw_text = _normalize_phrase(unescape(re.sub(r"<[^>]+>", " ", html or "")))
+
+    for href, anchor_text in anchors:
+        href_lower = href.lower().strip()
+        label_lower = (anchor_text or "").lower()
+        absolute_url = _normalize_candidate_url(urljoin(candidate_url, href))
+
+        if href_lower.startswith("mailto:") and methods_by_type["public_email"]["status"] != "found":
+            email = href.split(":", 1)[1].split("?", 1)[0].strip()
+            if _EMAIL_REGEX.fullmatch(email):
+                _set_contact_method(
+                    methods_by_type,
+                    method_type="public_email",
+                    status="found",
+                    confidence="high",
+                    value=email,
+                    signal="mailto",
+                    evidence=f"Found mailto link in anchor '{anchor_text or 'email'}'.",
+                    source_url=candidate_url,
+                )
+
+        if absolute_url:
+            contact_signal_text = f"{absolute_url} {label_lower}"
+
+            if methods_by_type["contact_page_url"]["status"] != "found" and _matches_any_pattern(
+                contact_signal_text,
+                _CONTACT_HINT_PATTERNS,
+            ):
+                _set_contact_method(
+                    methods_by_type,
+                    method_type="contact_page_url",
+                    status="found",
+                    confidence="high",
+                    value=absolute_url,
+                    signal="contact_link",
+                    evidence=f"Anchor text '{anchor_text or absolute_url}' links to contact-related URL.",
+                    source_url=candidate_url,
+                )
+
+            if methods_by_type["contact_page_url"]["status"] == "not_found" and _matches_any_pattern(
+                contact_signal_text,
+                _LOW_CONTACT_HINT_PATTERNS,
+            ):
+                _set_contact_method(
+                    methods_by_type,
+                    method_type="contact_page_url",
+                    status="low_confidence",
+                    confidence="low",
+                    value=absolute_url,
+                    signal="weak_contact_link",
+                    evidence=(
+                        f"Anchor '{anchor_text or absolute_url}' may help outreach but is not an explicit contact page."
+                    ),
+                    source_url=candidate_url,
+                )
+
+            twitter_profile = _normalize_social_profile_url(absolute_url, kind="x_twitter")
+            if twitter_profile and methods_by_type["x_twitter"]["status"] != "found":
+                _set_contact_method(
+                    methods_by_type,
+                    method_type="x_twitter",
+                    status="found",
+                    confidence="high",
+                    value=twitter_profile,
+                    signal="social_link",
+                    evidence=f"Found profile link in anchor '{anchor_text or twitter_profile}'.",
+                    source_url=candidate_url,
+                )
+
+            linkedin_profile = _normalize_social_profile_url(absolute_url, kind="linkedin")
+            if linkedin_profile and methods_by_type["linkedin"]["status"] != "found":
+                _set_contact_method(
+                    methods_by_type,
+                    method_type="linkedin",
+                    status="found",
+                    confidence="high",
+                    value=linkedin_profile,
+                    signal="social_link",
+                    evidence=f"Found profile link in anchor '{anchor_text or linkedin_profile}'.",
+                    source_url=candidate_url,
+                )
+
+            if _is_author_profile_signal(
+                absolute_url=absolute_url,
+                label_lower=label_lower,
+            ) and methods_by_type["author_profile"]["status"] != "found":
+                _set_contact_method(
+                    methods_by_type,
+                    method_type="author_profile",
+                    status="found",
+                    confidence="medium",
+                    value=absolute_url,
+                    signal="author_link",
+                    evidence=f"Author-style link '{anchor_text or absolute_url}' found on page.",
+                    source_url=candidate_url,
+                )
+
+    if methods_by_type["public_email"]["status"] == "not_found":
+        email_match = _EMAIL_REGEX.search(raw_text or "")
+        if email_match and not _is_placeholder_email(email_match.group(0)):
+            _set_contact_method(
+                methods_by_type,
+                method_type="public_email",
+                status="found",
+                confidence="medium",
+                value=email_match.group(0),
+                signal="visible_text",
+                evidence="Email pattern detected in visible page text.",
+                source_url=candidate_url,
+            )
+
+    methods = [methods_by_type[method_type] for method_type in _CONTACT_METHOD_ORDER]
+    actionable_paths = [
+        method
+        for method in methods
+        if method["status"] == "found" and method.get("value")
+    ]
+
+    return methods, actionable_paths
+
+
+def _enrich_candidate_contacts(
+    candidate: dict,
+    *,
+    deadline_monotonic: float | None = None,
+    fetch_timeout_seconds: float = 5,
+) -> tuple[list[dict], list[dict]]:
+    url = (candidate.get("url") or "").strip()
+    if not url:
+        methods = [_init_contact_method(method_type, "") for method_type in _CONTACT_METHOD_ORDER]
+        return methods, []
+
+    if deadline_monotonic is not None and time.monotonic() > deadline_monotonic:
+        methods = [_init_contact_method(method_type, url) for method_type in _CONTACT_METHOD_ORDER]
+        for method in methods:
+            method["source_trace"] = {
+                "source_url": url,
+                "signal": "budget_exceeded",
+                "evidence": "Skipped enrichment because total fetch budget was exceeded.",
+            }
+        return methods, []
+
+    try:
+        response = requests.get(
+            url,
+            headers={
+                "User-Agent": "TuxSEO/BacklinkProspectsBot (+https://tuxseo.com)",
+                "Accept": "text/html,application/xhtml+xml",
+            },
+            timeout=max(1, float(fetch_timeout_seconds)),
+        )
+        response.raise_for_status()
+        html = response.text or ""
+    except requests.RequestException:
+        methods = [_init_contact_method(method_type, url) for method_type in _CONTACT_METHOD_ORDER]
+        for method in methods:
+            method["source_trace"] = {
+                "source_url": url,
+                "signal": "fetch_failed",
+                "evidence": "Could not fetch public page HTML for enrichment.",
+            }
+        return methods, []
+
+    return _extract_public_contact_methods(candidate_url=url, html=html)
 
 
 def _path_has_low_signal_segment(path_lower: str) -> bool:
@@ -660,6 +1023,9 @@ def discover_backlink_prospects(
                     "relevance_score": scored["relevance_score"],
                     "score_breakdown": scored["score_breakdown"],
                     "explanation": scored["explanation"],
+                    "contact_methods": [],
+                    "actionable_outreach_paths": [],
+                    "actionable_outreach_count": 0,
                 }
 
                 candidates.append(candidate_payload)
@@ -669,7 +1035,33 @@ def discover_backlink_prospects(
                     break
 
         candidates.sort(key=lambda candidate: candidate.get("relevance_score", 0.0), reverse=True)
-        return candidates[:max_candidates]
+
+        selected = candidates[:max_candidates]
+        if selected:
+            max_workers = max(1, min(4, len(selected)))
+            total_budget_seconds = max(1.0, float(config.get("ENRICH_TOTAL_BUDGET_SECONDS", 20)))
+            deadline_monotonic = time.monotonic() + total_budget_seconds
+            fetch_timeout_seconds = float(config.get("ENRICH_FETCH_TIMEOUT_SECONDS", 5))
+
+            enrichment_func = partial(
+                _enrich_candidate_contacts,
+                deadline_monotonic=deadline_monotonic,
+                fetch_timeout_seconds=fetch_timeout_seconds,
+            )
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                enrichment_results = list(executor.map(enrichment_func, selected))
+
+            for candidate, (contact_methods, actionable_paths) in zip(
+                selected,
+                enrichment_results,
+                strict=True,
+            ):
+                candidate["contact_methods"] = contact_methods
+                candidate["actionable_outreach_paths"] = actionable_paths
+                candidate["actionable_outreach_count"] = len(actionable_paths)
+
+        return selected
 
     except requests.RequestException as error:
         logger.warning(
