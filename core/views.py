@@ -1,6 +1,6 @@
 import secrets
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
 
@@ -1876,58 +1876,185 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
             project_id=self.kwargs["project_pk"],
         )
 
+    def _enqueue_backlink_refresh(self, *, project_page):
+        lock_key = get_backlink_prospects_refresh_lock_key(project_page.id)
+        if not cache.add(lock_key, True, timeout=5 * 60):
+            return False, "already_running"
+
+        try:
+            async_task(
+                "core.tasks.refresh_backlink_prospects_cache",
+                project_page.id,
+                group="backlink_prospects",
+            )
+        except Exception as error:
+            cache.delete(lock_key)
+            logger.warning(
+                "[BacklinkProspects] Failed to enqueue async refresh",
+                project_page_id=project_page.id,
+                project_id=project_page.project_id,
+                error=str(error),
+                exc_info=True,
+            )
+            return False, "enqueue_failed"
+
+        return True, "queued"
+
+    def _prepare_backlink_candidates(self, candidates, *, sort_mode, has_contact_only=False):
+        prepared_candidates = []
+        for candidate in candidates or []:
+            contact_methods = candidate.get("contact_methods") or []
+            actionable_methods = [
+                method
+                for method in contact_methods
+                if method.get("status") in {"found", "low_confidence"} and method.get("value")
+            ]
+            found_methods = [method for method in actionable_methods if method.get("status") == "found"]
+            high_confidence_methods = [
+                method for method in actionable_methods if method.get("confidence") == "high"
+            ]
+
+            parsed_discovered_at = None
+            discovered_at_raw = candidate.get("discovered_at")
+            if isinstance(discovered_at_raw, str) and discovered_at_raw:
+                try:
+                    parsed_discovered_at = datetime.fromisoformat(
+                        discovered_at_raw.replace("Z", "+00:00")
+                    )
+                except ValueError:
+                    parsed_discovered_at = None
+
+            url_lower = str(candidate.get("url") or "").lower()
+            title_lower = str(candidate.get("title") or "").lower()
+            opportunity_type = "Editorial mention"
+            opportunity_signature = f"{title_lower} {url_lower}"
+            if any(
+                keyword in opportunity_signature
+                for keyword in ["write for us", "guest post", "contributor"]
+            ):
+                opportunity_type = "Guest post pitch"
+            elif any(
+                keyword in opportunity_signature
+                for keyword in ["resources", "directory", "roundup", "best "]
+            ):
+                opportunity_type = "Resource inclusion"
+
+            explanation = candidate.get("explanation")
+            if not isinstance(explanation, dict):
+                explanation = {}
+
+            prepared_candidate = {
+                **candidate,
+                "contact_methods": contact_methods,
+                "has_contact_methods": bool(actionable_methods),
+                "found_contact_count": len(found_methods),
+                "high_confidence_contact_count": len(high_confidence_methods),
+                "opportunity_type": opportunity_type,
+                "relevance_reason": (
+                    explanation.get("summary")
+                    or "Topical and authority signals indicate this is a relevant outreach target."
+                ),
+                "discovered_at": parsed_discovered_at,
+                "discovered_at_timestamp": parsed_discovered_at.timestamp() if parsed_discovered_at else 0,
+            }
+            prepared_candidates.append(prepared_candidate)
+
+        if has_contact_only:
+            prepared_candidates = [
+                candidate for candidate in prepared_candidates if candidate["has_contact_methods"]
+            ]
+
+        if sort_mode == "newest":
+            prepared_candidates.sort(
+                key=lambda candidate: (
+                    candidate.get("discovered_at_timestamp", 0),
+                    candidate.get("relevance_score", 0),
+                ),
+                reverse=True,
+            )
+        elif sort_mode == "has_contact":
+            prepared_candidates.sort(
+                key=lambda candidate: (
+                    candidate.get("has_contact_methods", False),
+                    candidate.get("found_contact_count", 0),
+                    candidate.get("relevance_score", 0),
+                ),
+                reverse=True,
+            )
+        else:
+            prepared_candidates.sort(
+                key=lambda candidate: candidate.get("relevance_score", 0),
+                reverse=True,
+            )
+
+        return prepared_candidates
+
     def post(self, request, *args, **kwargs):
         self.object = self.get_object()
         if not request.user.profile.is_on_pro_plan:
             return HttpResponse(status=403)
 
         action = request.POST.get("action")
-        if action != "run_seo_analysis":
-            return redirect(
-                reverse(
-                    "project_page_detail",
-                    kwargs={
-                        "project_pk": self.object.project_id,
-                        "page_pk": self.object.id,
-                    },
-                )
+        if action == "run_seo_analysis":
+            start_result = start_or_reuse_run(
+                project_page=self.object,
+                requested_by=request.user.profile,
+                trigger=ProjectPageAnalysisRun.Trigger.MANUAL,
             )
 
-        start_result = start_or_reuse_run(
-            project_page=self.object,
-            requested_by=request.user.profile,
-            trigger=ProjectPageAnalysisRun.Trigger.MANUAL,
-        )
-
-        if not start_result.created:
-            if start_result.reason == "active_lock":
-                messages.info(
-                    request,
-                    "Analysis is already running for this page. Please wait for it to complete.",
+            if not start_result.created:
+                if start_result.reason == "active_lock":
+                    messages.info(
+                        request,
+                        "Analysis is already running for this page. Please wait for it to complete.",
+                    )
+                elif start_result.reason == "cooldown":
+                    messages.info(
+                        request,
+                        (
+                            "Analysis was just run. Please wait "
+                            f"{RERUN_COOLDOWN_SECONDS} seconds before rerunning."
+                        ),
+                    )
+                else:
+                    messages.error(
+                        request,
+                        "We couldn't refresh analysis. Please try again in a minute.",
+                    )
+            else:
+                async_task(
+                    "core.tasks.execute_project_page_analysis_run",
+                    start_result.run.id,
+                    group="project_page_analysis_runs",
                 )
-            elif start_result.reason == "cooldown":
+                messages.success(
+                    request,
+                    "Analysis rerun queued. Refresh in a few moments to see updated results.",
+                )
+
+        elif action == "run_backlink_refresh":
+            if not self.object.date_analyzed:
                 messages.info(
                     request,
-                    (
-                        "Analysis was just run. Please wait "
-                        f"{RERUN_COOLDOWN_SECONDS} seconds before rerunning."
-                    ),
+                    "Run SEO analysis first so backlink discovery has current page context.",
                 )
             else:
-                messages.error(
-                    request,
-                    "We couldn't refresh analysis. Please try again in a minute.",
-                )
-        else:
-            async_task(
-                "core.tasks.execute_project_page_analysis_run",
-                start_result.run.id,
-                group="project_page_analysis_runs",
-            )
-            messages.success(
-                request,
-                "Analysis rerun queued. Refresh in a few moments to see updated results.",
-            )
+                queued, reason = self._enqueue_backlink_refresh(project_page=self.object)
+                if queued:
+                    messages.success(
+                        request,
+                        "Backlink discovery queued. Existing opportunities stay visible while we refresh.",
+                    )
+                elif reason == "already_running":
+                    messages.info(
+                        request,
+                        "Backlink discovery is already running for this page.",
+                    )
+                else:
+                    messages.error(
+                        request,
+                        "We couldn't start backlink discovery right now. Please retry in a minute.",
+                    )
 
         return redirect(
             reverse(
@@ -1990,34 +2117,48 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
             seo_state = "loading"
         backlink_state = "empty"
         backlink_candidates = []
+        backlink_refresh_in_progress = False
+        backlink_sort = self.request.GET.get("backlink_sort", "relevance")
+        if backlink_sort not in {"relevance", "has_contact", "newest"}:
+            backlink_sort = "relevance"
+        backlink_has_contact_only = self.request.GET.get("backlink_has_contact") == "1"
 
         if simulated_state in {"loading", "empty", "error"}:
             overview_state = simulated_state
             seo_state = simulated_state
             backlink_state = simulated_state
         elif profile.is_on_pro_plan and project_page.date_analyzed:
+            lock_key = get_backlink_prospects_refresh_lock_key(project_page.id)
+            backlink_refresh_in_progress = bool(cache.get(lock_key))
+
             cached_candidates = get_cached_backlink_prospects(project_page.id)
             if cached_candidates is not None:
-                backlink_candidates = cached_candidates
-                backlink_state = "ready" if backlink_candidates else "empty"
+                prepared_unfiltered_candidates = self._prepare_backlink_candidates(
+                    cached_candidates,
+                    sort_mode=backlink_sort,
+                    has_contact_only=False,
+                )
+                backlink_candidates = (
+                    [
+                        candidate
+                        for candidate in prepared_unfiltered_candidates
+                        if candidate.get("has_contact_methods")
+                    ]
+                    if backlink_has_contact_only
+                    else prepared_unfiltered_candidates
+                )
+
+                if backlink_candidates:
+                    backlink_state = "ready"
+                elif backlink_has_contact_only and prepared_unfiltered_candidates:
+                    backlink_state = "filtered_empty"
+                else:
+                    backlink_state = "empty"
             else:
-                lock_key = get_backlink_prospects_refresh_lock_key(project_page.id)
-                if cache.add(lock_key, True, timeout=5 * 60):
-                    try:
-                        async_task(
-                            "core.tasks.refresh_backlink_prospects_cache",
-                            project_page.id,
-                            group="backlink_prospects",
-                        )
-                    except Exception as error:
-                        cache.delete(lock_key)
-                        logger.warning(
-                            "[BacklinkProspects] Failed to enqueue async refresh",
-                            project_page_id=project_page.id,
-                            project_id=project_page.project_id,
-                            error=str(error),
-                            exc_info=True,
-                        )
+                if not backlink_refresh_in_progress:
+                    queued, _reason = self._enqueue_backlink_refresh(project_page=project_page)
+                    backlink_refresh_in_progress = queued
+                    if not queued:
                         backlink_state = "error"
                 backlink_state = backlink_state if backlink_state == "error" else "loading"
 
@@ -2026,6 +2167,9 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
         context["backlink_state"] = backlink_state
         context["backlink_candidates"] = backlink_candidates
         context["backlink_candidates_count"] = len(backlink_candidates)
+        context["backlink_refresh_in_progress"] = backlink_refresh_in_progress
+        context["backlink_sort"] = backlink_sort
+        context["backlink_has_contact_only"] = backlink_has_contact_only
         context["seo_analysis"] = seo_analysis
 
         return context

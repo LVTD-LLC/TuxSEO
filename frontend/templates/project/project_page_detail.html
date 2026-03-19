@@ -221,8 +221,61 @@
         {% endif %}
       </section>
 
-      <section class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
-        <h3 class="text-lg font-semibold text-gray-900">Backlink Opportunities</h3>
+      <section class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm lg:col-span-3">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <h3 class="text-lg font-semibold text-gray-900">Backlink Opportunities</h3>
+          <form method="post" class="inline-flex" id="backlink-refresh-form">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="run_backlink_refresh" />
+            <button
+              type="submit"
+              id="backlink-run-button"
+              data-loading-label="Refreshing..."
+              class="inline-flex items-center rounded-md border border-gray-300 bg-white px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+            >
+              {% if backlink_refresh_in_progress %}Refreshing discovery…{% elif backlink_candidates_count %}Refresh discovery{% else %}Run discovery{% endif %}
+            </button>
+          </form>
+        </div>
+
+        <div class="mt-3 flex flex-wrap items-center gap-2 text-xs text-gray-500">
+          <span>{{ backlink_candidates_count }} opportunities shown</span>
+          {% if backlink_refresh_in_progress %}
+            <span class="inline-flex items-center rounded-full bg-blue-100 px-2 py-1 font-semibold text-blue-700">Refresh in progress</span>
+          {% endif %}
+        </div>
+
+        {% if messages %}
+          {% for message in messages %}
+            {% if 'backlink' in message.message|lower %}
+              <div class="mt-3 rounded-md p-3 text-xs {% if message.tags == 'success' %}border border-green-200 bg-green-50 text-green-800{% elif message.tags == 'info' %}border border-blue-200 bg-blue-50 text-blue-800{% else %}border border-red-200 bg-red-50 text-red-800{% endif %}">
+                {{ message }}
+              </div>
+            {% endif %}
+          {% endfor %}
+        {% endif %}
+
+        <form method="get" class="mt-4 grid grid-cols-1 gap-3 rounded-md border border-gray-200 bg-gray-50 p-3 md:grid-cols-3">
+          <div>
+            <label for="backlink_sort" class="text-xs font-semibold text-gray-700">Sort</label>
+            <select id="backlink_sort" name="backlink_sort" class="mt-1 w-full rounded-md border border-gray-300 bg-white px-2 py-2 text-xs text-gray-700">
+              <option value="relevance" {% if backlink_sort == "relevance" %}selected{% endif %}>Highest relevance</option>
+              <option value="has_contact" {% if backlink_sort == "has_contact" %}selected{% endif %}>Has contact method first</option>
+              <option value="newest" {% if backlink_sort == "newest" %}selected{% endif %}>Newest discovered</option>
+            </select>
+          </div>
+          <div class="flex items-end">
+            <label class="inline-flex items-center gap-2 text-xs font-medium text-gray-700">
+              <input type="checkbox" name="backlink_has_contact" value="1" {% if backlink_has_contact_only %}checked{% endif %} class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" />
+              Has contact method
+            </label>
+          </div>
+          <div class="flex items-end justify-start md:justify-end">
+            <button type="submit" class="inline-flex items-center rounded-md bg-gray-900 px-3 py-2 text-xs font-semibold text-white hover:bg-gray-700">
+              Apply filters
+            </button>
+          </div>
+        </form>
 
         {% if backlink_state == "loading" %}
           <div class="mt-4 rounded-md border border-blue-200 bg-blue-50 p-4 text-sm text-blue-700">
@@ -233,69 +286,87 @@
             Could not load backlink opportunities. Please retry.
           </div>
         {% elif backlink_state == "ready" and backlink_candidates %}
-          <p class="mt-4 text-sm text-gray-500">{{ backlink_candidates_count }} relevant prospects found</p>
-          <ul class="mt-4 space-y-3 text-sm">
-            {% for candidate in backlink_candidates %}
-              <li class="rounded-md border border-gray-200 p-3">
-                <a href="{{ candidate.url }}" target="_blank" rel="noopener noreferrer" class="font-medium text-indigo-700 hover:text-indigo-800">
-                  {{ candidate.title }}
-                </a>
-                <p class="mt-1 text-xs text-gray-500">{{ candidate.domain }}</p>
-                {% if candidate.snippet %}
-                  <p class="mt-2 text-gray-700">{{ candidate.snippet }}</p>
-                {% endif %}
-                <div class="mt-2 flex flex-wrap gap-2">
-                  <span class="inline-flex items-center rounded-full bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700">
-                    Topic: {{ candidate.topic }}
-                  </span>
-                  <span class="inline-flex items-center rounded-full bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">
-                    Relevance: {{ candidate.relevance_score|default:0|floatformat:2 }}
-                  </span>
-                  <span class="inline-flex items-center rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-600">
-                    {{ candidate.source }}
-                  </span>
-                </div>
-                {% if candidate.contact_methods %}
-                  <div class="mt-3 rounded-md border border-gray-100 bg-gray-50 p-3">
-                    <p class="text-xs font-semibold uppercase tracking-wide text-gray-600">Outreach signals (public web only)</p>
-                    <ul class="mt-2 space-y-2 text-xs text-gray-700">
-                      {% for method in candidate.contact_methods %}
-                        <li class="flex flex-wrap items-center gap-2">
-                          <span class="font-medium text-gray-800">{{ method.label }}:</span>
-                          {% if method.status == "found" and method.value %}
-                            {% if method.value|lower|slice:":4" == "http" %}
-                              <a href="{{ method.value }}" target="_blank" rel="noopener noreferrer" class="text-indigo-700 hover:text-indigo-800 underline break-all">
-                                {{ method.value }}
-                              </a>
-                            {% elif method.type == "public_email" %}
-                              <a href="mailto:{{ method.value }}" class="text-indigo-700 hover:text-indigo-800 underline break-all">
-                                {{ method.value }}
-                              </a>
-                            {% else %}
-                              <span class="break-all">{{ method.value }}</span>
-                            {% endif %}
-                          {% elif method.status == "low_confidence" and method.value %}
-                            <span class="break-all">{{ method.value }}</span>
-                          {% else %}
-                            <span>Not found</span>
+          <div class="mt-4 overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200 text-sm">
+              <thead class="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
+                <tr>
+                  <th class="px-3 py-2 text-left">Target</th>
+                  <th class="px-3 py-2 text-left">Reason & type</th>
+                  <th class="px-3 py-2 text-left">Contacts</th>
+                  <th class="px-3 py-2 text-left">Confidence</th>
+                  <th class="px-3 py-2 text-right">Quick actions</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-gray-100 bg-white">
+                {% for candidate in backlink_candidates %}
+                  <tr>
+                    <td class="px-3 py-3 align-top">
+                      <a href="{{ candidate.url }}" target="_blank" rel="noopener noreferrer" class="font-medium text-indigo-700 hover:text-indigo-800">
+                        {{ candidate.title }}
+                      </a>
+                      <p class="mt-1 text-xs text-gray-500">{{ candidate.domain }}</p>
+                      {% if candidate.snippet %}
+                        <p class="mt-2 text-xs text-gray-600">{{ candidate.snippet|truncatechars:140 }}</p>
+                      {% endif %}
+                    </td>
+                    <td class="px-3 py-3 align-top">
+                      <p class="text-xs font-semibold text-gray-800">{{ candidate.opportunity_type }}</p>
+                      <p class="mt-1 text-xs text-gray-600">{{ candidate.relevance_reason }}</p>
+                      <div class="mt-2 flex flex-wrap gap-2">
+                        <span class="inline-flex items-center rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-semibold text-emerald-700">Relevance {{ candidate.relevance_score|default:0|floatformat:2 }}</span>
+                        <span class="inline-flex items-center rounded-full bg-indigo-50 px-2 py-1 text-[10px] font-semibold text-indigo-700">Topic {{ candidate.topic }}</span>
+                      </div>
+                    </td>
+                    <td class="px-3 py-3 align-top">
+                      {% if candidate.contact_methods %}
+                        <ul class="space-y-2 text-xs text-gray-700">
+                          {% for method in candidate.contact_methods %}
+                            <li>
+                              <span class="font-medium text-gray-800">{{ method.label }}:</span>
+                              {% if method.status == "found" and method.value %}
+                                <span class="break-all">{{ method.value }}</span>
+                              {% elif method.status == "low_confidence" and method.value %}
+                                <span class="break-all">{{ method.value }}</span>
+                              {% else %}
+                                <span class="text-gray-500">Not found</span>
+                              {% endif %}
+                            </li>
+                          {% endfor %}
+                        </ul>
+                      {% else %}
+                        <span class="text-xs text-gray-500">No public contact methods detected</span>
+                      {% endif %}
+                    </td>
+                    <td class="px-3 py-3 align-top">
+                      <div class="space-y-1 text-xs">
+                        <p class="text-gray-700">Found: <span class="font-semibold">{{ candidate.found_contact_count }}</span></p>
+                        <p class="text-gray-700">High confidence: <span class="font-semibold">{{ candidate.high_confidence_contact_count }}</span></p>
+                        <p class="text-gray-700">Source: <span class="font-semibold">{{ candidate.source|upper }}</span></p>
+                      </div>
+                    </td>
+                    <td class="px-3 py-3 align-top text-right">
+                      <div class="flex flex-col items-end gap-2">
+                        <a href="{{ candidate.url }}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50">
+                          Open source page
+                        </a>
+                        {% for method in candidate.contact_methods %}
+                          {% if method.value and method.status != "not_found" %}
+                            <button type="button" data-copy-value="{{ method.value }}" class="copy-contact-button inline-flex items-center rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-100">
+                              Copy {{ method.label }}
+                            </button>
                           {% endif %}
-                          <span class="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold {% if method.status == 'found' %}bg-emerald-100 text-emerald-800{% elif method.status == 'low_confidence' %}bg-amber-100 text-amber-800{% else %}bg-gray-200 text-gray-600{% endif %}">
-                            {{ method.status|title }} · {{ method.confidence }}
-                          </span>
-                          {% if method.source_trace.evidence %}
-                            <span class="text-[10px] text-gray-500">{{ method.source_trace.evidence }}</span>
-                          {% endif %}
-                        </li>
-                      {% endfor %}
-                    </ul>
-                  </div>
-                {% endif %}
-                {% if candidate.explanation.summary %}
-                  <p class="mt-2 text-xs text-gray-500">{{ candidate.explanation.summary }}</p>
-                {% endif %}
-              </li>
-            {% endfor %}
-          </ul>
+                        {% endfor %}
+                      </div>
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% elif backlink_state == "filtered_empty" %}
+          <div class="mt-4 rounded-md border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
+            No opportunities match the current filters. Clear "Has contact method" to see the full ranked list.
+          </div>
         {% else %}
           <div class="mt-4 rounded-md border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
             No opportunities discovered yet. Try analyzing this page again after updating its summary/content.
@@ -306,13 +377,45 @@
 
     <script>
       (() => {
-        const form = document.getElementById("seo-analysis-form");
-        const button = document.getElementById("seo-run-button");
-        if (!form || !button) return;
-        form.addEventListener("submit", () => {
-          button.disabled = true;
-          button.classList.add("opacity-70", "cursor-not-allowed");
-          button.textContent = button.dataset.analyzingLabel || "Analyzing...";
+        const seoForm = document.getElementById("seo-analysis-form");
+        const seoButton = document.getElementById("seo-run-button");
+        if (seoForm && seoButton) {
+          seoForm.addEventListener("submit", () => {
+            seoButton.disabled = true;
+            seoButton.classList.add("opacity-70", "cursor-not-allowed");
+            seoButton.textContent = seoButton.dataset.analyzingLabel || "Analyzing...";
+          });
+        }
+
+        const backlinkForm = document.getElementById("backlink-refresh-form");
+        const backlinkButton = document.getElementById("backlink-run-button");
+        if (backlinkForm && backlinkButton) {
+          backlinkForm.addEventListener("submit", () => {
+            backlinkButton.disabled = true;
+            backlinkButton.classList.add("opacity-70", "cursor-not-allowed");
+            backlinkButton.textContent = backlinkButton.dataset.loadingLabel || "Refreshing...";
+          });
+        }
+
+        document.querySelectorAll(".copy-contact-button").forEach((button) => {
+          button.addEventListener("click", async () => {
+            const value = button.dataset.copyValue;
+            if (!value) return;
+            try {
+              await navigator.clipboard.writeText(value);
+              const previousLabel = button.textContent;
+              button.textContent = "Copied";
+              setTimeout(() => {
+                button.textContent = previousLabel;
+              }, 1200);
+            } catch (_error) {
+              const previousLabel = button.textContent;
+              button.textContent = "Copy failed";
+              setTimeout(() => {
+                button.textContent = previousLabel;
+              }, 1200);
+            }
+          });
         });
       })();
     </script>
