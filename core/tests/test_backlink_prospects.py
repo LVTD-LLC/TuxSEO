@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from django.contrib.auth.models import User
 
@@ -49,7 +51,7 @@ def test_extract_backlink_topics_uses_project_and_page_fields():
 
 
 @pytest.mark.django_db
-def test_discover_backlink_prospects_filters_and_deduplicates(monkeypatch, settings):
+def test_discover_backlink_prospects_scores_deduplicates_and_ranks(monkeypatch, settings):
     settings.EXA_API_KEY = "test-key"
 
     user = User.objects.create_user(
@@ -72,38 +74,44 @@ def test_discover_backlink_prospects_filters_and_deduplicates(monkeypatch, setti
         type_ai_guess="Blog post",
     )
 
+    now = datetime.now(tz=timezone.utc)
+
     responses = [
         {
             "results": [
                 {
-                    "url": "https://developers.google.com/search/docs/fundamentals/seo-starter-guide",
+                    "url": (
+                        "https://developers.google.com/search/docs/fundamentals/"
+                        "seo-starter-guide?utm_source=newsletter"
+                    ),
                     "title": "Google SEO Starter Guide",
                     "highlights": ["technical SEO indexing and crawl best practices"],
-                    "score": 0.9,
+                    "score": 0.95,
+                    "publishedDate": (now - timedelta(days=3)).isoformat(),
                 },
                 {
-                    "url": "https://developers.google.com/search/docs/fundamentals/seo-starter-guide",
+                    "url": (
+                        "https://www.developers.google.com/search/docs/fundamentals/"
+                        "seo-starter-guide"
+                    ),
                     "title": "Google SEO Starter Guide Duplicate",
                     "highlights": ["technical SEO indexing and crawl best practices"],
-                    "score": 0.91,
+                    "score": 0.96,
+                    "publishedDate": (now - timedelta(days=2)).isoformat(),
                 },
                 {
-                    "url": "https://docs.tuxseo.com/technical-seo-guide",
-                    "title": "In-house guide",
-                    "highlights": ["technical seo indexing"],
-                    "score": 0.92,
+                    "url": "https://moz.com/blog/technical-seo-audit-checklist",
+                    "title": "Technical SEO Audit Checklist",
+                    "highlights": ["technical SEO indexing and crawlability guide for teams"],
+                    "score": 0.81,
+                    "publishedDate": (now - timedelta(days=60)).isoformat(),
                 },
                 {
                     "url": "https://reddit.com/r/seo/comments/abc",
                     "title": "SEO thread",
                     "highlights": ["technical seo indexing"],
                     "score": 0.95,
-                },
-                {
-                    "url": "https://irrelevant.example.com/post",
-                    "title": "Cooking and baking guide",
-                    "highlights": ["sourdough recipes and kitchen equipment"],
-                    "score": 0.8,
+                    "publishedDate": (now - timedelta(days=1)).isoformat(),
                 },
             ]
         },
@@ -121,9 +129,205 @@ def test_discover_backlink_prospects_filters_and_deduplicates(monkeypatch, setti
 
     candidates = discover_backlink_prospects(page, max_candidates=8)
 
+    assert len(candidates) == 2
+    assert candidates[0]["url"] == (
+        "https://developers.google.com/search/docs/fundamentals/seo-starter-guide"
+    )
+    assert candidates[0]["canonical_domain"] == "google.com"
+    assert candidates[0]["relevance_score"] >= candidates[1]["relevance_score"]
+
+    first = candidates[0]
+    assert first["source"] == "exa"
+    assert first["score_breakdown"]["topic_match_strength"] > 0
+    assert first["score_breakdown"]["content_type_fit"] > 0
+    assert first["score_breakdown"]["domain_credibility"] > 0
+    assert first["score_breakdown"]["freshness_signal"] > 0
+    assert "Topical match" in first["explanation"]["summary"]
+
+
+@pytest.mark.django_db
+def test_discover_backlink_prospects_filters_low_signal_junk_pages(monkeypatch, settings):
+    settings.EXA_API_KEY = "test-key"
+
+    user = User.objects.create_user(
+        username="prospect-junk-filter-user",
+        email="prospect-junk-filter-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://tuxseo.com",
+        name="TuxSEO",
+        summary="seo platform for startups",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://tuxseo.com/blog/seo-content-strategy",
+        title="SEO Content Strategy",
+        summary="SEO content strategy for startup teams",
+        description="On-page and technical SEO strategy",
+        type_ai_guess="Blog post",
+    )
+
+    responses = [
+        {
+            "results": [
+                {
+                    "url": "https://example.com/tag/seo",
+                    "title": "Tag Archive",
+                    "highlights": ["seo"],
+                    "score": 0.9,
+                },
+                {
+                    "url": "https://example.com/author/jane-doe",
+                    "title": "Author Page",
+                    "highlights": ["content"],
+                    "score": 0.88,
+                },
+                {
+                    "url": "https://backlinko.com/seo-content-strategy-guide",
+                    "title": "SEO Content Strategy Guide",
+                    "highlights": [
+                        "A practical guide for SEO content strategy and keyword mapping."
+                    ],
+                    "score": 0.82,
+                },
+            ]
+        },
+        {"results": []},
+        {"results": []},
+        {"results": []},
+        {"results": []},
+    ]
+
+    def _fake_post(*_args, **_kwargs):
+        return _FakeResponse(responses.pop(0))
+
+    monkeypatch.setattr("core.backlink_prospects.requests.post", _fake_post)
+
+    candidates = discover_backlink_prospects(page, max_candidates=8)
+
     assert len(candidates) == 1
-    assert candidates[0]["url"].startswith("https://developers.google.com/")
-    assert candidates[0]["source"] == "exa"
+    assert candidates[0]["url"] == "https://backlinko.com/seo-content-strategy-guide"
+
+
+@pytest.mark.django_db
+def test_discover_backlink_prospects_filters_trailing_slash_taxonomy_pages(monkeypatch, settings):
+    settings.EXA_API_KEY = "test-key"
+
+    user = User.objects.create_user(
+        username="prospect-taxonomy-slash-user",
+        email="prospect-taxonomy-slash-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://tuxseo.com",
+        name="TuxSEO",
+        summary="seo platform for startups",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://tuxseo.com/blog/seo-content-strategy",
+        title="SEO Content Strategy",
+        summary="SEO content strategy for startup teams",
+        description="On-page and technical SEO strategy",
+        type_ai_guess="Blog post",
+    )
+
+    responses = [
+        {
+            "results": [
+                {
+                    "url": "https://example.com/tags/?utm_source=feed",
+                    "title": "Tags",
+                    "highlights": ["seo"],
+                    "score": 0.95,
+                },
+                {
+                    "url": "https://backlinko.com/seo-content-strategy-guide",
+                    "title": "SEO Content Strategy Guide",
+                    "highlights": [
+                        "A practical guide for SEO content strategy and keyword mapping."
+                    ],
+                    "score": 0.82,
+                },
+            ]
+        },
+        {"results": []},
+        {"results": []},
+        {"results": []},
+        {"results": []},
+    ]
+
+    def _fake_post(*_args, **_kwargs):
+        return _FakeResponse(responses.pop(0))
+
+    monkeypatch.setattr("core.backlink_prospects.requests.post", _fake_post)
+
+    candidates = discover_backlink_prospects(page, max_candidates=8)
+
+    assert len(candidates) == 1
+    assert candidates[0]["url"] == "https://backlinko.com/seo-content-strategy-guide"
+
+
+@pytest.mark.django_db
+def test_discover_backlink_prospects_limits_exa_calls_with_overcollect_cap(
+    monkeypatch,
+    settings,
+):
+    settings.EXA_API_KEY = "test-key"
+    settings.BACKLINK_PROSPECTS_CONFIG = {"OVERCOLLECT_FACTOR": 1}
+
+    user = User.objects.create_user(
+        username="prospect-overcollect-user",
+        email="prospect-overcollect-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://tuxseo.com",
+        name="TuxSEO",
+        summary="seo platform for startups",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://tuxseo.com/blog/seo-content-strategy",
+        title="SEO Content Strategy",
+        summary="SEO content strategy for startup teams",
+        description="On-page and technical SEO strategy",
+        type_ai_guess="Blog post",
+    )
+
+    monkeypatch.setattr(
+        "core.backlink_prospects.extract_backlink_topics",
+        lambda *_args, **_kwargs: ["topic a", "topic b", "topic c"],
+    )
+
+    api_calls = {"count": 0}
+
+    def _fake_post(*_args, **_kwargs):
+        api_calls["count"] += 1
+        return _FakeResponse(
+            {
+                "results": [
+                    {
+                        "url": f"https://example{api_calls['count']}.com/guide",
+                        "title": "SEO Guide",
+                        "highlights": ["topic a topic b topic c guide"],
+                        "score": 0.95,
+                        "publishedDate": datetime.now(tz=timezone.utc).isoformat(),
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr("core.backlink_prospects.requests.post", _fake_post)
+
+    candidates = discover_backlink_prospects(page, max_candidates=1)
+
+    assert len(candidates) == 1
+    assert api_calls["count"] == 1
 
 
 @pytest.mark.django_db

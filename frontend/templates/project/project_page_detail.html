@@ -248,10 +248,16 @@
                   <span class="inline-flex items-center rounded-full bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700">
                     Topic: {{ candidate.topic }}
                   </span>
+                  <span class="inline-flex items-center rounded-full bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">
+                    Relevance: {{ candidate.relevance_score|default:0|floatformat:2 }}
+                  </span>
                   <span class="inline-flex items-center rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-600">
                     {{ candidate.source }}
                   </span>
                 </div>
+                {% if candidate.explanation.summary %}
+                  <p class="mt-2 text-xs text-gray-500">{{ candidate.explanation.summary }}</p>
+                {% endif %}
               </li>
             {% endfor %}
           </ul>
