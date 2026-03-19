@@ -1939,6 +1939,10 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
             ):
                 opportunity_type = "Resource inclusion"
 
+            explanation = candidate.get("explanation")
+            if not isinstance(explanation, dict):
+                explanation = {}
+
             prepared_candidate = {
                 **candidate,
                 "contact_methods": contact_methods,
@@ -1947,7 +1951,7 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
                 "high_confidence_contact_count": len(high_confidence_methods),
                 "opportunity_type": opportunity_type,
                 "relevance_reason": (
-                    candidate.get("explanation", {}).get("summary")
+                    explanation.get("summary")
                     or "Topical and authority signals indicate this is a relevant outreach target."
                 ),
                 "discovered_at": parsed_discovered_at,
@@ -2129,12 +2133,27 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
 
             cached_candidates = get_cached_backlink_prospects(project_page.id)
             if cached_candidates is not None:
-                backlink_candidates = self._prepare_backlink_candidates(
+                prepared_unfiltered_candidates = self._prepare_backlink_candidates(
                     cached_candidates,
                     sort_mode=backlink_sort,
-                    has_contact_only=backlink_has_contact_only,
+                    has_contact_only=False,
                 )
-                backlink_state = "ready" if backlink_candidates else "empty"
+                backlink_candidates = (
+                    [
+                        candidate
+                        for candidate in prepared_unfiltered_candidates
+                        if candidate.get("has_contact_methods")
+                    ]
+                    if backlink_has_contact_only
+                    else prepared_unfiltered_candidates
+                )
+
+                if backlink_candidates:
+                    backlink_state = "ready"
+                elif backlink_has_contact_only and prepared_unfiltered_candidates:
+                    backlink_state = "filtered_empty"
+                else:
+                    backlink_state = "empty"
             else:
                 if not backlink_refresh_in_progress:
                     queued, _reason = self._enqueue_backlink_refresh(project_page=project_page)

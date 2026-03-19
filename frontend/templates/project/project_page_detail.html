@@ -363,6 +363,10 @@
               </tbody>
             </table>
           </div>
+        {% elif backlink_state == "filtered_empty" %}
+          <div class="mt-4 rounded-md border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
+            No opportunities match the current filters. Clear "Has contact method" to see the full ranked list.
+          </div>
         {% else %}
           <div class="mt-4 rounded-md border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
             No opportunities discovered yet. Try analyzing this page again after updating its summary/content.
@@ -405,7 +409,11 @@
                 button.textContent = previousLabel;
               }, 1200);
             } catch (_error) {
+              const previousLabel = button.textContent;
               button.textContent = "Copy failed";
+              setTimeout(() => {
+                button.textContent = previousLabel;
+              }, 1200);
             }
           });
         });

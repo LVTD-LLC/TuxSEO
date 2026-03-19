@@ -359,6 +359,65 @@ def test_project_page_detail_view_filters_backlink_candidates_to_contactable_onl
 
 
 @pytest.mark.django_db
+def test_project_page_detail_view_shows_filter_empty_state_when_no_matches(client, monkeypatch):
+    user = User.objects.create_superuser(
+        username="page-detail-backlink-filter-empty-user",
+        email="page-detail-backlink-filter-empty-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/features",
+        type_ai_guess="product page",
+        date_analyzed=timezone.now(),
+    )
+
+    monkeypatch.setattr(
+        "core.views.get_cached_backlink_prospects",
+        lambda _project_page_id: [
+            {
+                "url": "https://no-contact.example.com/blog/seo",
+                "domain": "no-contact.example.com",
+                "title": "SEO blog",
+                "snippet": "No contact signal",
+                "topic": "seo",
+                "source": "exa",
+                "relevance_score": 0.8,
+                "explanation": None,
+                "contact_methods": [
+                    {
+                        "type": "public_email",
+                        "label": "Public email",
+                        "status": "not_found",
+                        "confidence": "none",
+                        "value": "",
+                        "source_trace": {},
+                    }
+                ],
+            }
+        ],
+    )
+
+    client.force_login(user)
+    response = client.get(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        )
+        + "?backlink_has_contact=1"
+    )
+
+    content = response.content.decode()
+    assert response.status_code == 200
+    assert "No opportunities match the current filters." in content
+
+
+@pytest.mark.django_db
 def test_project_page_detail_view_backlink_refresh_action_queues_task(client, monkeypatch):
     user = User.objects.create_user(
         username="page-detail-backlink-refresh-user",
