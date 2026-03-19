@@ -393,7 +393,8 @@ class ProjectCustomPostTypeForm(forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
-        if cleaned_data.get("remove_logo") and cleaned_data.get("logo"):
+        has_new_logo_upload = bool(self.files.get("logo"))
+        if cleaned_data.get("remove_logo") and has_new_logo_upload:
             self.add_error("remove_logo", "Choose either remove logo or upload a new logo, not both.")
         return cleaned_data
 

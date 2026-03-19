@@ -221,6 +221,33 @@ def test_edit_custom_post_type_updates_name_prompt_and_logo(client):
 
 @pytest.mark.django_db
 @override_settings(MEDIA_ROOT="/tmp/tuxseo-test-media")
+def test_edit_custom_post_type_rejects_remove_logo_and_new_upload_together(client):
+    user = User.objects.create_user("owner-replace-logo", "owner-replace-logo@example.com", "secret")
+    project = Project.objects.create(profile=user.profile, name="Site", url="https://site.test")
+    post_type = ProjectCustomPostType.objects.create(
+        project=project,
+        name="Tutorial",
+        prompt_guidance="Step-by-step instructional style.",
+        logo=SimpleUploadedFile("logo.png", TINY_PNG_BYTES, content_type="image/png"),
+    )
+
+    client.force_login(user)
+    response = client.post(
+        reverse("project_custom_post_type_edit", kwargs={"pk": project.id, "post_type_pk": post_type.id}),
+        {
+            "name": "Tutorial",
+            "prompt_guidance": "Updated instructional style.",
+            "remove_logo": "true",
+            "logo": SimpleUploadedFile("new-logo.png", TINY_PNG_BYTES, content_type="image/png"),
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Choose either remove logo or upload a new logo" in response.content.decode("utf-8")
+
+
+@pytest.mark.django_db
+@override_settings(MEDIA_ROOT="/tmp/tuxseo-test-media")
 def test_edit_custom_post_type_can_remove_existing_logo(client):
     user = User.objects.create_user("owner-remove-logo", "owner-remove-logo@example.com", "secret")
     project = Project.objects.create(profile=user.profile, name="Site", url="https://site.test")
