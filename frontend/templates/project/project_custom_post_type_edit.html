@@ -1,0 +1,64 @@
+{% extends "base_project.html" %}
+
+{% block meta %}
+<title>TuxSEO - {{ project.name }} - Edit {{ custom_post_type.name }}</title>
+<meta name="description" content="{{ project.summary }}" />
+{% endblock meta %}
+
+{% block project_content %}
+<section class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm">
+  <div class="flex gap-3 items-center">
+    {% if custom_post_type.logo %}
+      <img src="{{ custom_post_type.logo.url }}" alt="{{ custom_post_type.name }} logo" class="object-cover w-10 h-10 rounded" />
+    {% else %}
+      <div class="flex justify-center items-center w-10 h-10 text-gray-500 bg-gray-100 rounded">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v12m6-6H6" />
+        </svg>
+      </div>
+    {% endif %}
+    <div>
+      <h2 class="text-xl font-semibold text-gray-900">Edit custom post type</h2>
+      <p class="text-sm text-gray-600">Changes apply immediately to new title/content generation for this type.</p>
+    </div>
+  </div>
+
+  <form method="post" enctype="multipart/form-data" class="mt-6 space-y-4">
+    {% csrf_token %}
+    <div>
+      <label class="block mb-1 text-sm font-medium text-gray-700" for="id_name">Name</label>
+      {{ form.name }}
+      {% for error in form.name.errors %}<p class="mt-1 text-sm text-red-600">{{ error }}</p>{% endfor %}
+    </div>
+
+    <div>
+      <label class="block mb-1 text-sm font-medium text-gray-700" for="id_prompt_guidance">Prompt guidance</label>
+      {{ form.prompt_guidance }}
+      {% for error in form.prompt_guidance.errors %}<p class="mt-1 text-sm text-red-600">{{ error }}</p>{% endfor %}
+    </div>
+
+    <div>
+      <label class="block mb-1 text-sm font-medium text-gray-700" for="id_logo">Logo (optional)</label>
+      {{ form.logo }}
+      <p class="mt-1 text-xs text-gray-500">Accepted: PNG, JPG, WEBP, GIF · max 2MB.</p>
+      {% for error in form.logo.errors %}<p class="mt-1 text-sm text-red-600">{{ error }}</p>{% endfor %}
+    </div>
+
+    {% if custom_post_type.logo %}
+      <div class="flex gap-2 items-center">
+        <input id="id_remove_logo" name="remove_logo" type="checkbox" value="true" {% if form.remove_logo.value %}checked{% endif %} class="w-4 h-4 text-gray-900 rounded border-gray-300 focus:ring-gray-500" />
+        <label for="id_remove_logo" class="text-sm text-gray-700">Remove current logo</label>
+      </div>
+      {% for error in form.remove_logo.errors %}<p class="mt-1 text-sm text-red-600">{{ error }}</p>{% endfor %}
+    {% endif %}
+
+    {% for error in form.non_field_errors %}<p class="mt-1 text-sm text-red-600">{{ error }}</p>{% endfor %}
+
+    <div class="flex gap-3 items-center">
+      <button type="submit" class="inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-gray-900 rounded-md border border-gray-900 hover:bg-gray-800">Save changes</button>
+      <a href="{% url 'project_custom_post_types' project.id %}" class="inline-flex items-center px-4 py-2 text-sm font-medium text-gray-700 bg-white rounded-md border border-gray-300 hover:bg-gray-50">Cancel</a>
+      <a href="{% url 'project_custom_post_type_posts' project.id custom_post_type.id %}" class="inline-flex items-center px-4 py-2 text-sm font-medium text-gray-700 bg-white rounded-md border border-gray-300 hover:bg-gray-50">Open posts</a>
+    </div>
+  </form>
+</section>
+{% endblock project_content %}

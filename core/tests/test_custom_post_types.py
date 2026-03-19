@@ -175,20 +175,76 @@ def test_update_duplicate_custom_post_type_name_does_not_500(client):
     client.force_login(user)
     response = client.post(
         reverse(
-            "project_custom_post_type_update",
+            "project_custom_post_type_edit",
             kwargs={"pk": project.id, "post_type_pk": second_type.id},
         ),
         {
             "name": " technical ",
             "prompt_guidance": "Updated guidance",
         },
-        follow=True,
     )
 
     assert response.status_code == 200
     second_type.refresh_from_db()
     assert second_type.name == "Beginner"
     assert first_type.name == "Technical"
+    assert "Could not update custom post type" in response.content.decode("utf-8")
+
+
+@pytest.mark.django_db
+@override_settings(MEDIA_ROOT="/tmp/tuxseo-test-media")
+def test_edit_custom_post_type_updates_name_prompt_and_logo(client):
+    user = User.objects.create_user("owner-edit", "owner-edit@example.com", "secret")
+    project = Project.objects.create(profile=user.profile, name="Site", url="https://site.test")
+    post_type = ProjectCustomPostType.objects.create(
+        project=project,
+        name="Tutorial",
+        prompt_guidance="Step-by-step instructional style.",
+    )
+
+    client.force_login(user)
+    response = client.post(
+        reverse("project_custom_post_type_edit", kwargs={"pk": project.id, "post_type_pk": post_type.id}),
+        {
+            "name": "Case Study",
+            "prompt_guidance": "Lead with outcomes and quantified impact.",
+            "logo": SimpleUploadedFile("logo.png", TINY_PNG_BYTES, content_type="image/png"),
+        },
+    )
+
+    assert response.status_code == 302
+    post_type.refresh_from_db()
+    assert post_type.name == "Case Study"
+    assert post_type.prompt_guidance == "Lead with outcomes and quantified impact."
+    assert post_type.logo.name.startswith("custom_post_type_logos/")
+
+
+@pytest.mark.django_db
+@override_settings(MEDIA_ROOT="/tmp/tuxseo-test-media")
+def test_edit_custom_post_type_can_remove_existing_logo(client):
+    user = User.objects.create_user("owner-remove-logo", "owner-remove-logo@example.com", "secret")
+    project = Project.objects.create(profile=user.profile, name="Site", url="https://site.test")
+    post_type = ProjectCustomPostType.objects.create(
+        project=project,
+        name="Tutorial",
+        prompt_guidance="Step-by-step instructional style.",
+        logo=SimpleUploadedFile("logo.png", TINY_PNG_BYTES, content_type="image/png"),
+    )
+
+    client.force_login(user)
+    response = client.post(
+        reverse("project_custom_post_type_edit", kwargs={"pk": project.id, "post_type_pk": post_type.id}),
+        {
+            "name": "Tutorial",
+            "prompt_guidance": "Updated instructional style.",
+            "remove_logo": "true",
+        },
+    )
+
+    assert response.status_code == 302
+    post_type.refresh_from_db()
+    assert post_type.prompt_guidance == "Updated instructional style."
+    assert not post_type.logo
 
 
 @pytest.mark.django_db

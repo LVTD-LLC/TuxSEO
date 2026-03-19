@@ -346,6 +346,7 @@ class ProjectCustomPostTypeForm(forms.ModelForm):
             }
         ),
     )
+    remove_logo = forms.BooleanField(required=False)
 
     class Meta:
         model = ProjectCustomPostType
@@ -389,4 +390,21 @@ class ProjectCustomPostTypeForm(forms.ModelForm):
             raise forms.ValidationError("Logo must be 2MB or smaller.")
 
         return logo
+
+    def clean(self):
+        cleaned_data = super().clean()
+        if cleaned_data.get("remove_logo") and cleaned_data.get("logo"):
+            self.add_error("remove_logo", "Choose either remove logo or upload a new logo, not both.")
+        return cleaned_data
+
+    def save(self, commit=True):
+        instance = super().save(commit=False)
+
+        if self.cleaned_data.get("remove_logo") and instance.logo:
+            instance.logo.delete(save=False)
+            instance.logo = None
+
+        if commit:
+            instance.save()
+        return instance
 
