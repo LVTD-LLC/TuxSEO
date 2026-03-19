@@ -1,7 +1,11 @@
+from datetime import date, timedelta
+
 import replicate
 import requests
 from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
+from django.db.models import Sum
 from django.http import HttpRequest
 from django.shortcuts import get_object_or_404
 from django.template.loader import render_to_string
@@ -20,6 +24,8 @@ from core.api.schemas import (
     AddKeywordIn,
     AddKeywordOut,
     AddPricingPageIn,
+    AnalyticsAggregationOut,
+    AnalyticsDateRangeIn,
     BlogPostIn,
     BlogPostOut,
     BlogPostUpdateIn,
@@ -35,12 +41,12 @@ from core.api.schemas import (
     GeneratedContentOut,
     GenerateOGImageIn,
     GenerateOGImageOut,
-    InternalBlogPostDetailOut,
-    InternalBlogPostListOut,
     GenerateTitleSuggestionOut,
     GenerateTitleSuggestionsIn,
     GenerateTitleSuggestionsOut,
     GetKeywordDetailsOut,
+    InternalBlogPostDetailOut,
+    InternalBlogPostListOut,
     PostGeneratedBlogPostIn,
     PostGeneratedBlogPostOut,
     ProjectScanIn,
@@ -67,6 +73,8 @@ from core.api.schemas import (
 from core.api_error_semantics import PlanEntitlement, evaluate_plan_entitlement, ownership_not_found_payload
 from core.choices import CompetitorPostGenerationStatus, ContentType, ProjectPageType
 from core.models import (
+    AnalyticsFactDaily,
+    AnalyticsSyncCursor,
     BlogPost,
     BlogPostTitleSuggestion,
     Competitor,
@@ -76,6 +84,7 @@ from core.models import (
     Profile,
     Project,
     ProjectCustomPostType,
+    ProjectIntegration,
     ProjectKeyword,
     ProjectPage,
 )
@@ -132,6 +141,216 @@ def get_custom_post_type_for_generation(*, project: Project, post_type_id: int |
 def build_effective_user_prompt(*, custom_post_type, user_prompt: str) -> str:
     _ = custom_post_type
     return (user_prompt or "").strip()
+
+
+def _safe_pct(numerator: float | int, denominator: float | int) -> float:
+    if not denominator:
+        return 0.0
+    return round((float(numerator) / float(denominator)) * 100, 2)
+
+
+def _parse_analytics_date_range(filters: AnalyticsDateRangeIn) -> tuple[date | None, date | None, str | None]:
+    today = timezone.now().date()
+    default_start = today - timedelta(days=29)
+
+    if not filters.start_date and not filters.end_date:
+        return default_start, today, None
+
+    try:
+        end_date = date.fromisoformat(filters.end_date) if filters.end_date else today
+        start_date = date.fromisoformat(filters.start_date) if filters.start_date else end_date - timedelta(days=29)
+    except ValueError:
+        return None, None, "Invalid date format. Use YYYY-MM-DD."
+
+    if start_date > end_date:
+        return None, None, "start_date must be less than or equal to end_date."
+    if end_date > today:
+        return None, None, "end_date cannot be in the future."
+
+    days = (end_date - start_date).days + 1
+    if days > 180:
+        return None, None, "Date range cannot exceed 180 days."
+
+    return start_date, end_date, None
+
+
+@api.get(
+    "/projects/{project_id}/analytics/aggregation",
+    response={200: AnalyticsAggregationOut, 400: dict},
+    auth=[session_auth],
+)
+def get_project_analytics_aggregation(
+    request: HttpRequest,
+    project_id: int,
+    filters: AnalyticsDateRangeIn,
+):
+    profile = request.auth
+    project = get_object_or_404(Project, id=project_id, profile=profile)
+
+    start_date, end_date, parse_error = _parse_analytics_date_range(filters)
+    if parse_error:
+        return 400, {"status": "error", "message": parse_error}
+
+    cache_key = (
+        f"analytics_aggregation:v1:project:{project.id}:"
+        f"{start_date.isoformat()}:{end_date.isoformat()}"
+    )
+    cached_payload = cache.get(cache_key)
+    if cached_payload:
+        cached_payload["cached"] = True
+        return cached_payload
+
+    facts_qs = AnalyticsFactDaily.objects.filter(
+        project=project,
+        metric_date__gte=start_date,
+        metric_date__lte=end_date,
+    )
+
+    by_provider = {
+        provider: facts_qs.filter(provider=provider).aggregate(
+            clicks=Sum("clicks"),
+            impressions=Sum("impressions"),
+            sessions=Sum("sessions"),
+            users=Sum("users"),
+            conversions=Sum("conversions"),
+        )
+        for provider in [
+            AnalyticsFactDaily.Provider.GA4,
+            AnalyticsFactDaily.Provider.GSC,
+            AnalyticsFactDaily.Provider.PLAUSIBLE,
+        ]
+    }
+
+    source_breakdown = []
+    for provider, label in [
+        (AnalyticsFactDaily.Provider.GA4, "ga4"),
+        (AnalyticsFactDaily.Provider.GSC, "gsc"),
+        (AnalyticsFactDaily.Provider.PLAUSIBLE, "plausible"),
+    ]:
+        row = by_provider[provider]
+        source_breakdown.append(
+            {
+                "source": label,
+                "clicks": int(row.get("clicks") or 0),
+                "impressions": int(row.get("impressions") or 0),
+                "sessions": int(row.get("sessions") or 0),
+                "users": int(row.get("users") or 0),
+                "conversions": float(row.get("conversions") or 0.0),
+            }
+        )
+
+    gsc_row = by_provider[AnalyticsFactDaily.Provider.GSC]
+    ga4_row = by_provider[AnalyticsFactDaily.Provider.GA4]
+    plausible_row = by_provider[AnalyticsFactDaily.Provider.PLAUSIBLE]
+
+    if (gsc_row.get("clicks") or 0) > 0 or (gsc_row.get("impressions") or 0) > 0:
+        overview_clicks = int(gsc_row.get("clicks") or 0)
+        overview_impressions = int(gsc_row.get("impressions") or 0)
+    else:
+        overview_clicks = sum(item["clicks"] for item in source_breakdown)
+        overview_impressions = sum(item["impressions"] for item in source_breakdown)
+
+    session_source = ga4_row if (ga4_row.get("sessions") or 0) > 0 else plausible_row
+    overview_sessions = int(session_source.get("sessions") or 0)
+    overview_users = int(session_source.get("users") or 0)
+    overview_conversions = float(session_source.get("conversions") or 0.0)
+
+    integration_by_provider = {
+        ProjectIntegration.Provider.GOOGLE_ANALYTICS: "ga4",
+        ProjectIntegration.Provider.GOOGLE_SEARCH_CONSOLE: "gsc",
+        ProjectIntegration.Provider.PLAUSIBLE: "plausible",
+    }
+
+    integrations = {
+        integration.provider: integration
+        for integration in ProjectIntegration.objects.filter(project=project)
+    }
+
+    cursor_by_provider = {}
+    for cursor in AnalyticsSyncCursor.objects.filter(project=project).order_by("provider", "-updated_at"):
+        if cursor.provider not in cursor_by_provider:
+            cursor_by_provider[cursor.provider] = cursor
+
+    source_health = []
+    degraded_sources = []
+    for integration_provider, source in integration_by_provider.items():
+        integration = integrations.get(integration_provider)
+        cursor = cursor_by_provider.get(integration_provider)
+        is_connected = bool(integration and integration.status == ProjectIntegration.Status.CONNECTED)
+        has_data = facts_qs.filter(
+            provider={
+                "ga4": AnalyticsFactDaily.Provider.GA4,
+                "gsc": AnalyticsFactDaily.Provider.GSC,
+                "plausible": AnalyticsFactDaily.Provider.PLAUSIBLE,
+            }[source]
+        ).exists()
+
+        status = "disconnected"
+        stale_days = None
+        last_synced_at = None
+        last_error = ""
+        if is_connected and cursor:
+            last_error = cursor.last_error or ""
+            if cursor.last_run_finished_at:
+                last_synced_at = cursor.last_run_finished_at.isoformat()
+                stale_days = (timezone.now().date() - cursor.last_run_finished_at.date()).days
+            if cursor.last_status in {
+                AnalyticsSyncCursor.SyncStatus.FAILED,
+                AnalyticsSyncCursor.SyncStatus.PARTIAL,
+            }:
+                status = "degraded"
+            elif stale_days is not None and stale_days > 2:
+                status = "stale"
+            else:
+                status = "healthy"
+        elif is_connected:
+            status = "pending"
+
+        if status in {"degraded", "stale"}:
+            degraded_sources.append(source)
+
+        source_health.append(
+            {
+                "source": source,
+                "integration_connected": is_connected,
+                "has_data": has_data,
+                "status": status,
+                "last_synced_at": last_synced_at,
+                "stale_days": stale_days,
+                "last_error": last_error,
+            }
+        )
+
+    payload = {
+        "status": "success",
+        "project_id": project.id,
+        "date_range": {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "days": (end_date - start_date).days + 1,
+        },
+        "overview": {
+            "clicks": overview_clicks,
+            "impressions": overview_impressions,
+            "sessions": overview_sessions,
+            "users": overview_users,
+            "conversions": overview_conversions,
+            "ctr_pct": _safe_pct(overview_clicks, overview_impressions),
+            "conversion_rate_pct": _safe_pct(overview_conversions, overview_sessions),
+        },
+        "source_breakdown": source_breakdown,
+        "source_health": source_health,
+        "cached": False,
+        "cache_key": cache_key,
+        "message": (
+            f"Partial source health issues detected: {', '.join(degraded_sources)}"
+            if degraded_sources
+            else ""
+        ),
+    }
+
+    cache.set(cache_key, payload, timeout=300)
+    return payload
 
 
 @api.post("/validate-url", response=ValidateUrlOut, auth=[session_auth])

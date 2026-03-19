@@ -354,3 +354,55 @@ class GenerateOGImageOut(Schema):
     status: str
     message: str = ""
     image_url: str = ""
+
+
+class AnalyticsDateRangeIn(Schema):
+    start_date: str | None = None
+    end_date: str | None = None
+
+
+class AnalyticsDateRangeOut(Schema):
+    start_date: str
+    end_date: str
+    days: int
+
+
+class AnalyticsSourceBreakdownOut(Schema):
+    source: str
+    clicks: int = 0
+    impressions: int = 0
+    sessions: int = 0
+    users: int = 0
+    conversions: float = 0.0
+
+
+class AnalyticsSourceHealthOut(Schema):
+    source: str
+    integration_connected: bool
+    has_data: bool
+    status: str
+    last_synced_at: str | None = None
+    stale_days: int | None = None
+    last_error: str = ""
+
+
+class AnalyticsOverviewOut(Schema):
+    clicks: int = 0
+    impressions: int = 0
+    sessions: int = 0
+    users: int = 0
+    conversions: float = 0.0
+    ctr_pct: float = 0.0
+    conversion_rate_pct: float = 0.0
+
+
+class AnalyticsAggregationOut(Schema):
+    status: str
+    project_id: int
+    date_range: AnalyticsDateRangeOut
+    overview: AnalyticsOverviewOut
+    source_breakdown: list[AnalyticsSourceBreakdownOut] = []
+    source_health: list[AnalyticsSourceHealthOut] = []
+    cached: bool = False
+    cache_key: str = ""
+    message: str = ""
