@@ -280,7 +280,7 @@ def test_analyze_project_page_seo_json_ld_states_cover_ok_missing_and_malformed(
 
     page_missing = ProjectPage.objects.create(
         project=project,
-        url="https://example.com/page-missing",
+        url="https://example.com/page-no-schema",
         title="Missing JSON-LD SEO test page title",
         description="D" * 140,
         summary="Summary for missing JSON-LD state check.",
