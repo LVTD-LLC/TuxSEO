@@ -1023,6 +1023,7 @@ def discover_backlink_prospects(
                     "relevance_score": scored["relevance_score"],
                     "score_breakdown": scored["score_breakdown"],
                     "explanation": scored["explanation"],
+                    "discovered_at": datetime.now(timezone.utc).isoformat(),
                     "contact_methods": [],
                     "actionable_outreach_paths": [],
                     "actionable_outreach_count": 0,

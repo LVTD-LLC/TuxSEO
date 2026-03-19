@@ -233,6 +233,8 @@ def test_project_page_detail_view_renders_backlink_candidates_for_pro_users(clie
                 "topic": "technical seo",
                 "source": "exa",
                 "relevance_score": 0.92,
+                "discovered_at": "2026-03-19T00:00:00+00:00",
+                "explanation": {"summary": "Topical and authority signals align well."},
                 "contact_methods": [
                     {
                         "type": "contact_page_url",
@@ -270,13 +272,132 @@ def test_project_page_detail_view_renders_backlink_candidates_for_pro_users(clie
     content = response.content.decode()
     assert response.status_code == 200
     assert "Google SEO Starter Guide" in content
-    assert "1 relevant prospects found" in content
-    assert "Topic: technical seo" in content
-    assert "Outreach signals (public web only)" in content
-    assert "Contact page:" in content
-    assert "Found · high" in content
-    assert "Public email:" in content
-    assert "none" in content
+    assert "1 opportunities shown" in content
+    assert "Sort" in content
+    assert "Open source page" in content
+    assert "Copy Contact page" in content
+    assert "Relevance 0.92" in content
+
+
+@pytest.mark.django_db
+def test_project_page_detail_view_filters_backlink_candidates_to_contactable_only(client, monkeypatch):
+    user = User.objects.create_superuser(
+        username="page-detail-backlink-filter-user",
+        email="page-detail-backlink-filter-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/features",
+        type_ai_guess="product page",
+        date_analyzed=timezone.now(),
+    )
+
+    monkeypatch.setattr(
+        "core.views.get_cached_backlink_prospects",
+        lambda _project_page_id: [
+            {
+                "url": "https://example.org/resources/seo",
+                "domain": "example.org",
+                "title": "SEO resources",
+                "snippet": "Curated resources",
+                "topic": "seo",
+                "source": "exa",
+                "relevance_score": 0.9,
+                "contact_methods": [
+                    {
+                        "type": "contact_page_url",
+                        "label": "Contact page",
+                        "status": "found",
+                        "confidence": "high",
+                        "value": "https://example.org/contact",
+                        "source_trace": {},
+                    }
+                ],
+            },
+            {
+                "url": "https://no-contact.example.com/blog/seo",
+                "domain": "no-contact.example.com",
+                "title": "SEO blog",
+                "snippet": "No contact signal",
+                "topic": "seo",
+                "source": "exa",
+                "relevance_score": 0.8,
+                "contact_methods": [
+                    {
+                        "type": "public_email",
+                        "label": "Public email",
+                        "status": "not_found",
+                        "confidence": "none",
+                        "value": "",
+                        "source_trace": {},
+                    }
+                ],
+            },
+        ],
+    )
+
+    client.force_login(user)
+    response = client.get(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        )
+        + "?backlink_has_contact=1"
+    )
+
+    content = response.content.decode()
+    assert response.status_code == 200
+    assert "SEO resources" in content
+    assert "SEO blog" not in content
+    assert "1 opportunities shown" in content
+
+
+@pytest.mark.django_db
+def test_project_page_detail_view_backlink_refresh_action_queues_task(client, monkeypatch):
+    user = User.objects.create_user(
+        username="page-detail-backlink-refresh-user",
+        email="page-detail-backlink-refresh-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/features",
+        type_ai_guess="product page",
+        date_analyzed=timezone.now(),
+    )
+
+    scheduled_tasks = []
+
+    def _fake_async_task(*args, **kwargs):
+        scheduled_tasks.append((args, kwargs))
+        return "task-id"
+
+    monkeypatch.setattr(user.profile.__class__, "is_on_pro_plan", property(lambda _self: True))
+    monkeypatch.setattr("core.views.async_task", _fake_async_task)
+
+    client.force_login(user)
+    response = client.post(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        ),
+        data={"action": "run_backlink_refresh"},
+    )
+
+    assert response.status_code == 302
+    assert len(scheduled_tasks) == 1
+    assert scheduled_tasks[0][0][0] == "core.tasks.refresh_backlink_prospects_cache"
 
 
 @pytest.mark.django_db
