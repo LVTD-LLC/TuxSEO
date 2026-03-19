@@ -1,3 +1,4 @@
+import base64
 from types import SimpleNamespace
 
 import pytest
@@ -13,12 +14,8 @@ from core.choices import ContentType
 from core.models import BlogPostTitleSuggestion, Project, ProjectCustomPostType
 
 
-TINY_PNG_BYTES = (
-    b"\x89PNG\r\n\x1a\n"
-    b"\x00\x00\x00\rIHDR"
-    b"\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
-    b"\x00\x00\x00\x0cIDATx\x9cc\xf8\xff\xff?\x00\x05\xfe\x02\xfeA\xdd\x98\x9f"
-    b"\x00\x00\x00\x00IEND\xaeB`\x82"
+TINY_PNG_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7+WZ0AAAAASUVORK5CYII="
 )
 
 

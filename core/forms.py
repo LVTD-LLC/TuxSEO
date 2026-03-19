@@ -337,6 +337,16 @@ class AutoSubmissionSettingForm(forms.ModelForm):
 
 
 class ProjectCustomPostTypeForm(forms.ModelForm):
+    logo = forms.FileField(
+        required=False,
+        widget=forms.FileInput(
+            attrs={
+                "class": "block w-full text-sm text-gray-900 rounded-md border border-gray-300 cursor-pointer bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:border-gray-500",
+                "accept": "image/png,image/jpeg,image/webp,image/gif",
+            }
+        ),
+    )
+
     class Meta:
         model = ProjectCustomPostType
         fields = ["name", "prompt_guidance", "logo"]
@@ -354,12 +364,6 @@ class ProjectCustomPostTypeForm(forms.ModelForm):
                     "rows": 4,
                     "placeholder": "Describe style, depth, and audience for this post type.",
                     "maxlength": "1200",
-                }
-            ),
-            "logo": forms.FileInput(
-                attrs={
-                    "class": "block w-full text-sm text-gray-900 rounded-md border border-gray-300 cursor-pointer bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:border-gray-500",
-                    "accept": "image/png,image/jpeg,image/webp,image/gif",
                 }
             ),
         }
