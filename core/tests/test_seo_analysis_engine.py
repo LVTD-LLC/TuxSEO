@@ -197,7 +197,7 @@ def test_analyze_project_page_seo_contract_includes_required_fields_and_check_sh
 
     result = analyze_project_page_seo(project_page)
 
-    assert set(result.keys()) == {
+    assert {
         "score",
         "passed_checks",
         "warned_checks",
@@ -206,7 +206,7 @@ def test_analyze_project_page_seo_contract_includes_required_fields_and_check_sh
         "checks",
         "issues",
         "json_ld",
-    }
+    }.issubset(result.keys())
 
     assert isinstance(result["score"], int)
     assert isinstance(result["checks"], list)

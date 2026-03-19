@@ -527,6 +527,12 @@ def test_project_page_detail_view_backlink_refresh_requires_completed_analysis(c
     )
 
     assert response.status_code == 302
+    assert response["Location"].endswith(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        )
+    )
     assert scheduled_tasks == []
 
 

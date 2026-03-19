@@ -24,7 +24,7 @@ def test_refresh_backlink_prospects_cache_task_smoke_success(monkeypatch):
     )
 
     monkeypatch.setattr(
-        "core.backlink_prospects.refresh_backlink_prospects_cache",
+        "core.backlink_prospects.discover_backlink_prospects",
         lambda _page: [{"url": "https://example.org/guide", "source": "exa"}],
     )
 
