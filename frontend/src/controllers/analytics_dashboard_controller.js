@@ -191,7 +191,7 @@ export default class extends Controller {
 
     const labels = [rows[0], rows[rows.length - 1]]
       .filter(Boolean)
-      .map((row) => `<span>${shortDateLabel(row.date)}</span>`)
+      .map((row) => `<span>${escapeHtml(shortDateLabel(row.date))}</span>`)
       .join("");
 
     this.trendBarsTarget.innerHTML = `
