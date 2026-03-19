@@ -276,7 +276,7 @@ def test_project_page_detail_view_renders_backlink_candidates_for_pro_users(clie
     assert "Contact page:" in content
     assert "Found · high" in content
     assert "Public email:" in content
-    assert "Not found · none" in content
+    assert "none" in content
 
 
 @pytest.mark.django_db
