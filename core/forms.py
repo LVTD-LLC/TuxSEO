@@ -346,6 +346,7 @@ class ProjectCustomPostTypeForm(forms.ModelForm):
             }
         ),
     )
+    clear_logo = forms.BooleanField(required=False)
 
     class Meta:
         model = ProjectCustomPostType
@@ -389,3 +390,17 @@ class ProjectCustomPostTypeForm(forms.ModelForm):
             raise forms.ValidationError("Logo must be 2MB or smaller.")
 
         return logo
+
+    def save(self, commit=True):
+        instance = super().save(commit=False)
+
+        if self.cleaned_data.get("clear_logo") and not self.cleaned_data.get("logo"):
+            if instance.logo:
+                instance.logo.delete(save=False)
+            instance.logo = None
+
+        if commit:
+            instance.save()
+            self.save_m2m()
+
+        return instance

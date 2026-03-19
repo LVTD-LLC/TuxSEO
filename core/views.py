@@ -1565,6 +1565,13 @@ class ProjectCustomPostTypeUpdateView(LoginRequiredMixin, View):
                 )
         else:
             messages.error(request, "Could not update custom post type. Please check the form.")
+            for field_name, field_errors in form.errors.items():
+                if field_name == "__all__":
+                    label = "Form"
+                else:
+                    label = form.fields[field_name].label or field_name.replace("_", " ").title()
+                for field_error in field_errors:
+                    messages.error(request, f"{label}: {field_error}")
 
         return redirect("project_custom_post_types", pk=project.pk)
 

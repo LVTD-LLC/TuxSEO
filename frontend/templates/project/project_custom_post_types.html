@@ -66,6 +66,12 @@
                 <label class="block mb-1 text-sm font-medium text-gray-700">Logo (optional)</label>
                 <input type="file" name="logo" accept="image/png,image/jpeg,image/webp,image/gif" class="block w-full text-sm text-gray-900 rounded-md border border-gray-300 cursor-pointer bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:border-gray-500" />
                 <p class="mt-1 text-xs text-gray-500">Accepted: PNG, JPG, WEBP, GIF · max 2MB.</p>
+                {% if post_type.logo %}
+                  <label class="inline-flex gap-2 items-center mt-2 text-sm text-gray-700">
+                    <input type="checkbox" name="clear_logo" value="1" class="rounded border-gray-300 text-gray-900 focus:ring-gray-500" />
+                    Remove current logo
+                  </label>
+                {% endif %}
               </div>
               <div class="flex gap-3 items-center">
                 <button type="submit" class="inline-flex items-center px-3 py-2 text-sm font-medium text-gray-700 bg-white rounded-md border border-gray-300 hover:bg-gray-50">Save</button>
