@@ -310,6 +310,48 @@
     "outcome_attribution_recorded": {
       "stage": "lifecycle",
       "description": "A workflow contribution was linked to a measurable project outcome metric."
+    },
+    "analytics_page_viewed": {
+      "stage": "engagement",
+      "description": "User opened the project Analytics page shell.",
+      "required_properties": [
+        "project_id",
+        "date_range_start",
+        "date_range_end",
+        "range_days"
+      ]
+    },
+    "analytics_date_range_changed": {
+      "stage": "engagement",
+      "description": "Analytics page date range was changed before a new query load.",
+      "required_properties": [
+        "project_id",
+        "date_range_start",
+        "date_range_end",
+        "range_days",
+        "change_source"
+      ]
+    },
+    "analytics_refresh_clicked": {
+      "stage": "engagement",
+      "description": "User clicked refresh on the Analytics page.",
+      "required_properties": [
+        "project_id",
+        "date_range_start",
+        "date_range_end",
+        "range_days"
+      ]
+    },
+    "analytics_source_error_shown": {
+      "stage": "risk",
+      "description": "Analytics page surfaced a provider or API error to the user.",
+      "required_properties": [
+        "project_id",
+        "source",
+        "source_status",
+        "error_message",
+        "result_status"
+      ]
     }
   },
   "deprecated_aliases": {

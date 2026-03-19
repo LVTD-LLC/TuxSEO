@@ -36,6 +36,10 @@ def test_p1_event_coverage_matrix_events_exist_in_taxonomy():
         "backlink_discovery_failed",
         "opportunities_viewed",
         "contact_method_copied",
+        "analytics_page_viewed",
+        "analytics_date_range_changed",
+        "analytics_refresh_clicked",
+        "analytics_source_error_shown",
     }
 
     taxonomy_events = set(EVENT_TAXONOMY["events"].keys())
