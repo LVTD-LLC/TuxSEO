@@ -137,4 +137,59 @@ def test_project_analytics_aggregation_uses_cache(client):
 
     assert first_payload["cached"] is False
     assert second_payload["cached"] is True
-    assert first_payload["cache_key"] == second_payload["cache_key"]
+    assert first_payload["cache_key"] == ""
+    assert second_payload["cache_key"] == ""
+
+
+@pytest.mark.django_db
+def test_project_analytics_aggregation_uses_site_scope_only_for_overview(client):
+    user, project = _create_user_with_project("analytics-api-site-scope")
+    client.force_login(user)
+
+    today = timezone.now().date()
+    AnalyticsFactDaily.objects.create(
+        project=project,
+        provider=AnalyticsFactDaily.Provider.GA4,
+        metric_date=today,
+        dimension_scope=AnalyticsFactDaily.DimensionScope.SITE,
+        dimension_fingerprint="ga4-site",
+        sessions=10,
+    )
+    AnalyticsFactDaily.objects.create(
+        project=project,
+        provider=AnalyticsFactDaily.Provider.GA4,
+        metric_date=today,
+        dimension_scope=AnalyticsFactDaily.DimensionScope.PAGE,
+        dimension_fingerprint="ga4-page",
+        sessions=999,
+    )
+
+    response = client.get(f"/api/projects/{project.id}/analytics/aggregation")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["overview"]["sessions"] == 10
+
+
+@pytest.mark.django_db
+def test_project_analytics_aggregation_does_not_mix_non_gsc_clicks(client):
+    user, project = _create_user_with_project("analytics-api-click-source")
+    client.force_login(user)
+
+    today = timezone.now().date()
+    AnalyticsFactDaily.objects.create(
+        project=project,
+        provider=AnalyticsFactDaily.Provider.GA4,
+        metric_date=today,
+        dimension_scope=AnalyticsFactDaily.DimensionScope.SITE,
+        dimension_fingerprint="ga4-site-clicks",
+        clicks=40,
+        impressions=400,
+    )
+
+    response = client.get(f"/api/projects/{project.id}/analytics/aggregation")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["overview"]["clicks"] == 0
+    assert payload["overview"]["impressions"] == 0

@@ -25,7 +25,6 @@ from core.api.schemas import (
     AddKeywordOut,
     AddPricingPageIn,
     AnalyticsAggregationOut,
-    AnalyticsDateRangeIn,
     BlogPostIn,
     BlogPostOut,
     BlogPostUpdateIn,
@@ -149,16 +148,20 @@ def _safe_pct(numerator: float | int, denominator: float | int) -> float:
     return round((float(numerator) / float(denominator)) * 100, 2)
 
 
-def _parse_analytics_date_range(filters: AnalyticsDateRangeIn) -> tuple[date | None, date | None, str | None]:
+def _parse_analytics_date_range(
+    *,
+    start_date_raw: str | None,
+    end_date_raw: str | None,
+) -> tuple[date | None, date | None, str | None]:
     today = timezone.now().date()
     default_start = today - timedelta(days=29)
 
-    if not filters.start_date and not filters.end_date:
+    if not start_date_raw and not end_date_raw:
         return default_start, today, None
 
     try:
-        end_date = date.fromisoformat(filters.end_date) if filters.end_date else today
-        start_date = date.fromisoformat(filters.start_date) if filters.start_date else end_date - timedelta(days=29)
+        end_date = date.fromisoformat(end_date_raw) if end_date_raw else today
+        start_date = date.fromisoformat(start_date_raw) if start_date_raw else end_date - timedelta(days=29)
     except ValueError:
         return None, None, "Invalid date format. Use YYYY-MM-DD."
 
@@ -182,12 +185,16 @@ def _parse_analytics_date_range(filters: AnalyticsDateRangeIn) -> tuple[date | N
 def get_project_analytics_aggregation(
     request: HttpRequest,
     project_id: int,
-    filters: AnalyticsDateRangeIn,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ):
     profile = request.auth
     project = get_object_or_404(Project, id=project_id, profile=profile)
 
-    start_date, end_date, parse_error = _parse_analytics_date_range(filters)
+    start_date, end_date, parse_error = _parse_analytics_date_range(
+        start_date_raw=start_date,
+        end_date_raw=end_date,
+    )
     if parse_error:
         return 400, {"status": "error", "message": parse_error}
 
@@ -197,17 +204,17 @@ def get_project_analytics_aggregation(
     )
     cached_payload = cache.get(cache_key)
     if cached_payload:
-        cached_payload["cached"] = True
-        return cached_payload
+        return {**cached_payload, "cached": True}
 
     facts_qs = AnalyticsFactDaily.objects.filter(
         project=project,
         metric_date__gte=start_date,
         metric_date__lte=end_date,
     )
+    aggregated_facts_qs = facts_qs.filter(dimension_scope=AnalyticsFactDaily.DimensionScope.SITE)
 
     by_provider = {
-        provider: facts_qs.filter(provider=provider).aggregate(
+        provider: aggregated_facts_qs.filter(provider=provider).aggregate(
             clicks=Sum("clicks"),
             impressions=Sum("impressions"),
             sessions=Sum("sessions"),
@@ -243,12 +250,10 @@ def get_project_analytics_aggregation(
     ga4_row = by_provider[AnalyticsFactDaily.Provider.GA4]
     plausible_row = by_provider[AnalyticsFactDaily.Provider.PLAUSIBLE]
 
-    if (gsc_row.get("clicks") or 0) > 0 or (gsc_row.get("impressions") or 0) > 0:
-        overview_clicks = int(gsc_row.get("clicks") or 0)
-        overview_impressions = int(gsc_row.get("impressions") or 0)
-    else:
-        overview_clicks = sum(item["clicks"] for item in source_breakdown)
-        overview_impressions = sum(item["impressions"] for item in source_breakdown)
+    # GSC is the canonical source for search clicks/impressions. Do not
+    # cross-source fallback into GA4/Plausible to avoid semantic mixing.
+    overview_clicks = int(gsc_row.get("clicks") or 0)
+    overview_impressions = int(gsc_row.get("impressions") or 0)
 
     session_source = ga4_row if (ga4_row.get("sessions") or 0) > 0 else plausible_row
     overview_sessions = int(session_source.get("sessions") or 0)
@@ -271,19 +276,20 @@ def get_project_analytics_aggregation(
         if cursor.provider not in cursor_by_provider:
             cursor_by_provider[cursor.provider] = cursor
 
+    provider_by_source = {
+        "ga4": AnalyticsFactDaily.Provider.GA4,
+        "gsc": AnalyticsFactDaily.Provider.GSC,
+        "plausible": AnalyticsFactDaily.Provider.PLAUSIBLE,
+    }
+    providers_with_data = set(facts_qs.values_list("provider", flat=True).distinct())
+
     source_health = []
     degraded_sources = []
     for integration_provider, source in integration_by_provider.items():
         integration = integrations.get(integration_provider)
         cursor = cursor_by_provider.get(integration_provider)
         is_connected = bool(integration and integration.status == ProjectIntegration.Status.CONNECTED)
-        has_data = facts_qs.filter(
-            provider={
-                "ga4": AnalyticsFactDaily.Provider.GA4,
-                "gsc": AnalyticsFactDaily.Provider.GSC,
-                "plausible": AnalyticsFactDaily.Provider.PLAUSIBLE,
-            }[source]
-        ).exists()
+        has_data = provider_by_source[source] in providers_with_data
 
         status = "disconnected"
         stale_days = None
@@ -341,7 +347,7 @@ def get_project_analytics_aggregation(
         "source_breakdown": source_breakdown,
         "source_health": source_health,
         "cached": False,
-        "cache_key": cache_key,
+        "cache_key": "",
         "message": (
             f"Partial source health issues detected: {', '.join(degraded_sources)}"
             if degraded_sources
