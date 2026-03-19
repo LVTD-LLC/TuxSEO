@@ -348,6 +348,7 @@
       "required_properties": [
         "project_id",
         "source",
+        "source_status",
         "error_message",
         "result_status"
       ]

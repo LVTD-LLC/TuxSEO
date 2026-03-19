@@ -86,13 +86,13 @@ export default class extends Controller {
     }
     this.setPresetUi("custom");
 
+    this.captureDateRangeChangedIfNeeded({
+      change_source: "custom_date_refresh",
+    });
+
     this.captureEvent("analytics_refresh_clicked", {
       ...this.currentRangeTelemetry(),
       trigger_source: "refresh_button",
-    });
-
-    this.captureDateRangeChangedIfNeeded({
-      change_source: "custom_date_refresh",
     });
 
     await this.load({ triggerSource: "refresh_button" });
@@ -398,6 +398,10 @@ export default class extends Controller {
     const start = new Date(startDate);
     const end = new Date(endDate);
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      return null;
+    }
+
+    if (end.getTime() < start.getTime()) {
       return null;
     }
 
