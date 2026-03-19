@@ -394,7 +394,7 @@ class ProjectCustomPostTypeForm(forms.ModelForm):
     def save(self, commit=True):
         instance = super().save(commit=False)
 
-        if self.cleaned_data.get("clear_logo") and not self.cleaned_data.get("logo"):
+        if self.cleaned_data.get("clear_logo") and not self.files.get("logo"):
             if instance.logo:
                 instance.logo.delete(save=False)
             instance.logo = None
