@@ -3,6 +3,7 @@ from urllib.parse import urlparse
 
 import requests
 from django.conf import settings
+from django.core.cache import cache
 
 from tuxseo.utils import get_tuxseo_logger
 
@@ -46,6 +47,33 @@ _STOPWORDS = {
 
 _MIN_EXA_SCORE = 0.15
 _MIN_TOPIC_OVERLAP_RATIO = 0.2
+_BACKLINK_PROSPECTS_CACHE_TTL_SECONDS = 6 * 60 * 60
+_BACKLINK_PROSPECTS_REFRESH_LOCK_TTL_SECONDS = 5 * 60
+
+
+def get_backlink_prospects_cache_key(project_page_id: int) -> str:
+    return f"project-page:{project_page_id}:backlink-prospects-v1"
+
+
+def get_backlink_prospects_refresh_lock_key(project_page_id: int) -> str:
+    return f"project-page:{project_page_id}:backlink-prospects-refresh-lock-v1"
+
+
+def get_cached_backlink_prospects(project_page_id: int) -> list[dict] | None:
+    payload = cache.get(get_backlink_prospects_cache_key(project_page_id))
+    if payload is None:
+        return None
+
+    candidates = payload.get("candidates", []) if isinstance(payload, dict) else []
+    return candidates if isinstance(candidates, list) else []
+
+
+def set_cached_backlink_prospects(project_page_id: int, candidates: list[dict]) -> None:
+    cache.set(
+        get_backlink_prospects_cache_key(project_page_id),
+        {"candidates": candidates},
+        timeout=_BACKLINK_PROSPECTS_CACHE_TTL_SECONDS,
+    )
 
 
 def _tokenize(value: str) -> set[str]:
@@ -131,14 +159,12 @@ def _passes_topic_relevance_gate(*, topic: str, title: str, snippet: str, score)
     candidate_tokens = _tokenize(f"{title} {snippet}")
     overlap_ratio = len(topic_tokens.intersection(candidate_tokens)) / max(len(topic_tokens), 1)
 
-    parsed_score = None
-    if score is not None:
-        try:
-            parsed_score = float(score)
-        except (TypeError, ValueError):
-            parsed_score = None
+    try:
+        parsed_score = float(score)
+    except (TypeError, ValueError):
+        parsed_score = 0.0
 
-    if parsed_score is not None and parsed_score < _MIN_EXA_SCORE:
+    if parsed_score < _MIN_EXA_SCORE:
         return False
 
     return overlap_ratio >= _MIN_TOPIC_OVERLAP_RATIO
@@ -231,7 +257,7 @@ def discover_backlink_prospects(project_page, max_candidates: int = 8, max_topic
                         "url": url,
                         "domain": domain,
                         "title": title,
-                        "snippet": snippet[:280],
+                        "snippet": snippet,
                         "topic": topic,
                         "source": "exa",
                     }
@@ -252,3 +278,12 @@ def discover_backlink_prospects(project_page, max_candidates: int = 8, max_topic
         return []
 
     return candidates
+
+
+def refresh_backlink_prospects_cache(project_page) -> list[dict]:
+    try:
+        candidates = discover_backlink_prospects(project_page)
+        set_cached_backlink_prospects(project_page.id, candidates)
+        return candidates
+    finally:
+        cache.delete(get_backlink_prospects_refresh_lock_key(project_page.id))

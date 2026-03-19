@@ -232,7 +232,7 @@
           <div class="mt-4 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
             Could not load backlink opportunities. Please retry.
           </div>
-        {% elif backlink_candidates %}
+        {% elif backlink_state == "ready" and backlink_candidates %}
           <p class="mt-4 text-sm text-gray-500">{{ backlink_candidates_count }} relevant prospects found</p>
           <ul class="mt-4 space-y-3 text-sm">
             {% for candidate in backlink_candidates %}

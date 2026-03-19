@@ -223,8 +223,8 @@ def test_project_page_detail_view_renders_backlink_candidates_for_pro_users(clie
     )
 
     monkeypatch.setattr(
-        "core.views.discover_backlink_prospects",
-        lambda _project_page: [
+        "core.views.get_cached_backlink_prospects",
+        lambda _project_page_id: [
             {
                 "url": "https://developers.google.com/search/docs/fundamentals/seo-starter-guide",
                 "domain": "developers.google.com",
