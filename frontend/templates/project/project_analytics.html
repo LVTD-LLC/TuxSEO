@@ -1,0 +1,149 @@
+{% extends "base_project.html" %}
+
+{% block project_content %}
+  <div class="space-y-6">
+    <section class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm">
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 class="text-xl font-semibold text-gray-900">Analytics</h2>
+          <p class="mt-1 text-sm text-gray-600">
+            Project-level analytics overview across GA4, GSC, and Plausible.
+          </p>
+        </div>
+        <a
+          href="{% url 'project_integrations' project.id %}"
+          class="inline-flex items-center px-4 py-2 text-sm font-medium text-gray-700 bg-gray-50 rounded-md border border-gray-300 hover:bg-gray-100"
+        >
+          Manage Integrations
+        </a>
+      </div>
+
+      <div class="flex flex-wrap gap-2 mt-4">
+        {% for provider in analytics_snapshot_state.providers %}
+          <span class="inline-flex items-center px-2.5 py-1 text-xs font-medium rounded-full {% if provider.is_connected %}text-green-800 bg-green-100{% else %}text-gray-700 bg-gray-100{% endif %}">
+            {{ provider.label }} {% if provider.is_connected %}Connected{% else %}Not connected{% endif %}
+          </span>
+        {% endfor %}
+      </div>
+
+      {% if not analytics_snapshot_state.has_connected_provider %}
+        <p class="mt-4 text-sm text-amber-700">
+          No analytics integrations are connected yet. Connect at least one source to start populating this page.
+        </p>
+      {% elif not analytics_snapshot_state.has_data %}
+        <p class="mt-4 text-sm text-gray-600">
+          Integrations are connected, but no analytics data has been synced yet. Run a sync from Integrations to populate this dashboard.
+        </p>
+      {% endif %}
+    </section>
+
+    <section class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm">
+      <h3 class="text-base font-semibold text-gray-900">Overview KPIs</h3>
+      <div class="grid grid-cols-2 gap-3 mt-4 md:grid-cols-5">
+        <div class="p-3 rounded-md border border-gray-200 bg-gray-50">
+          <p class="text-xs font-semibold tracking-wide text-gray-600 uppercase">Clicks</p>
+          <p class="mt-1 text-xl font-semibold text-gray-900">{{ analytics_snapshot_state.totals.clicks }}</p>
+        </div>
+        <div class="p-3 rounded-md border border-gray-200 bg-gray-50">
+          <p class="text-xs font-semibold tracking-wide text-gray-600 uppercase">Impressions</p>
+          <p class="mt-1 text-xl font-semibold text-gray-900">{{ analytics_snapshot_state.totals.impressions }}</p>
+        </div>
+        <div class="p-3 rounded-md border border-gray-200 bg-gray-50">
+          <p class="text-xs font-semibold tracking-wide text-gray-600 uppercase">Sessions</p>
+          <p class="mt-1 text-xl font-semibold text-gray-900">{{ analytics_snapshot_state.totals.sessions }}</p>
+        </div>
+        <div class="p-3 rounded-md border border-gray-200 bg-gray-50">
+          <p class="text-xs font-semibold tracking-wide text-gray-600 uppercase">Users</p>
+          <p class="mt-1 text-xl font-semibold text-gray-900">{{ analytics_snapshot_state.totals.users }}</p>
+        </div>
+        <div class="p-3 rounded-md border border-gray-200 bg-gray-50">
+          <p class="text-xs font-semibold tracking-wide text-gray-600 uppercase">Conversions</p>
+          <p class="mt-1 text-xl font-semibold text-gray-900">{{ analytics_snapshot_state.totals.conversions|floatformat:2 }}</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm">
+      <h3 class="text-base font-semibold text-gray-900">Traffic / Engagement</h3>
+      {% if analytics_snapshot_state.has_data %}
+        <div class="grid grid-cols-1 gap-4 mt-4 md:grid-cols-2 xl:grid-cols-4">
+          <div>
+            <p class="text-xs font-semibold tracking-wide text-gray-600 uppercase">CTR</p>
+            <p class="mt-1 text-sm text-gray-800">{{ analytics_snapshot_state.derived.ctr_pct|floatformat:2 }}%</p>
+          </div>
+          <div>
+            <p class="text-xs font-semibold tracking-wide text-gray-600 uppercase">Avg position</p>
+            <p class="mt-1 text-sm text-gray-800">{{ analytics_snapshot_state.derived.avg_position|floatformat:2 }}</p>
+          </div>
+          <div>
+            <p class="text-xs font-semibold tracking-wide text-gray-600 uppercase">Engagement rate</p>
+            <p class="mt-1 text-sm text-gray-800">{{ analytics_snapshot_state.derived.engagement_rate_pct|floatformat:2 }}%</p>
+          </div>
+          <div>
+            <p class="text-xs font-semibold tracking-wide text-gray-600 uppercase">Sessions (7d Δ)</p>
+            <p class="mt-1 text-sm text-gray-800">
+              {% if analytics_snapshot_state.deltas.sessions_pct is None %}
+                N/A
+              {% else %}
+                {{ analytics_snapshot_state.deltas.sessions_pct|floatformat:2 }}%
+              {% endif %}
+            </p>
+          </div>
+        </div>
+
+        <div class="mt-4">
+          <p class="text-xs font-semibold tracking-wide text-gray-600 uppercase">Top opportunities</p>
+          <ul class="mt-2 space-y-1 text-sm text-gray-700 list-disc list-inside">
+            {% for opportunity in analytics_snapshot_state.opportunities %}
+              <li>
+                <span class="font-medium">{{ opportunity.target }}</span>
+                ({{ opportunity.impressions }} impressions, {{ opportunity.ctr_pct|floatformat:2 }}% CTR) — {{ opportunity.suggestion }}
+              </li>
+            {% empty %}
+              <li>No low-CTR/high-impression opportunities detected yet.</li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% else %}
+        <p class="mt-3 text-sm text-gray-600">Traffic and engagement metrics will appear once data is synced from your connected sources.</p>
+      {% endif %}
+    </section>
+
+    <section class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm">
+      <h3 class="text-base font-semibold text-gray-900">Conversions / Revenue</h3>
+      {% if analytics_snapshot_state.has_data and analytics_snapshot_state.totals.conversions > 0 %}
+        <div class="grid grid-cols-1 gap-4 mt-4 md:grid-cols-2">
+          <div>
+            <p class="text-xs font-semibold tracking-wide text-gray-600 uppercase">Conversions (30d)</p>
+            <p class="mt-1 text-2xl font-semibold text-gray-900">{{ analytics_snapshot_state.totals.conversions|floatformat:2 }}</p>
+          </div>
+          <div>
+            <p class="text-xs font-semibold tracking-wide text-gray-600 uppercase">Conversion rate</p>
+            <p class="mt-1 text-2xl font-semibold text-gray-900">{{ analytics_snapshot_state.derived.conversion_rate_pct|floatformat:2 }}%</p>
+          </div>
+        </div>
+      {% else %}
+        <p class="mt-3 text-sm text-gray-600">
+          Conversion and revenue data is not available yet for this project. Connect analytics sources and ensure conversion events are being tracked.
+        </p>
+      {% endif %}
+    </section>
+
+    <section class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm">
+      <h3 class="text-base font-semibold text-gray-900">Data source health / status</h3>
+      <ul class="mt-3 space-y-2 text-sm text-gray-700">
+        {% for provider in analytics_snapshot_state.providers %}
+          <li class="flex justify-between items-center px-3 py-2 rounded-md border border-gray-200 bg-gray-50">
+            <span>{{ provider.integration_label }}</span>
+            {% if provider.is_connected %}
+              <span class="font-medium text-green-700">Connected</span>
+            {% else %}
+              <span class="font-medium text-gray-600">Disconnected</span>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+      <p class="mt-3 text-xs text-gray-500">Status is project-scoped and only reflects integrations connected to this project.</p>
+    </section>
+  </div>
+{% endblock project_content %}

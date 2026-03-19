@@ -27,6 +27,11 @@ urlpatterns = [
     ),
     path("project/<int:pk>/home/", views.ProjectHomeView.as_view(), name="project_home"),
     path(
+        "project/<int:pk>/analytics/",
+        views.ProjectAnalyticsView.as_view(),
+        name="project_analytics",
+    ),
+    path(
         "project/<int:pk>/posts/eye-catching/",
         views.ProjectEyeCatchingPostsView.as_view(),
         name="project_eye_catching_posts",

@@ -1084,6 +1084,224 @@ class ProjectHomeView(LoginRequiredMixin, DetailView):
         return context
 
 
+class ProjectAnalyticsView(LoginRequiredMixin, DetailView):
+    model = Project
+    template_name = "project/project_analytics.html"
+    context_object_name = "project"
+
+    def get_queryset(self):
+        return Project.objects.filter(profile=self.request.user.profile)
+
+    @staticmethod
+    def _safe_pct(numerator: float | int, denominator: float | int) -> float:
+        if not denominator:
+            return 0.0
+        return round((float(numerator) / float(denominator)) * 100, 2)
+
+    @staticmethod
+    def _safe_delta(recent: float | int, previous: float | int) -> float | None:
+        if not previous:
+            return 0.0 if not recent else None
+        return round(((float(recent) - float(previous)) / float(previous)) * 100, 2)
+
+    def get_analytics_snapshot_state(self, *, project: Project) -> dict:
+        today = timezone.now().date()
+        window_start = today - timedelta(days=29)
+
+        providers = [
+            {
+                "key": ProjectIntegration.Provider.GOOGLE_ANALYTICS,
+                "label": "GA4",
+                "integration_label": "Google Analytics",
+            },
+            {
+                "key": ProjectIntegration.Provider.GOOGLE_SEARCH_CONSOLE,
+                "label": "GSC",
+                "integration_label": "Google Search Console",
+            },
+            {
+                "key": ProjectIntegration.Provider.PLAUSIBLE,
+                "label": "Plausible",
+                "integration_label": "Plausible",
+            },
+        ]
+
+        connected_provider_keys = set(
+            ProjectIntegration.objects.filter(
+                project=project,
+                status=ProjectIntegration.Status.CONNECTED,
+            ).values_list("provider", flat=True)
+        )
+        for provider in providers:
+            provider["is_connected"] = provider["key"] in connected_provider_keys
+
+        facts_qs = AnalyticsFactDaily.objects.filter(
+            project=project,
+            metric_date__gte=window_start,
+            metric_date__lte=today,
+        )
+
+        gsc_facts_qs = facts_qs.filter(provider=AnalyticsFactDaily.Provider.GSC)
+        ga4_facts_qs = facts_qs.filter(provider=AnalyticsFactDaily.Provider.GA4)
+        plausible_facts_qs = facts_qs.filter(provider=AnalyticsFactDaily.Provider.PLAUSIBLE)
+
+        clicks_source_qs = gsc_facts_qs if gsc_facts_qs.exists() else facts_qs
+        session_source_qs = (
+            ga4_facts_qs
+            if ga4_facts_qs.exists()
+            else plausible_facts_qs
+            if plausible_facts_qs.exists()
+            else facts_qs
+        )
+
+        clicks_totals = clicks_source_qs.aggregate(
+            clicks=Sum("clicks"),
+            impressions=Sum("impressions"),
+        )
+        session_totals = session_source_qs.aggregate(
+            sessions=Sum("sessions"),
+            users=Sum("users"),
+            conversions=Sum("conversions"),
+            engaged_sessions=Sum("engaged_sessions"),
+        )
+
+        totals = {
+            "clicks": clicks_totals.get("clicks") or 0,
+            "impressions": clicks_totals.get("impressions") or 0,
+            "sessions": session_totals.get("sessions") or 0,
+            "users": session_totals.get("users") or 0,
+            "conversions": session_totals.get("conversions") or 0,
+            "engaged_sessions": session_totals.get("engaged_sessions") or 0,
+        }
+
+        gsc_position_data = facts_qs.filter(
+            provider=AnalyticsFactDaily.Provider.GSC,
+            avg_position__isnull=False,
+            impressions__gt=0,
+        ).aggregate(
+            weighted_position_sum=Sum(
+                F("avg_position") * F("impressions"),
+                output_field=FloatField(),
+            ),
+            total_impressions=Sum("impressions"),
+        )
+        weighted_position_sum = float(gsc_position_data.get("weighted_position_sum") or 0)
+        total_impressions = float(gsc_position_data.get("total_impressions") or 0)
+        avg_position = round(weighted_position_sum / total_impressions, 2) if total_impressions else 0.0
+
+        recent_start = today - timedelta(days=6)
+        previous_start = recent_start - timedelta(days=7)
+        previous_end = recent_start - timedelta(days=1)
+
+        recent_clicks = clicks_source_qs.filter(
+            metric_date__gte=recent_start,
+            metric_date__lte=today,
+        ).aggregate(clicks=Sum("clicks"))
+        previous_clicks = clicks_source_qs.filter(
+            metric_date__gte=previous_start,
+            metric_date__lte=previous_end,
+        ).aggregate(clicks=Sum("clicks"))
+
+        recent_sessions = session_source_qs.filter(
+            metric_date__gte=recent_start,
+            metric_date__lte=today,
+        ).aggregate(
+            sessions=Sum("sessions"),
+            conversions=Sum("conversions"),
+        )
+        previous_sessions = session_source_qs.filter(
+            metric_date__gte=previous_start,
+            metric_date__lte=previous_end,
+        ).aggregate(
+            sessions=Sum("sessions"),
+            conversions=Sum("conversions"),
+        )
+
+        recent = {
+            "clicks": recent_clicks.get("clicks") or 0,
+            "sessions": recent_sessions.get("sessions") or 0,
+            "conversions": recent_sessions.get("conversions") or 0,
+        }
+        previous = {
+            "clicks": previous_clicks.get("clicks") or 0,
+            "sessions": previous_sessions.get("sessions") or 0,
+            "conversions": previous_sessions.get("conversions") or 0,
+        }
+
+        opportunities = []
+        opportunities_grouped = list(
+            facts_qs.filter(
+                provider=AnalyticsFactDaily.Provider.GSC,
+                dimension_scope__in=[
+                    AnalyticsFactDaily.DimensionScope.PAGE,
+                    AnalyticsFactDaily.DimensionScope.PAGE_QUERY,
+                ],
+                impressions__isnull=False,
+                impressions__gt=0,
+            )
+            .values("search_query", "page_url")
+            .annotate(
+                total_impressions=Sum("impressions"),
+                total_clicks=Sum("clicks"),
+            )
+        )
+
+        ranked_opportunities = []
+        for row in opportunities_grouped:
+            impressions = int(row.get("total_impressions") or 0)
+            if impressions < 100:
+                continue
+            clicks = float(row.get("total_clicks") or 0)
+            ctr_value = clicks / impressions if impressions else 0
+            if ctr_value > 0.04:
+                continue
+            ranked_opportunities.append(
+                {
+                    "target": row.get("search_query") or row.get("page_url") or "Untitled page",
+                    "impressions": impressions,
+                    "ctr_pct": round(ctr_value * 100, 2),
+                    "suggestion": "Improve title/meta match and add internal links from related pages.",
+                }
+            )
+
+        ranked_opportunities.sort(key=lambda item: (item["ctr_pct"], -item["impressions"]))
+        opportunities = ranked_opportunities[:3]
+
+        has_analytics_data = facts_qs.exists()
+        has_any_provider_connected = any(provider["is_connected"] for provider in providers)
+
+        return {
+            "window_days": 30,
+            "providers": providers,
+            "has_connected_provider": has_any_provider_connected,
+            "has_data": has_analytics_data,
+            "totals": {
+                "clicks": int(totals["clicks"]),
+                "impressions": int(totals["impressions"]),
+                "sessions": int(totals["sessions"]),
+                "users": int(totals["users"]),
+                "conversions": float(totals["conversions"]),
+            },
+            "derived": {
+                "ctr_pct": self._safe_pct(totals["clicks"], totals["impressions"]),
+                "avg_position": avg_position,
+                "engagement_rate_pct": self._safe_pct(totals["engaged_sessions"], totals["sessions"]),
+                "conversion_rate_pct": self._safe_pct(totals["conversions"], totals["sessions"]),
+            },
+            "deltas": {
+                "clicks_pct": self._safe_delta(recent["clicks"], previous["clicks"]),
+                "sessions_pct": self._safe_delta(recent["sessions"], previous["sessions"]),
+                "conversions_pct": self._safe_delta(recent["conversions"], previous["conversions"]),
+            },
+            "opportunities": opportunities,
+        }
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["analytics_snapshot_state"] = self.get_analytics_snapshot_state(project=self.object)
+        return context
+
+
 class ProjectEyeCatchingPostsView(LoginRequiredMixin, DetailView):
     model = Project
     template_name = "project/project_eye_catching_posts.html"
