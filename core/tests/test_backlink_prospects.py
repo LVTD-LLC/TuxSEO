@@ -18,6 +18,22 @@ class _FakeResponse:
         return self._payload
 
 
+class _FakeHtmlResponse:
+    def __init__(self, html: str):
+        self.text = html
+
+    def raise_for_status(self):
+        return None
+
+
+@pytest.fixture(autouse=True)
+def _stub_contact_enrichment_fetch(monkeypatch):
+    monkeypatch.setattr(
+        "core.backlink_prospects.requests.get",
+        lambda *_args, **_kwargs: _FakeHtmlResponse("<html><body></body></html>"),
+    )
+
+
 @pytest.mark.django_db
 def test_extract_backlink_topics_uses_project_and_page_fields():
     user = User.objects.create_user(
@@ -328,6 +344,157 @@ def test_discover_backlink_prospects_limits_exa_calls_with_overcollect_cap(
 
     assert len(candidates) == 1
     assert api_calls["count"] == 1
+
+
+@pytest.mark.django_db
+def test_discover_backlink_prospects_enriches_contact_methods_from_public_signals(
+    monkeypatch,
+    settings,
+):
+    settings.EXA_API_KEY = "test-key"
+
+    user = User.objects.create_user(
+        username="prospect-contact-enrichment-user",
+        email="prospect-contact-enrichment-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://tuxseo.com",
+        name="TuxSEO",
+        summary="seo platform for startups",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://tuxseo.com/blog/seo-content-strategy",
+        title="SEO Content Strategy",
+        summary="SEO content strategy for startup teams",
+        description="On-page and technical SEO strategy",
+        type_ai_guess="Blog post",
+    )
+
+    monkeypatch.setattr(
+        "core.backlink_prospects.requests.post",
+        lambda *_args, **_kwargs: _FakeResponse(
+            {
+                "results": [
+                    {
+                        "url": "https://example.org/seo-playbook",
+                        "title": "SEO Playbook",
+                        "highlights": ["technical seo indexing playbook for teams"],
+                        "score": 0.92,
+                    }
+                ]
+            }
+        ),
+    )
+
+    html = """
+        <html>
+          <body>
+            <a href="/contact">Contact us</a>
+            <a href="mailto:hello@example.org">Email</a>
+            <a href="https://x.com/example_org">X</a>
+            <a href="https://www.linkedin.com/company/example-org/">LinkedIn</a>
+            <a href="/author/jane-doe">About the author</a>
+          </body>
+        </html>
+    """
+    monkeypatch.setattr(
+        "core.backlink_prospects.requests.get",
+        lambda *_args, **_kwargs: _FakeHtmlResponse(html),
+    )
+
+    candidates = discover_backlink_prospects(page, max_candidates=1)
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    methods_by_type = {method["type"]: method for method in candidate["contact_methods"]}
+
+    assert methods_by_type["contact_page_url"]["status"] == "found"
+    assert methods_by_type["contact_page_url"]["confidence"] == "high"
+    assert methods_by_type["contact_page_url"]["value"] == "https://example.org/contact"
+
+    assert methods_by_type["public_email"]["status"] == "found"
+    assert methods_by_type["public_email"]["value"] == "hello@example.org"
+
+    assert methods_by_type["x_twitter"]["status"] == "found"
+    assert methods_by_type["x_twitter"]["value"] == "https://x.com/example_org"
+
+    assert methods_by_type["linkedin"]["status"] == "found"
+    assert methods_by_type["linkedin"]["value"] == "https://www.linkedin.com/company/example-org"
+
+    assert methods_by_type["author_profile"]["status"] == "found"
+    assert methods_by_type["author_profile"]["value"] == "https://example.org/author/jane-doe"
+
+    assert candidate["actionable_outreach_count"] == 5
+
+
+@pytest.mark.django_db
+def test_discover_backlink_prospects_marks_low_confidence_vs_not_found(monkeypatch, settings):
+    settings.EXA_API_KEY = "test-key"
+
+    user = User.objects.create_user(
+        username="prospect-contact-confidence-user",
+        email="prospect-contact-confidence-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://tuxseo.com",
+        name="TuxSEO",
+        summary="seo platform for startups",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://tuxseo.com/blog/seo-content-strategy",
+        title="SEO Content Strategy",
+        summary="SEO content strategy for startup teams",
+        description="On-page and technical SEO strategy",
+        type_ai_guess="Blog post",
+    )
+
+    monkeypatch.setattr(
+        "core.backlink_prospects.requests.post",
+        lambda *_args, **_kwargs: _FakeResponse(
+            {
+                "results": [
+                    {
+                        "url": "https://example.net/guide",
+                        "title": "SEO Guide",
+                        "highlights": ["technical seo guide"],
+                        "score": 0.9,
+                    }
+                ]
+            }
+        ),
+    )
+
+    html = """
+        <html>
+          <body>
+            <a href="/about">About us</a>
+            <p>No social links are listed on this page.</p>
+          </body>
+        </html>
+    """
+    monkeypatch.setattr(
+        "core.backlink_prospects.requests.get",
+        lambda *_args, **_kwargs: _FakeHtmlResponse(html),
+    )
+
+    candidates = discover_backlink_prospects(page, max_candidates=1)
+
+    methods_by_type = {method["type"]: method for method in candidates[0]["contact_methods"]}
+    assert methods_by_type["contact_page_url"]["status"] == "low_confidence"
+    assert methods_by_type["contact_page_url"]["confidence"] == "low"
+    assert methods_by_type["contact_page_url"]["value"] == "https://example.net/about"
+
+    assert methods_by_type["public_email"]["status"] == "not_found"
+    assert methods_by_type["x_twitter"]["status"] == "not_found"
+    assert methods_by_type["linkedin"]["status"] == "not_found"
+    assert methods_by_type["author_profile"]["status"] == "not_found"
+    assert candidates[0]["actionable_outreach_count"] == 0
 
 
 @pytest.mark.django_db
