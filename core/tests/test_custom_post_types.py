@@ -192,6 +192,24 @@ def test_update_duplicate_custom_post_type_name_does_not_500(client):
 
 
 @pytest.mark.django_db
+def test_edit_custom_post_type_requires_authentication(client):
+    user = User.objects.create_user("owner-edit-auth", "owner-edit-auth@example.com", "secret")
+    project = Project.objects.create(profile=user.profile, name="Site", url="https://site.test")
+    post_type = ProjectCustomPostType.objects.create(
+        project=project,
+        name="Tutorial",
+        prompt_guidance="Step-by-step instructional style.",
+    )
+
+    response = client.get(
+        reverse("project_custom_post_type_edit", kwargs={"pk": project.id, "post_type_pk": post_type.id})
+    )
+
+    assert response.status_code == 302
+    assert "/accounts/login/" in response.url
+
+
+@pytest.mark.django_db
 @override_settings(MEDIA_ROOT="/tmp/tuxseo-test-media")
 def test_edit_custom_post_type_updates_name_prompt_and_logo(client):
     user = User.objects.create_user("owner-edit", "owner-edit@example.com", "secret")
@@ -232,6 +250,8 @@ def test_edit_custom_post_type_rejects_remove_logo_and_new_upload_together(clien
     )
 
     client.force_login(user)
+    original_logo_name = post_type.logo.name
+
     response = client.post(
         reverse("project_custom_post_type_edit", kwargs={"pk": project.id, "post_type_pk": post_type.id}),
         {
@@ -244,6 +264,8 @@ def test_edit_custom_post_type_rejects_remove_logo_and_new_upload_together(clien
 
     assert response.status_code == 200
     assert "Choose either remove logo or upload a new logo" in response.content.decode("utf-8")
+    post_type.refresh_from_db()
+    assert post_type.logo.name == original_logo_name
 
 
 @pytest.mark.django_db

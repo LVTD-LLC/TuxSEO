@@ -3,6 +3,7 @@ import uuid
 import requests
 from allauth.account.forms import LoginForm, SignupForm
 from django import forms
+from django.db import transaction
 
 from core.abuse_prevention import (
     get_request_ip_address,
@@ -406,11 +407,14 @@ class ProjectCustomPostTypeForm(forms.ModelForm):
     def save(self, commit=True):
         instance = super().save(commit=False)
 
+        old_logo = None
         if self.cleaned_data.get("remove_logo") and instance.logo:
-            instance.logo.delete(save=False)
+            old_logo = instance.logo
             instance.logo = None
 
         if commit:
             instance.save()
+            if old_logo:
+                transaction.on_commit(lambda: old_logo.delete(save=False))
         return instance
 
