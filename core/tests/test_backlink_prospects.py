@@ -88,6 +88,12 @@ def test_discover_backlink_prospects_filters_and_deduplicates(monkeypatch, setti
                     "score": 0.91,
                 },
                 {
+                    "url": "https://docs.tuxseo.com/technical-seo-guide",
+                    "title": "In-house guide",
+                    "highlights": ["technical seo indexing"],
+                    "score": 0.92,
+                },
+                {
                     "url": "https://reddit.com/r/seo/comments/abc",
                     "title": "SEO thread",
                     "highlights": ["technical seo indexing"],

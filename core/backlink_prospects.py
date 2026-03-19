@@ -24,6 +24,8 @@ _BLOCKED_DOMAIN_SUFFIXES = (
     "twitter.com",
 )
 
+_SHORT_TOKEN_WHITELIST = {"ai", "api", "seo", "ui", "ux"}
+
 _STOPWORDS = {
     "about",
     "after",
@@ -77,13 +79,45 @@ def set_cached_backlink_prospects(project_page_id: int, candidates: list[dict]) 
 
 
 def _tokenize(value: str) -> set[str]:
-    tokens = re.findall(r"[a-z0-9]{4,}", (value or "").lower())
-    return {token for token in tokens if token not in _STOPWORDS}
+    tokens = re.findall(r"[a-z0-9]{2,}", (value or "").lower())
+    return {
+        token
+        for token in tokens
+        if token not in _STOPWORDS and (len(token) >= 4 or token in _SHORT_TOKEN_WHITELIST)
+    }
 
 
 def _normalize_phrase(value: str) -> str:
     cleaned = re.sub(r"\s+", " ", (value or "").strip(" \t\n\r-•*"))
     return cleaned[:120]
+
+
+def _registrable_domain(hostname: str) -> str:
+    hostname = (hostname or "").lower().strip(".")
+    if not hostname:
+        return ""
+
+    parts = hostname.split(".")
+    if len(parts) <= 2:
+        return hostname
+
+    second_level_tlds = {
+        "co.uk",
+        "org.uk",
+        "gov.uk",
+        "ac.uk",
+        "com.au",
+        "net.au",
+        "org.au",
+        "co.nz",
+    }
+    tail = ".".join(parts[-2:])
+    country_tail = ".".join(parts[-3:])
+
+    if tail in second_level_tlds and len(parts) >= 3:
+        return country_tail
+
+    return tail
 
 
 def _split_into_phrases(value: str) -> list[str]:
@@ -210,7 +244,7 @@ def discover_backlink_prospects(project_page, max_candidates: int = 8, max_topic
     if not topics:
         return []
 
-    project_domain = (urlparse(getattr(project, "url", "")).hostname or "").lower()
+    project_domain = _registrable_domain(urlparse(getattr(project, "url", "")).hostname or "")
 
     candidates = []
     seen_urls = set()
@@ -236,7 +270,8 @@ def discover_backlink_prospects(project_page, max_candidates: int = 8, max_topic
                 if _is_blocked_domain(domain):
                     continue
 
-                if project_domain and (domain == project_domain or domain.endswith(f".{project_domain}")):
+                candidate_site = _registrable_domain(domain)
+                if project_domain and candidate_site == project_domain:
                     continue
 
                 title = (item.get("title") or "").strip() or domain
