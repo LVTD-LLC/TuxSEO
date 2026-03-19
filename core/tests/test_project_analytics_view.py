@@ -114,6 +114,52 @@ def test_project_analytics_view_handles_partial_integrations_without_crashing(cl
 
 
 @pytest.mark.django_db
+def test_project_analytics_view_prefers_canonical_provider_totals(client):
+    user, project = create_user_with_project(
+        username="project-analytics-canonical-user",
+        project_url="https://analytics-canonical.example.com",
+    )
+
+    today = timezone.now().date()
+    AnalyticsFactDaily.objects.create(
+        project=project,
+        provider=AnalyticsFactDaily.Provider.GSC,
+        metric_date=today,
+        dimension_scope=AnalyticsFactDaily.DimensionScope.SITE,
+        dimension_fingerprint="canonical-gsc",
+        clicks=50,
+        impressions=1000,
+        sessions=999,
+        users=999,
+        conversions=111,
+    )
+    AnalyticsFactDaily.objects.create(
+        project=project,
+        provider=AnalyticsFactDaily.Provider.GA4,
+        metric_date=today,
+        dimension_scope=AnalyticsFactDaily.DimensionScope.SITE,
+        dimension_fingerprint="canonical-ga4",
+        clicks=5,
+        impressions=100,
+        sessions=200,
+        users=180,
+        conversions=20,
+        engaged_sessions=120,
+    )
+
+    client.force_login(user)
+    response = client.get(reverse("project_analytics", kwargs={"pk": project.id}))
+
+    assert response.status_code == 200
+    state = response.context["analytics_snapshot_state"]
+    assert state["totals"]["clicks"] == 50
+    assert state["totals"]["impressions"] == 1000
+    assert state["totals"]["sessions"] == 200
+    assert state["totals"]["users"] == 180
+    assert state["totals"]["conversions"] == 20.0
+
+
+@pytest.mark.django_db
 def test_project_home_links_to_project_analytics_page(client):
     user, project = create_user_with_project(
         username="project-home-analytics-link-user",

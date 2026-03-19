@@ -1141,16 +1141,38 @@ class ProjectAnalyticsView(LoginRequiredMixin, DetailView):
             metric_date__lte=today,
         )
 
-        totals = facts_qs.aggregate(
+        gsc_facts_qs = facts_qs.filter(provider=AnalyticsFactDaily.Provider.GSC)
+        ga4_facts_qs = facts_qs.filter(provider=AnalyticsFactDaily.Provider.GA4)
+        plausible_facts_qs = facts_qs.filter(provider=AnalyticsFactDaily.Provider.PLAUSIBLE)
+
+        clicks_source_qs = gsc_facts_qs if gsc_facts_qs.exists() else facts_qs
+        session_source_qs = (
+            ga4_facts_qs
+            if ga4_facts_qs.exists()
+            else plausible_facts_qs
+            if plausible_facts_qs.exists()
+            else facts_qs
+        )
+
+        clicks_totals = clicks_source_qs.aggregate(
             clicks=Sum("clicks"),
             impressions=Sum("impressions"),
+        )
+        session_totals = session_source_qs.aggregate(
             sessions=Sum("sessions"),
             users=Sum("users"),
             conversions=Sum("conversions"),
             engaged_sessions=Sum("engaged_sessions"),
         )
 
-        totals = {k: (v or 0) for k, v in totals.items()}
+        totals = {
+            "clicks": clicks_totals.get("clicks") or 0,
+            "impressions": clicks_totals.get("impressions") or 0,
+            "sessions": session_totals.get("sessions") or 0,
+            "users": session_totals.get("users") or 0,
+            "conversions": session_totals.get("conversions") or 0,
+            "engaged_sessions": session_totals.get("engaged_sessions") or 0,
+        }
 
         gsc_position_data = facts_qs.filter(
             provider=AnalyticsFactDaily.Provider.GSC,
@@ -1171,22 +1193,40 @@ class ProjectAnalyticsView(LoginRequiredMixin, DetailView):
         previous_start = recent_start - timedelta(days=7)
         previous_end = recent_start - timedelta(days=1)
 
-        recent = facts_qs.filter(metric_date__gte=recent_start, metric_date__lte=today).aggregate(
-            clicks=Sum("clicks"),
+        recent_clicks = clicks_source_qs.filter(
+            metric_date__gte=recent_start,
+            metric_date__lte=today,
+        ).aggregate(clicks=Sum("clicks"))
+        previous_clicks = clicks_source_qs.filter(
+            metric_date__gte=previous_start,
+            metric_date__lte=previous_end,
+        ).aggregate(clicks=Sum("clicks"))
+
+        recent_sessions = session_source_qs.filter(
+            metric_date__gte=recent_start,
+            metric_date__lte=today,
+        ).aggregate(
             sessions=Sum("sessions"),
             conversions=Sum("conversions"),
         )
-        previous = facts_qs.filter(
+        previous_sessions = session_source_qs.filter(
             metric_date__gte=previous_start,
             metric_date__lte=previous_end,
         ).aggregate(
-            clicks=Sum("clicks"),
             sessions=Sum("sessions"),
             conversions=Sum("conversions"),
         )
 
-        recent = {k: (v or 0) for k, v in recent.items()}
-        previous = {k: (v or 0) for k, v in previous.items()}
+        recent = {
+            "clicks": recent_clicks.get("clicks") or 0,
+            "sessions": recent_sessions.get("sessions") or 0,
+            "conversions": recent_sessions.get("conversions") or 0,
+        }
+        previous = {
+            "clicks": previous_clicks.get("clicks") or 0,
+            "sessions": previous_sessions.get("sessions") or 0,
+            "conversions": previous_sessions.get("conversions") or 0,
+        }
 
         opportunities = []
         opportunities_grouped = list(
