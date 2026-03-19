@@ -199,7 +199,7 @@ def get_project_analytics_aggregation(
         return 400, {"status": "error", "message": parse_error}
 
     cache_key = (
-        f"analytics_aggregation:v1:project:{project.id}:"
+        f"analytics_aggregation:v2:project:{project.id}:"
         f"{start_date.isoformat()}:{end_date.isoformat()}"
     )
     cached_payload = cache.get(cache_key)
@@ -245,6 +245,75 @@ def get_project_analytics_aggregation(
                 "conversions": float(row.get("conversions") or 0.0),
             }
         )
+
+    gsc_daily = {
+        row["metric_date"]: int(row.get("clicks") or 0)
+        for row in facts_qs.filter(
+            provider=AnalyticsFactDaily.Provider.GSC,
+            dimension_scope=AnalyticsFactDaily.DimensionScope.SITE,
+        )
+        .values("metric_date")
+        .annotate(clicks=Sum("clicks"))
+    }
+
+    session_daily = {}
+    session_daily_rows = (
+        facts_qs.filter(
+            provider__in=[AnalyticsFactDaily.Provider.GA4, AnalyticsFactDaily.Provider.PLAUSIBLE],
+            dimension_scope=AnalyticsFactDaily.DimensionScope.SITE,
+        )
+        .values("metric_date", "provider")
+        .annotate(sessions=Sum("sessions"), conversions=Sum("conversions"))
+        .order_by("metric_date", "provider")
+    )
+    for row in session_daily_rows:
+        metric_date = row["metric_date"]
+        provider = row["provider"]
+        existing = session_daily.get(metric_date)
+        if existing and existing["provider"] == AnalyticsFactDaily.Provider.GA4:
+            continue
+        session_daily[metric_date] = {
+            "provider": provider,
+            "sessions": int(row.get("sessions") or 0),
+            "conversions": float(row.get("conversions") or 0.0),
+        }
+
+    daily_trend = []
+    current_day = start_date
+    while current_day <= end_date:
+        session_row = session_daily.get(current_day, {"sessions": 0, "conversions": 0.0})
+        daily_trend.append(
+            {
+                "date": current_day.isoformat(),
+                "clicks": gsc_daily.get(current_day, 0),
+                "sessions": session_row["sessions"],
+                "conversions": session_row["conversions"],
+            }
+        )
+        current_day += timedelta(days=1)
+
+    page_breakdown_qs = (
+        facts_qs.filter(
+            provider=AnalyticsFactDaily.Provider.GSC,
+            dimension_scope__in=[
+                AnalyticsFactDaily.DimensionScope.PAGE,
+                AnalyticsFactDaily.DimensionScope.PAGE_QUERY,
+            ],
+            page_url__gt="",
+        )
+        .values("page_url")
+        .annotate(clicks=Sum("clicks"), impressions=Sum("impressions"))
+        .order_by("-impressions", "-clicks")
+    )
+    page_breakdown = [
+        {
+            "page_url": row["page_url"],
+            "clicks": int(row.get("clicks") or 0),
+            "impressions": int(row.get("impressions") or 0),
+            "ctr_pct": _safe_pct(int(row.get("clicks") or 0), int(row.get("impressions") or 0)),
+        }
+        for row in page_breakdown_qs[:8]
+    ]
 
     gsc_row = by_provider[AnalyticsFactDaily.Provider.GSC]
     ga4_row = by_provider[AnalyticsFactDaily.Provider.GA4]
@@ -346,6 +415,8 @@ def get_project_analytics_aggregation(
         },
         "source_breakdown": source_breakdown,
         "source_health": source_health,
+        "daily_trend": daily_trend,
+        "page_breakdown": page_breakdown,
         "cached": False,
         "cache_key": "",
         "message": (

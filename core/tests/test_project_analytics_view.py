@@ -65,12 +65,13 @@ def test_project_analytics_view_renders_shell_and_empty_state(client):
 
     assert response.status_code == 200
     content = response.content.decode()
-    assert "Analytics" in content
+    assert "Detailed analytics" in content
     assert "Overview KPIs" in content
-    assert "Traffic / Engagement" in content
-    assert "Conversions / Revenue" in content
-    assert "Data source health / status" in content
-    assert "No analytics integrations are connected yet." in content
+    assert "Sessions trend" in content
+    assert "Source breakdown" in content
+    assert "Top pages by impressions" in content
+    assert "Data source state" in content
+    assert f'data-analytics-dashboard-project-id-value="{project.id}"' in content
     assert reverse("project_integrations", kwargs={"pk": project.id}) in content
 
 
@@ -107,10 +108,9 @@ def test_project_analytics_view_handles_partial_integrations_without_crashing(cl
 
     assert response.status_code == 200
     content = response.content.decode()
-    assert "GSC Connected" in content
-    assert "GA4 Not connected" in content
-    assert "Plausible Not connected" in content
-    assert "tux seo pricing" in content
+    assert "Loading source status" in content
+    assert "Loading source breakdown" in content
+    assert "Loading page breakdown" in content
 
 
 @pytest.mark.django_db
@@ -172,4 +172,4 @@ def test_project_home_links_to_project_analytics_page(client):
     assert response.status_code == 200
     content = response.content.decode()
     assert reverse("project_analytics", kwargs={"pk": project.id}) in content
-    assert "Open Analytics page" in content
+    assert "View detailed analytics" in content

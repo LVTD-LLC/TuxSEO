@@ -254,7 +254,8 @@ def test_project_home_view_renders_analytics_section_empty_state(client):
     assert response.status_code == 200
     assert "analytics_snapshot_state" in response.context
     content = response.content.decode()
-    assert "Analytics (GA4/GSC/Plausible)" in content
+    assert "Analytics summary" in content
+    assert "View detailed analytics" in content
     assert "No analytics data synced yet." in content
 
 
@@ -363,11 +364,11 @@ def test_project_home_view_renders_analytics_metrics_and_opportunities(client):
     assert analytics_snapshot["opportunities"][0]["impressions"] == 600
 
     content = response.content.decode()
-    assert "Analytics (GA4/GSC/Plausible)" in content
-    assert "Top opportunities" in content
-    assert "seo pricing" in content
-    assert "seo features" not in content
+    assert "Analytics summary" in content
+    assert "View detailed analytics" in content
+    assert "seo pricing" not in content
     assert "GA4 Connected" in content
     assert "GSC Connected" in content
     assert "Plausible Not connected" in content
-    assert "Trend deltas (recent 7d vs prior 7d)" in content
+    assert "Top opportunities" not in content
+    assert "Trend deltas (recent 7d vs prior 7d)" not in content
