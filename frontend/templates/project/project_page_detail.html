@@ -492,14 +492,6 @@
           });
         });
 
-        if ({{ backlink_candidates_count }} > 0) {
-          captureEvent("opportunities_viewed", {
-            opportunities_count: {{ backlink_candidates_count }},
-            sort_mode: "{{ backlink_sort }}",
-            has_contact_only: {{ backlink_has_contact_only|yesno:"true,false" }},
-            result_status: "succeeded",
-          });
-        }
       })();
     </script>
   {% endif %}

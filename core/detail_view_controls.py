@@ -62,6 +62,23 @@ def _seconds_until_tomorrow_utc() -> int:
     return max(int((tomorrow - now).total_seconds()), 60)
 
 
+def release_daily_quota(*, profile_id: int, module: str) -> None:
+    day_key = timezone.now().strftime("%Y%m%d")
+    key = _daily_quota_key(profile_id=profile_id, module=module, day_key=day_key)
+    try:
+        current = int(cache.get(key) or 0)
+    except (TypeError, ValueError):
+        current = 0
+
+    if current <= 0:
+        return
+
+    try:
+        cache.decr(key)
+    except ValueError:
+        cache.set(key, max(0, current - 1), timeout=_seconds_until_tomorrow_utc())
+
+
 def consume_daily_quota(*, profile_id: int, module: str, limit: int) -> QuotaCheckResult:
     if int(limit or 0) <= 0:
         return QuotaCheckResult(allowed=True, reason="unlimited", used=0, limit=0)

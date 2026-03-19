@@ -47,6 +47,7 @@ from core.detail_view_controls import (
     consume_daily_quota,
     get_detail_view_feature_flags,
     is_module_enabled,
+    release_daily_quota,
 )
 from core.choices import BlogPostStatus, ContentType, Language, OGImageStyle, ProfileStates
 from core.forms import (
@@ -2052,26 +2053,6 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
                     )
                 )
 
-            quota_result = consume_daily_quota(
-                profile_id=request.user.profile.id,
-                module=MODULE_SEO_ANALYSIS,
-                limit=int(getattr(settings, "DETAIL_VIEW_SEO_ANALYSIS_DAILY_LIMIT", 20)),
-            )
-            if not quota_result.allowed:
-                messages.info(
-                    request,
-                    "You've reached today's SEO analysis run limit. Please try again tomorrow.",
-                )
-                return redirect(
-                    reverse(
-                        "project_page_detail",
-                        kwargs={
-                            "project_pk": self.object.project_id,
-                            "page_pk": self.object.id,
-                        },
-                    )
-                )
-
             start_result = start_or_reuse_run(
                 project_page=self.object,
                 requested_by=request.user.profile,
@@ -2098,6 +2079,27 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
                         "We couldn't refresh analysis. Please try again in a minute.",
                     )
             else:
+                quota_result = consume_daily_quota(
+                    profile_id=request.user.profile.id,
+                    module=MODULE_SEO_ANALYSIS,
+                    limit=int(getattr(settings, "DETAIL_VIEW_SEO_ANALYSIS_DAILY_LIMIT", 20)),
+                )
+                if not quota_result.allowed:
+                    start_result.run.delete()
+                    messages.info(
+                        request,
+                        "You've reached today's SEO analysis run limit. Please try again tomorrow.",
+                    )
+                    return redirect(
+                        reverse(
+                            "project_page_detail",
+                            kwargs={
+                                "project_pk": self.object.project_id,
+                                "page_pk": self.object.id,
+                            },
+                        )
+                    )
+
                 async_task(
                     "core.tasks.execute_project_page_analysis_run",
                     start_result.run.id,
@@ -2159,34 +2161,49 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
                     )
                 )
 
-            quota_result = consume_daily_quota(
-                profile_id=request.user.profile.id,
-                module=MODULE_BACKLINK_DISCOVERY,
-                limit=int(
-                    getattr(settings, "DETAIL_VIEW_BACKLINK_DISCOVERY_DAILY_LIMIT", 12)
-                ),
-            )
-            if not quota_result.allowed:
-                messages.info(
-                    request,
-                    "You've reached today's backlink discovery run limit. Please try again tomorrow.",
-                )
-                return redirect(
-                    reverse(
-                        "project_page_detail",
-                        kwargs={
-                            "project_pk": self.object.project_id,
-                            "page_pk": self.object.id,
-                        },
-                    )
-                )
-
             if not self.object.date_analyzed:
                 messages.info(
                     request,
                     "Run SEO analysis first so backlink discovery has current page context.",
                 )
             else:
+                if cache.get(get_backlink_prospects_refresh_lock_key(self.object.id)):
+                    messages.info(
+                        request,
+                        "Backlink discovery is already running for this page.",
+                    )
+                    return redirect(
+                        reverse(
+                            "project_page_detail",
+                            kwargs={
+                                "project_pk": self.object.project_id,
+                                "page_pk": self.object.id,
+                            },
+                        )
+                    )
+
+                quota_result = consume_daily_quota(
+                    profile_id=request.user.profile.id,
+                    module=MODULE_BACKLINK_DISCOVERY,
+                    limit=int(
+                        getattr(settings, "DETAIL_VIEW_BACKLINK_DISCOVERY_DAILY_LIMIT", 12)
+                    ),
+                )
+                if not quota_result.allowed:
+                    messages.info(
+                        request,
+                        "You've reached today's backlink discovery run limit. Please try again tomorrow.",
+                    )
+                    return redirect(
+                        reverse(
+                            "project_page_detail",
+                            kwargs={
+                                "project_pk": self.object.project_id,
+                                "page_pk": self.object.id,
+                            },
+                        )
+                    )
+
                 queued, reason = self._enqueue_backlink_refresh(project_page=self.object)
                 if queued:
                     enqueue_track_event(
@@ -2205,11 +2222,19 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
                         "Backlink discovery queued. Existing opportunities stay visible while we refresh.",
                     )
                 elif reason == "already_running":
+                    release_daily_quota(
+                        profile_id=request.user.profile.id,
+                        module=MODULE_BACKLINK_DISCOVERY,
+                    )
                     messages.info(
                         request,
                         "Backlink discovery is already running for this page.",
                     )
                 else:
+                    release_daily_quota(
+                        profile_id=request.user.profile.id,
+                        module=MODULE_BACKLINK_DISCOVERY,
+                    )
                     messages.error(
                         request,
                         "We couldn't start backlink discovery right now. Please retry in a minute.",
