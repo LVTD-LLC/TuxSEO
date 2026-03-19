@@ -794,7 +794,7 @@ def test_project_page_detail_view_enforces_daily_seo_quota(client, monkeypatch):
 
     assert first.status_code == 302
     assert second.status_code == 200
-    assert "today's seo analysis run limit" in second.content.decode().lower()
+    assert ProjectPageAnalysisRun.objects.filter(project_page=page).count() == 1
 
 
 @pytest.mark.django_db
