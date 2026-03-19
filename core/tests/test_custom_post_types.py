@@ -1,14 +1,22 @@
+import base64
 from types import SimpleNamespace
 
 import pytest
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import override_settings
 from django.urls import reverse
 
 from core.api.schemas import GenerateTitleSuggestionsIn
 from core.api.views import generate_title_suggestions
 from core.choices import ContentType
 from core.models import BlogPostTitleSuggestion, Project, ProjectCustomPostType
+
+
+TINY_PNG_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7+WZ0AAAAASUVORK5CYII="
+)
 
 
 @pytest.mark.django_db
@@ -230,3 +238,86 @@ def test_build_content_generation_prompt_does_not_duplicate_custom_post_type_gui
     generation_prompt = suggestion.build_content_generation_prompt()
 
     assert post_type.prompt_guidance not in generation_prompt
+
+
+@pytest.mark.django_db
+@override_settings(MEDIA_ROOT="/tmp/tuxseo-test-media")
+def test_create_custom_post_type_with_logo_upload(client):
+    user = User.objects.create_user("owner-logo", "owner-logo@example.com", "secret")
+    project = Project.objects.create(profile=user.profile, name="Site", url="https://site.test")
+
+    client.force_login(user)
+    response = client.post(
+        reverse("project_custom_post_types", kwargs={"pk": project.id}),
+        {
+            "name": "Case Study",
+            "prompt_guidance": "Use concrete outcomes and metrics.",
+            "logo": SimpleUploadedFile("logo.png", TINY_PNG_BYTES, content_type="image/png"),
+        },
+    )
+
+    assert response.status_code == 302
+    created_type = ProjectCustomPostType.objects.get(project=project, name="Case Study")
+    assert created_type.logo.name.startswith("custom_post_type_logos/")
+
+
+@pytest.mark.django_db
+@override_settings(MEDIA_ROOT="/tmp/tuxseo-test-media")
+def test_create_custom_post_type_without_logo_works(client):
+    user = User.objects.create_user("owner-no-logo", "owner-no-logo@example.com", "secret")
+    project = Project.objects.create(profile=user.profile, name="Site", url="https://site.test")
+
+    client.force_login(user)
+    response = client.post(
+        reverse("project_custom_post_types", kwargs={"pk": project.id}),
+        {
+            "name": "Roundup",
+            "prompt_guidance": "Summarize notable weekly updates.",
+        },
+    )
+
+    assert response.status_code == 302
+    created_type = ProjectCustomPostType.objects.get(project=project, name="Roundup")
+    assert not created_type.logo
+
+
+@pytest.mark.django_db
+@override_settings(MEDIA_ROOT="/tmp/tuxseo-test-media")
+def test_create_custom_post_type_rejects_unsupported_logo_type(client):
+    user = User.objects.create_user("owner-bad-logo", "owner-bad-logo@example.com", "secret")
+    project = Project.objects.create(profile=user.profile, name="Site", url="https://site.test")
+
+    client.force_login(user)
+    response = client.post(
+        reverse("project_custom_post_types", kwargs={"pk": project.id}),
+        {
+            "name": "Tutorial",
+            "prompt_guidance": "Instructional tone.",
+            "logo": SimpleUploadedFile("logo.txt", b"not-image", content_type="text/plain"),
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Unsupported logo format" in response.content.decode("utf-8")
+
+
+@pytest.mark.django_db
+@override_settings(MEDIA_ROOT="/tmp/tuxseo-test-media")
+def test_create_custom_post_type_rejects_oversized_logo(client):
+    user = User.objects.create_user("owner-big-logo", "owner-big-logo@example.com", "secret")
+    project = Project.objects.create(profile=user.profile, name="Site", url="https://site.test")
+
+    oversized = b"0" * (ProjectCustomPostType.logo_max_file_size_bytes + 1)
+
+    client.force_login(user)
+    response = client.post(
+        reverse("project_custom_post_types", kwargs={"pk": project.id}),
+        {
+            "name": "News",
+            "prompt_guidance": "Fast-paced updates.",
+            "logo": SimpleUploadedFile("logo.png", oversized, content_type="image/png"),
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Logo must be 2MB or smaller" in response.content.decode("utf-8")

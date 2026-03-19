@@ -69,9 +69,13 @@
                 href="{% url 'project_custom_post_type_posts' project.id post_type.id %}"
                 class="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors {% if request.resolver_match.url_name == 'project_custom_post_type_posts' and request.resolver_match.kwargs.post_type_pk == post_type.id %}bg-gray-100 text-gray-900{% else %}text-gray-700 hover:bg-gray-50 hover:text-gray-900{% endif %}"
               >
-                <svg class="mr-2 w-4 h-4 {% if request.resolver_match.url_name == 'project_custom_post_type_posts' and request.resolver_match.kwargs.post_type_pk == post_type.id %}text-gray-900{% else %}text-gray-400{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v12m6-6H6" />
-                </svg>
+                {% if post_type.logo %}
+                  <img src="{{ post_type.logo.url }}" alt="{{ post_type.name }} logo" class="object-cover mr-2 w-4 h-4 rounded" />
+                {% else %}
+                  <svg class="mr-2 w-4 h-4 {% if request.resolver_match.url_name == 'project_custom_post_type_posts' and request.resolver_match.kwargs.post_type_pk == post_type.id %}text-gray-900{% else %}text-gray-400{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v12m6-6H6" />
+                  </svg>
+                {% endif %}
                 {{ post_type.name }}
               </a>
             </li>

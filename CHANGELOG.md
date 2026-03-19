@@ -55,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - custom post types per project with validated name + prompt guidance, CRUD management UI, and Posts navigation integration
   - custom post types can be selected in navigation and applied as generation guidance for title suggestions
   - custom post-type guidance now also propagates into full article generation, with regression coverage for both title and content generation paths
+  - custom post type create/edit flow now supports optional logo uploads (PNG/JPG/WEBP/GIF up to 2MB), persists logos on the type record, renders logos across post-type UI surfaces, and falls back to default icons when no logo is set
 - Emails
   - Feedback email (for profiles with one product)
   - create project reminder for signed up users without project

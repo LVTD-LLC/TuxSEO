@@ -337,9 +337,19 @@ class AutoSubmissionSettingForm(forms.ModelForm):
 
 
 class ProjectCustomPostTypeForm(forms.ModelForm):
+    logo = forms.FileField(
+        required=False,
+        widget=forms.FileInput(
+            attrs={
+                "class": "block w-full text-sm text-gray-900 rounded-md border border-gray-300 cursor-pointer bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:border-gray-500",
+                "accept": "image/png,image/jpeg,image/webp,image/gif",
+            }
+        ),
+    )
+
     class Meta:
         model = ProjectCustomPostType
-        fields = ["name", "prompt_guidance"]
+        fields = ["name", "prompt_guidance", "logo"]
         widgets = {
             "name": forms.TextInput(
                 attrs={
@@ -363,3 +373,20 @@ class ProjectCustomPostTypeForm(forms.ModelForm):
 
     def clean_prompt_guidance(self):
         return (self.cleaned_data.get("prompt_guidance") or "").strip()
+
+    def clean_logo(self):
+        logo = self.cleaned_data.get("logo")
+        if not logo:
+            return logo
+
+        content_type = getattr(logo, "content_type", "")
+        if content_type not in ProjectCustomPostType.logo_allowed_content_types:
+            raise forms.ValidationError(
+                "Unsupported logo format. Use PNG, JPG, WEBP, or GIF."
+            )
+
+        if logo.size > ProjectCustomPostType.logo_max_file_size_bytes:
+            raise forms.ValidationError("Logo must be 2MB or smaller.")
+
+        return logo
+
