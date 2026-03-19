@@ -232,13 +232,32 @@
           <div class="mt-4 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
             Could not load backlink opportunities. Please retry.
           </div>
-        {% elif backlink_state == "empty" %}
-          <div class="mt-4 rounded-md border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
-            No opportunities yet. This section is scaffolded for future discovery, qualification, and outreach workflows.
-          </div>
+        {% elif backlink_state == "ready" and backlink_candidates %}
+          <p class="mt-4 text-sm text-gray-500">{{ backlink_candidates_count }} relevant prospects found</p>
+          <ul class="mt-4 space-y-3 text-sm">
+            {% for candidate in backlink_candidates %}
+              <li class="rounded-md border border-gray-200 p-3">
+                <a href="{{ candidate.url }}" target="_blank" rel="noopener noreferrer" class="font-medium text-indigo-700 hover:text-indigo-800">
+                  {{ candidate.title }}
+                </a>
+                <p class="mt-1 text-xs text-gray-500">{{ candidate.domain }}</p>
+                {% if candidate.snippet %}
+                  <p class="mt-2 text-gray-700">{{ candidate.snippet }}</p>
+                {% endif %}
+                <div class="mt-2 flex flex-wrap gap-2">
+                  <span class="inline-flex items-center rounded-full bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700">
+                    Topic: {{ candidate.topic }}
+                  </span>
+                  <span class="inline-flex items-center rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-600">
+                    {{ candidate.source }}
+                  </span>
+                </div>
+              </li>
+            {% endfor %}
+          </ul>
         {% else %}
-          <div class="mt-4 rounded-md border border-green-200 bg-green-50 p-4 text-sm text-green-700">
-            Backlink opportunities are available for this page.
+          <div class="mt-4 rounded-md border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
+            No opportunities discovered yet. Try analyzing this page again after updating its summary/content.
           </div>
         {% endif %}
       </section>

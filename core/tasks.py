@@ -352,6 +352,28 @@ def execute_project_page_analysis_run(run_id: int):
     return f"Run {run.id} finished with status {run.status}"
 
 
+def refresh_backlink_prospects_cache(project_page_id: int):
+    from core.backlink_prospects import refresh_backlink_prospects_cache as refresh_cache
+
+    try:
+        project_page = ProjectPage.objects.select_related("project").get(id=project_page_id)
+    except ProjectPage.DoesNotExist:
+        logger.warning(
+            "[BacklinkProspects] ProjectPage not found for cache refresh",
+            project_page_id=project_page_id,
+        )
+        return f"ProjectPage {project_page_id} not found"
+
+    candidates = refresh_cache(project_page)
+    logger.info(
+        "[BacklinkProspects] Cache refresh completed",
+        project_page_id=project_page_id,
+        project_id=project_page.project_id,
+        candidates_count=len(candidates),
+    )
+    return f"Cached {len(candidates)} backlink prospects for page {project_page_id}"
+
+
 def schedule_project_page_analysis(project_id):
     project = Project.objects.get(id=project_id)
 

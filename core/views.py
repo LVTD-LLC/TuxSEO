@@ -18,6 +18,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.messages.views import SuccessMessageMixin
 from django.core import signing
+from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.db.models import Count, F, FloatField, Prefetch, Q, Sum
 from django.http import Http404, HttpResponse, HttpResponseRedirect
@@ -33,6 +34,10 @@ from weasyprint import HTML
 
 from core.acquisition import sync_profile_attribution_from_request
 from core.analytics import ANALYTICS_EVENTS
+from core.backlink_prospects import (
+    get_backlink_prospects_refresh_lock_key,
+    get_cached_backlink_prospects,
+)
 from core.choices import BlogPostStatus, ContentType, Language, OGImageStyle, ProfileStates
 from core.forms import (
     AutoSubmissionSettingForm,
@@ -1984,15 +1989,43 @@ class ProjectPageDetailView(LoginRequiredMixin, DetailView):
         else:
             seo_state = "loading"
         backlink_state = "empty"
+        backlink_candidates = []
 
         if simulated_state in {"loading", "empty", "error"}:
             overview_state = simulated_state
             seo_state = simulated_state
             backlink_state = simulated_state
+        elif profile.is_on_pro_plan and project_page.date_analyzed:
+            cached_candidates = get_cached_backlink_prospects(project_page.id)
+            if cached_candidates is not None:
+                backlink_candidates = cached_candidates
+                backlink_state = "ready" if backlink_candidates else "empty"
+            else:
+                lock_key = get_backlink_prospects_refresh_lock_key(project_page.id)
+                if cache.add(lock_key, True, timeout=5 * 60):
+                    try:
+                        async_task(
+                            "core.tasks.refresh_backlink_prospects_cache",
+                            project_page.id,
+                            group="backlink_prospects",
+                        )
+                    except Exception as error:
+                        cache.delete(lock_key)
+                        logger.warning(
+                            "[BacklinkProspects] Failed to enqueue async refresh",
+                            project_page_id=project_page.id,
+                            project_id=project_page.project_id,
+                            error=str(error),
+                            exc_info=True,
+                        )
+                        backlink_state = "error"
+                backlink_state = backlink_state if backlink_state == "error" else "loading"
 
         context["overview_state"] = overview_state
         context["seo_state"] = seo_state
         context["backlink_state"] = backlink_state
+        context["backlink_candidates"] = backlink_candidates
+        context["backlink_candidates_count"] = len(backlink_candidates)
         context["seo_analysis"] = seo_analysis
 
         return context
