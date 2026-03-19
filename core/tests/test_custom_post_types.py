@@ -478,7 +478,9 @@ def test_delete_custom_post_type_blocks_when_in_active_use(client):
 
     assert response.status_code == 200
     assert ProjectCustomPostType.objects.filter(id=post_type.id).exists()
-    assert "Cannot delete 'Case Study'" in response.content.decode("utf-8")
+    page = response.content.decode("utf-8")
+    assert "Cannot delete" in page
+    assert "active idea(s)" in page
 
 
 @pytest.mark.django_db
