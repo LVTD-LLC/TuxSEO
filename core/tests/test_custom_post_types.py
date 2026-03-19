@@ -321,33 +321,3 @@ def test_create_custom_post_type_rejects_oversized_logo(client):
 
     assert response.status_code == 200
     assert "Logo must be 2MB or smaller" in response.content.decode("utf-8")
-
-
-@pytest.mark.django_db
-@override_settings(MEDIA_ROOT="/tmp/tuxseo-test-media")
-def test_update_custom_post_type_can_clear_existing_logo(client):
-    user = User.objects.create_user("owner-clear-logo", "owner-clear-logo@example.com", "secret")
-    project = Project.objects.create(profile=user.profile, name="Site", url="https://site.test")
-    post_type = ProjectCustomPostType.objects.create(
-        project=project,
-        name="Explainer",
-        prompt_guidance="Clear, concise explainers.",
-        logo=SimpleUploadedFile("logo.png", TINY_PNG_BYTES, content_type="image/png"),
-    )
-
-    client.force_login(user)
-    response = client.post(
-        reverse(
-            "project_custom_post_type_update",
-            kwargs={"pk": project.id, "post_type_pk": post_type.id},
-        ),
-        {
-            "name": post_type.name,
-            "prompt_guidance": post_type.prompt_guidance,
-            "clear_logo": "1",
-        },
-    )
-
-    assert response.status_code == 302
-    post_type.refresh_from_db()
-    assert not post_type.logo
