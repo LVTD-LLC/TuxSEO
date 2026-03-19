@@ -212,6 +212,125 @@ def test_discover_backlink_prospects_filters_low_signal_junk_pages(monkeypatch, 
 
 
 @pytest.mark.django_db
+def test_discover_backlink_prospects_filters_trailing_slash_taxonomy_pages(monkeypatch, settings):
+    settings.EXA_API_KEY = "test-key"
+
+    user = User.objects.create_user(
+        username="prospect-taxonomy-slash-user",
+        email="prospect-taxonomy-slash-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://tuxseo.com",
+        name="TuxSEO",
+        summary="seo platform for startups",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://tuxseo.com/blog/seo-content-strategy",
+        title="SEO Content Strategy",
+        summary="SEO content strategy for startup teams",
+        description="On-page and technical SEO strategy",
+        type_ai_guess="Blog post",
+    )
+
+    responses = [
+        {
+            "results": [
+                {
+                    "url": "https://example.com/tags/?utm_source=feed",
+                    "title": "Tags",
+                    "highlights": ["seo"],
+                    "score": 0.95,
+                },
+                {
+                    "url": "https://backlinko.com/seo-content-strategy-guide",
+                    "title": "SEO Content Strategy Guide",
+                    "highlights": [
+                        "A practical guide for SEO content strategy and keyword mapping."
+                    ],
+                    "score": 0.82,
+                },
+            ]
+        },
+        {"results": []},
+        {"results": []},
+        {"results": []},
+        {"results": []},
+    ]
+
+    def _fake_post(*_args, **_kwargs):
+        return _FakeResponse(responses.pop(0))
+
+    monkeypatch.setattr("core.backlink_prospects.requests.post", _fake_post)
+
+    candidates = discover_backlink_prospects(page, max_candidates=8)
+
+    assert len(candidates) == 1
+    assert candidates[0]["url"] == "https://backlinko.com/seo-content-strategy-guide"
+
+
+@pytest.mark.django_db
+def test_discover_backlink_prospects_limits_exa_calls_with_overcollect_cap(
+    monkeypatch,
+    settings,
+):
+    settings.EXA_API_KEY = "test-key"
+    settings.BACKLINK_PROSPECTS_CONFIG = {"OVERCOLLECT_FACTOR": 1}
+
+    user = User.objects.create_user(
+        username="prospect-overcollect-user",
+        email="prospect-overcollect-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://tuxseo.com",
+        name="TuxSEO",
+        summary="seo platform for startups",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://tuxseo.com/blog/seo-content-strategy",
+        title="SEO Content Strategy",
+        summary="SEO content strategy for startup teams",
+        description="On-page and technical SEO strategy",
+        type_ai_guess="Blog post",
+    )
+
+    monkeypatch.setattr(
+        "core.backlink_prospects.extract_backlink_topics",
+        lambda *_args, **_kwargs: ["topic a", "topic b", "topic c"],
+    )
+
+    api_calls = {"count": 0}
+
+    def _fake_post(*_args, **_kwargs):
+        api_calls["count"] += 1
+        return _FakeResponse(
+            {
+                "results": [
+                    {
+                        "url": f"https://example{api_calls['count']}.com/guide",
+                        "title": "SEO Guide",
+                        "highlights": ["topic a topic b topic c guide"],
+                        "score": 0.95,
+                        "publishedDate": datetime.now(tz=timezone.utc).isoformat(),
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr("core.backlink_prospects.requests.post", _fake_post)
+
+    candidates = discover_backlink_prospects(page, max_candidates=1)
+
+    assert len(candidates) == 1
+    assert api_calls["count"] == 1
+
+
+@pytest.mark.django_db
 def test_discover_backlink_prospects_is_safe_without_api_key(settings):
     settings.EXA_API_KEY = ""
 

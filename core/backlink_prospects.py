@@ -54,6 +54,7 @@ _DEFAULT_SCORING_CONFIG = {
     "MIN_RELEVANCE_SCORE": 0.45,
     "MAX_CANDIDATES": 20,
     "MAX_TOPICS": 8,
+    "OVERCOLLECT_FACTOR": 3,
     "CACHE_TTL_SECONDS": 6 * 60 * 60,
     "REFRESH_LOCK_TTL_SECONDS": 5 * 60,
     "SCORING_WEIGHTS": {
@@ -91,13 +92,13 @@ _LOW_SIGNAL_TITLE_PATTERNS = (
     r"\bsearch results\b",
 )
 
-_LOW_SIGNAL_PATH_PATTERNS = (
-    "/tag/",
-    "/tags/",
-    "/category/",
-    "/categories/",
-    "/author/",
-    "/authors/",
+_LOW_SIGNAL_PATH_SEGMENTS = (
+    "/tag",
+    "/tags",
+    "/category",
+    "/categories",
+    "/author",
+    "/authors",
     "/login",
     "/signup",
     "/sign-up",
@@ -127,7 +128,8 @@ _CONTENT_TYPE_HINTS = {
     "landing": {"pricing", "plan", "demo", "compare", "why", "overview"},
 }
 
-_QUERY_STRIP_PREFIXES = ("utm_", "fbclid", "gclid", "mc_cid", "mc_eid", "ref", "source")
+_QUERY_STRIP_PREFIXES = ("utm_",)
+_QUERY_STRIP_EXACT = {"fbclid", "gclid", "mc_cid", "mc_eid", "ref", "source"}
 
 
 def _get_scoring_config() -> dict:
@@ -300,6 +302,8 @@ def _normalize_candidate_url(url: str) -> str:
     normalized_qs = []
     for key, value in parse_qsl(parsed.query, keep_blank_values=False):
         key_lower = key.lower()
+        if key_lower in _QUERY_STRIP_EXACT:
+            continue
         if any(key_lower.startswith(prefix) for prefix in _QUERY_STRIP_PREFIXES):
             continue
         normalized_qs.append((key_lower, value.strip()))
@@ -318,6 +322,13 @@ def _normalize_candidate_url(url: str) -> str:
     )
 
 
+def _path_has_low_signal_segment(path_lower: str) -> bool:
+    for segment in _LOW_SIGNAL_PATH_SEGMENTS:
+        if path_lower == segment or path_lower.startswith(f"{segment}/"):
+            return True
+    return False
+
+
 def _is_low_signal_page(*, normalized_url: str, title: str, snippet: str) -> bool:
     if not normalized_url:
         return True
@@ -325,7 +336,7 @@ def _is_low_signal_page(*, normalized_url: str, title: str, snippet: str) -> boo
     parsed = urlparse(normalized_url)
     path_lower = (parsed.path or "").lower()
 
-    if any(pattern in path_lower for pattern in _LOW_SIGNAL_PATH_PATTERNS):
+    if _path_has_low_signal_segment(path_lower):
         return True
 
     title_lower = (title or "").strip().lower()
@@ -347,9 +358,8 @@ def _is_low_signal_page(*, normalized_url: str, title: str, snippet: str) -> boo
 
 
 def _compute_topic_match_strength(
-    *, topic: str, title: str, snippet: str, exa_score
+    *, topic: str, title: str, snippet: str, exa_score, config: dict
 ) -> tuple[float, float, float]:
-    config = _get_scoring_config()
     topic_tokens = _tokenize(topic)
     if not topic_tokens:
         return 0.0, 0.0, 0.0
@@ -502,6 +512,7 @@ def _score_candidate(*, topic: str, candidate: dict, project_page) -> dict:
         title=title,
         snippet=snippet,
         exa_score=candidate.get("score"),
+        config=config,
     )
 
     if overlap_ratio < float(config["MIN_TOPIC_OVERLAP_RATIO"]):
@@ -605,9 +616,16 @@ def discover_backlink_prospects(
 
     candidates: list[dict] = []
     seen_dedup_keys: set[tuple[str, str]] = set()
+    overcollect_limit = max(
+        max_candidates,
+        max_candidates * int(config.get("OVERCOLLECT_FACTOR", 3)),
+    )
 
     try:
         for topic in topics:
+            if len(candidates) >= overcollect_limit:
+                break
+
             results = _search_exa_for_topic(
                 exa_api_key=exa_api_key,
                 topic=topic,
@@ -646,6 +664,9 @@ def discover_backlink_prospects(
 
                 candidates.append(candidate_payload)
                 seen_dedup_keys.add(dedup_key)
+
+                if len(candidates) >= overcollect_limit:
+                    break
 
         candidates.sort(key=lambda candidate: candidate.get("relevance_score", 0.0), reverse=True)
         return candidates[:max_candidates]
