@@ -163,3 +163,157 @@ def test_analyze_project_page_seo_reports_failures_when_page_is_sparse():
     assert len(result["issues"]) == 6
     assert result["json_ld"]["state"] == "missing"
     assert result["json_ld"]["is_scorable"] is False
+
+
+@pytest.mark.django_db
+def test_analyze_project_page_seo_contract_includes_required_fields_and_check_shape():
+    user = User.objects.create_user(
+        username="seo-analysis-contract-user",
+        email="seo-analysis-contract-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+
+    project_page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/contract",
+        title="Reliable contract test page title for SEO checks",
+        description="D" * 140,
+        summary="This summary exists to ensure the analyzer returns stable deterministic payload keys for API and UI consumers.",
+        markdown_content="\n".join(
+            [
+                "# Contract Coverage",
+                "[Pricing](/pricing)",
+                "[Features](https://example.com/features)",
+                " ".join(["seo"] * 260),
+            ]
+        ),
+        type_ai_guess="product page",
+    )
+
+    result = analyze_project_page_seo(project_page)
+
+    assert set(result.keys()) == {
+        "score",
+        "passed_checks",
+        "warned_checks",
+        "failed_checks",
+        "total_checks",
+        "checks",
+        "issues",
+        "json_ld",
+    }
+
+    assert isinstance(result["score"], int)
+    assert isinstance(result["checks"], list)
+    assert isinstance(result["issues"], list)
+
+    assert result["checks"], "Expected at least one SEO check in result payload"
+    for check in result["checks"]:
+        assert {
+            "key",
+            "label",
+            "passed",
+            "status",
+            "value",
+            "why_it_matters",
+            "how_to_fix",
+            "recommendation",
+        }.issubset(check.keys())
+        assert check["status"] in {"pass", "warn", "fail"}
+
+    assert {
+        "state",
+        "status_label",
+        "html_input_available",
+        "is_scorable",
+        "detected_script_blocks",
+        "valid_items",
+        "total_items",
+        "detected_types",
+        "detected_summary",
+        "parse_errors",
+        "issue_list",
+        "items",
+        "starter_suggestion",
+        "notes",
+    }.issubset(result["json_ld"].keys())
+
+
+@pytest.mark.django_db
+def test_analyze_project_page_seo_json_ld_states_cover_ok_missing_and_malformed():
+    user = User.objects.create_user(
+        username="seo-analysis-jsonld-state-user",
+        email="seo-analysis-jsonld-state-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+
+    page_ok = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/page-ok",
+        title="Valid JSON-LD SEO test page title",
+        description="D" * 140,
+        summary="Summary for valid JSON-LD state check.",
+        markdown_content="\n".join(
+            [
+                '<script type="application/ld+json">',
+                '{"@context":"https://schema.org","@type":"WebPage","name":"Valid","url":"https://example.com/page-ok"}',
+                "</script>",
+                "# Heading",
+                "[Pricing](/pricing)",
+                " ".join(["seo"] * 260),
+            ]
+        ),
+        type_ai_guess="product page",
+    )
+    result_ok = analyze_project_page_seo(page_ok)
+    assert result_ok["json_ld"]["state"] == "ok"
+
+    page_missing = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/page-missing",
+        title="Missing JSON-LD SEO test page title",
+        description="D" * 140,
+        summary="Summary for missing JSON-LD state check.",
+        markdown_content="\n".join(
+            [
+                "# Heading",
+                "[Pricing](/pricing)",
+                " ".join(["seo"] * 260),
+            ]
+        ),
+        type_ai_guess="product page",
+    )
+    result_missing = analyze_project_page_seo(page_missing)
+    assert result_missing["json_ld"]["state"] == "missing"
+
+    page_malformed = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/page-malformed",
+        title="Malformed JSON-LD SEO test page title",
+        description="D" * 140,
+        summary="Summary for malformed JSON-LD state check.",
+        markdown_content="\n".join(
+            [
+                '<script type="application/ld+json">',
+                '{"@context":"https://schema.org","@type":"WebPage",',
+                "</script>",
+                "# Heading",
+                "[Pricing](/pricing)",
+                " ".join(["seo"] * 260),
+            ]
+        ),
+        type_ai_guess="product page",
+    )
+    result_malformed = analyze_project_page_seo(page_malformed)
+    assert result_malformed["json_ld"]["state"] == "issues"
+    assert result_malformed["json_ld"]["parse_errors"]

@@ -34,6 +34,7 @@ navigation:
 
   features:
     - blog-post-suggestions
+    - page-detailview-seo-backlinks-launch-readiness
 
   deployment:
     - render-deployment

@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Backlink Opportunities DetailView UX v1: ranked scannable table, relevance/type reasoning, quick actions (open source + copy contact data), filters/sorts (highest relevance, has contact, newest discovered), and safe refresh-state handling while discovery jobs run
   - JSON-LD example payloads for UI consumers (`docs/json-ld-analysis-examples-v1.md`)
   - persisted per-page SEO analysis run history (`ProjectPageAnalysisRun`) with queued/running/succeeded/failed lifecycle states, active-run dedupe lock, rerun cooldown guardrails, failure diagnostics, compact payload snapshots, and DetailView history/status UI (`docs/seo-analysis-run-retention.md`)
+  - launch-readiness package for Page DetailView SEO + Backlinks: expanded regression coverage for paid gating, SEO analysis payload contracts, JSON-LD state handling (ok/missing/malformed), backlink refresh/cache pipeline smoke paths, and additional DetailView integration flows; plus rollout/rollback/troubleshooting/checklist documentation (`docs/content/features/page-detailview-seo-backlinks-launch-readiness.md`)
   - periodic sitemap sync for "Your Pages" across sitemap-enabled projects with per-project locking, sitemap index traversal, stale URL marking, and configurable scheduler interval
   - manual per-project sitemap "Sync now" API trigger for support/debugging
 - Monitoring
