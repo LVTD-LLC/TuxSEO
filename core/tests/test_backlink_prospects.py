@@ -498,6 +498,69 @@ def test_discover_backlink_prospects_marks_low_confidence_vs_not_found(monkeypat
 
 
 @pytest.mark.django_db
+def test_discover_backlink_prospects_avoids_common_false_positive_contact_hints(
+    monkeypatch,
+    settings,
+):
+    settings.EXA_API_KEY = "test-key"
+
+    user = User.objects.create_user(
+        username="prospect-contact-false-positive-user",
+        email="prospect-contact-false-positive-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://tuxseo.com",
+        name="TuxSEO",
+        summary="seo platform for startups",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://tuxseo.com/blog/seo-content-strategy",
+        title="SEO Content Strategy",
+        summary="SEO content strategy for startup teams",
+        description="On-page and technical SEO strategy",
+        type_ai_guess="Blog post",
+    )
+
+    monkeypatch.setattr(
+        "core.backlink_prospects.requests.post",
+        lambda *_args, **_kwargs: _FakeResponse(
+            {
+                "results": [
+                    {
+                        "url": "https://example.net/seo-outreach-guide",
+                        "title": "SEO Outreach Guide",
+                        "highlights": ["technical seo outreach tactics"],
+                        "score": 0.9,
+                    }
+                ]
+            }
+        ),
+    )
+
+    html = """
+        <html>
+          <body>
+            <a href="/seo-outreach">SEO outreach playbook</a>
+            <a href="https://agency.example/powered-by">Powered by Agency</a>
+          </body>
+        </html>
+    """
+    monkeypatch.setattr(
+        "core.backlink_prospects.requests.get",
+        lambda *_args, **_kwargs: _FakeHtmlResponse(html),
+    )
+
+    candidates = discover_backlink_prospects(page, max_candidates=1)
+
+    methods_by_type = {method["type"]: method for method in candidates[0]["contact_methods"]}
+    assert methods_by_type["contact_page_url"]["status"] == "not_found"
+    assert methods_by_type["author_profile"]["status"] == "not_found"
+
+
+@pytest.mark.django_db
 def test_discover_backlink_prospects_is_safe_without_api_key(settings):
     settings.EXA_API_KEY = ""
 

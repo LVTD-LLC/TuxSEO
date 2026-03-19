@@ -267,6 +267,10 @@
                               <a href="{{ method.value }}" target="_blank" rel="noopener noreferrer" class="text-indigo-700 hover:text-indigo-800 underline break-all">
                                 {{ method.value }}
                               </a>
+                            {% elif method.type == "public_email" %}
+                              <a href="mailto:{{ method.value }}" class="text-indigo-700 hover:text-indigo-800 underline break-all">
+                                {{ method.value }}
+                              </a>
                             {% else %}
                               <span class="break-all">{{ method.value }}</span>
                             {% endif %}

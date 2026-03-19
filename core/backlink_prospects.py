@@ -1,4 +1,5 @@
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from html import unescape
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
@@ -157,6 +158,24 @@ _SOCIAL_SKIP_PATH_PREFIXES = (
     "hashtag",
     "status",
     "i/",
+)
+
+_CONTACT_HINT_PATTERNS = (
+    r"\bcontact\b",
+    r"\bget\s+in\s+touch\b",
+    r"\breach\s+out\b",
+    r"\breach\s+us\b",
+    r"\bsupport\b",
+)
+_LOW_CONTACT_HINT_PATTERNS = (
+    r"\babout\b",
+    r"\bteam\b",
+    r"\bcompany\b",
+)
+_AUTHOR_HINT_PATTERNS = (
+    r"\bauthor\b",
+    r"\bprofile\b",
+    r"\babout\s+the\s+author\b",
 )
 
 
@@ -452,6 +471,21 @@ def _normalize_social_profile_url(url: str, *, kind: str) -> str:
     return ""
 
 
+def _matches_any_pattern(value: str, patterns: tuple[str, ...]) -> bool:
+    return any(re.search(pattern, value) for pattern in patterns)
+
+
+def _is_author_profile_signal(*, absolute_url: str, label_lower: str) -> bool:
+    parsed = urlparse(absolute_url)
+    path_lower = (parsed.path or "").lower()
+
+    if any(token in path_lower for token in ("/author", "/authors", "/profile", "/profiles")):
+        return True
+
+    combined = f"{absolute_url} {label_lower}"
+    return _matches_any_pattern(combined, _AUTHOR_HINT_PATTERNS)
+
+
 def _extract_public_contact_methods(*, candidate_url: str, html: str) -> tuple[list[dict], list[dict]]:
     """Extract outreach contact signals from public HTML only.
 
@@ -470,9 +504,6 @@ def _extract_public_contact_methods(*, candidate_url: str, html: str) -> tuple[l
     }
     anchors = _extract_anchor_hrefs(html)
     raw_text = _normalize_phrase(unescape(re.sub(r"<[^>]+>", " ", html or "")))
-
-    contact_hints = ("contact", "get in touch", "reach", "talk to", "support")
-    low_contact_hints = ("about", "team", "company")
 
     for href, anchor_text in anchors:
         href_lower = href.lower().strip()
@@ -494,8 +525,11 @@ def _extract_public_contact_methods(*, candidate_url: str, html: str) -> tuple[l
                 )
 
         if absolute_url:
-            if methods_by_type["contact_page_url"]["status"] != "found" and any(
-                hint in f"{absolute_url} {label_lower}" for hint in contact_hints
+            contact_signal_text = f"{absolute_url} {label_lower}"
+
+            if methods_by_type["contact_page_url"]["status"] != "found" and _matches_any_pattern(
+                contact_signal_text,
+                _CONTACT_HINT_PATTERNS,
             ):
                 _set_contact_method(
                     methods_by_type,
@@ -508,8 +542,9 @@ def _extract_public_contact_methods(*, candidate_url: str, html: str) -> tuple[l
                     source_url=candidate_url,
                 )
 
-            if methods_by_type["contact_page_url"]["status"] == "not_found" and any(
-                hint in f"{absolute_url} {label_lower}" for hint in low_contact_hints
+            if methods_by_type["contact_page_url"]["status"] == "not_found" and _matches_any_pattern(
+                contact_signal_text,
+                _LOW_CONTACT_HINT_PATTERNS,
             ):
                 _set_contact_method(
                     methods_by_type,
@@ -550,9 +585,10 @@ def _extract_public_contact_methods(*, candidate_url: str, html: str) -> tuple[l
                     source_url=candidate_url,
                 )
 
-            author_signal = f"{absolute_url} {label_lower}"
-            has_author_hint = any(token in author_signal for token in ("author", "profile", "about the author", "by "))
-            if has_author_hint and methods_by_type["author_profile"]["status"] != "found":
+            if _is_author_profile_signal(
+                absolute_url=absolute_url,
+                label_lower=label_lower,
+            ) and methods_by_type["author_profile"]["status"] != "found":
                 _set_contact_method(
                     methods_by_type,
                     method_type="author_profile",
@@ -970,11 +1006,15 @@ def discover_backlink_prospects(
         candidates.sort(key=lambda candidate: candidate.get("relevance_score", 0.0), reverse=True)
 
         selected = candidates[:max_candidates]
-        for candidate in selected:
-            contact_methods, actionable_paths = _enrich_candidate_contacts(candidate)
-            candidate["contact_methods"] = contact_methods
-            candidate["actionable_outreach_paths"] = actionable_paths
-            candidate["actionable_outreach_count"] = len(actionable_paths)
+        if selected:
+            max_workers = max(1, min(4, len(selected)))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                enrichment_results = list(executor.map(_enrich_candidate_contacts, selected))
+
+            for candidate, (contact_methods, actionable_paths) in zip(selected, enrichment_results):
+                candidate["contact_methods"] = contact_methods
+                candidate["actionable_outreach_paths"] = actionable_paths
+                candidate["actionable_outreach_count"] = len(actionable_paths)
 
         return selected
 
