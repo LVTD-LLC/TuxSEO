@@ -52,6 +52,11 @@ urlpatterns = [
         name="project_custom_post_type_posts",
     ),
     path(
+        "project/<int:pk>/posts/custom/<int:post_type_pk>/edit/",
+        views.ProjectCustomPostTypeEditView.as_view(),
+        name="project_custom_post_type_edit",
+    ),
+    path(
         "project/<int:pk>/posts/custom/<int:post_type_pk>/update/",
         views.ProjectCustomPostTypeUpdateView.as_view(),
         name="project_custom_post_type_update",

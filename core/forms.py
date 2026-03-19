@@ -3,6 +3,7 @@ import uuid
 import requests
 from allauth.account.forms import LoginForm, SignupForm
 from django import forms
+from django.db import transaction
 
 from core.abuse_prevention import (
     get_request_ip_address,
@@ -346,6 +347,7 @@ class ProjectCustomPostTypeForm(forms.ModelForm):
             }
         ),
     )
+    remove_logo = forms.BooleanField(required=False)
 
     class Meta:
         model = ProjectCustomPostType
@@ -379,6 +381,11 @@ class ProjectCustomPostTypeForm(forms.ModelForm):
         if not logo:
             return logo
 
+        # Existing persisted files (when editing without uploading a new file)
+        # should pass through untouched.
+        if not hasattr(logo, "content_type"):
+            return logo
+
         content_type = getattr(logo, "content_type", "")
         if content_type not in ProjectCustomPostType.logo_allowed_content_types:
             raise forms.ValidationError(
@@ -389,4 +396,25 @@ class ProjectCustomPostTypeForm(forms.ModelForm):
             raise forms.ValidationError("Logo must be 2MB or smaller.")
 
         return logo
+
+    def clean(self):
+        cleaned_data = super().clean()
+        has_new_logo_upload = bool(self.files.get("logo"))
+        if cleaned_data.get("remove_logo") and has_new_logo_upload:
+            self.add_error("remove_logo", "Choose either remove logo or upload a new logo, not both.")
+        return cleaned_data
+
+    def save(self, commit=True):
+        instance = super().save(commit=False)
+
+        old_logo = None
+        if self.cleaned_data.get("remove_logo") and instance.logo:
+            old_logo = instance.logo
+            instance.logo = None
+
+        if commit:
+            instance.save()
+            if old_logo:
+                transaction.on_commit(lambda: old_logo.delete(save=False))
+        return instance
 

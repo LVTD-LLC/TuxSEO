@@ -1544,6 +1544,65 @@ class ProjectCustomPostTypesView(LoginRequiredMixin, DetailView):
         return self.render_to_response(context)
 
 
+class ProjectCustomPostTypeEditView(LoginRequiredMixin, TemplateView):
+    template_name = "project/project_custom_post_type_edit.html"
+
+    def get_project(self):
+        if not hasattr(self, "_project"):
+            self._project = get_object_or_404(
+                Project,
+                pk=self.kwargs["pk"],
+                profile=self.request.user.profile,
+            )
+        return self._project
+
+    def get_custom_post_type(self):
+        if not hasattr(self, "_custom_post_type"):
+            self._custom_post_type = get_object_or_404(
+                ProjectCustomPostType,
+                pk=self.kwargs["post_type_pk"],
+                project=self.get_project(),
+            )
+        return self._custom_post_type
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        custom_post_type = self.get_custom_post_type()
+        context["project"] = self.get_project()
+        context["custom_post_type"] = custom_post_type
+        context["form"] = kwargs.get("form") or ProjectCustomPostTypeForm(instance=custom_post_type)
+        return context
+
+    def get(self, request, *args, **kwargs):
+        return self.render_to_response(self.get_context_data())
+
+    def post(self, request, *args, **kwargs):
+        form = ProjectCustomPostTypeForm(
+            request.POST,
+            request.FILES,
+            instance=self.get_custom_post_type(),
+        )
+        if form.is_valid():
+            try:
+                updated_custom_post_type = form.save()
+            except ValidationError as error:
+                for field, messages_list in error.message_dict.items():
+                    target_field = field if field in form.fields else None
+                    for message in messages_list:
+                        form.add_error(target_field, message)
+                messages.error(request, "Could not update custom post type. Please check the form.")
+                return self.render_to_response(self.get_context_data(form=form))
+
+            messages.success(
+                request,
+                f"Updated custom post type '{updated_custom_post_type.name}'.",
+            )
+            return redirect("project_custom_post_types", pk=self.get_project().pk)
+
+        messages.error(request, "Could not update custom post type. Please check the form.")
+        return self.render_to_response(self.get_context_data(form=form))
+
+
 class ProjectCustomPostTypeUpdateView(LoginRequiredMixin, View):
     def post(self, request, pk, post_type_pk):
         project = get_object_or_404(Project, pk=pk, profile=request.user.profile)
