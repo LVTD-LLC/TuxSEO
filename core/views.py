@@ -1520,7 +1520,7 @@ class ProjectCustomPostTypesView(LoginRequiredMixin, DetailView):
 
     def post(self, request, *args, **kwargs):
         self.object = self.get_object()
-        create_form = ProjectCustomPostTypeForm(request.POST)
+        create_form = ProjectCustomPostTypeForm(request.POST, request.FILES)
 
         if create_form.is_valid():
             custom_post_type = create_form.save(commit=False)
@@ -1549,7 +1549,7 @@ class ProjectCustomPostTypeUpdateView(LoginRequiredMixin, View):
         project = get_object_or_404(Project, pk=pk, profile=request.user.profile)
         custom_post_type = get_object_or_404(ProjectCustomPostType, pk=post_type_pk, project=project)
 
-        form = ProjectCustomPostTypeForm(request.POST, instance=custom_post_type)
+        form = ProjectCustomPostTypeForm(request.POST, request.FILES, instance=custom_post_type)
         if form.is_valid():
             try:
                 form.save()

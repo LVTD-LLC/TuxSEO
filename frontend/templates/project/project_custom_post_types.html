@@ -11,7 +11,7 @@
     <h2 class="text-xl font-semibold text-gray-900">Create custom post type</h2>
     <p class="mt-2 text-sm text-gray-600">Define a reusable post style with prompt guidance used during idea generation.</p>
 
-    <form method="post" class="mt-6 space-y-4">
+    <form method="post" enctype="multipart/form-data" class="mt-6 space-y-4">
       {% csrf_token %}
       <div>
         <label class="block mb-1 text-sm font-medium text-gray-700" for="id_name">Name</label>
@@ -22,6 +22,12 @@
         <label class="block mb-1 text-sm font-medium text-gray-700" for="id_prompt_guidance">Prompt guidance</label>
         {{ create_form.prompt_guidance }}
         {% for error in create_form.prompt_guidance.errors %}<p class="mt-1 text-sm text-red-600">{{ error }}</p>{% endfor %}
+      </div>
+      <div>
+        <label class="block mb-1 text-sm font-medium text-gray-700" for="id_logo">Logo (optional)</label>
+        {{ create_form.logo }}
+        <p class="mt-1 text-xs text-gray-500">Accepted: PNG, JPG, WEBP, GIF · max 2MB.</p>
+        {% for error in create_form.logo.errors %}<p class="mt-1 text-sm text-red-600">{{ error }}</p>{% endfor %}
       </div>
       {% for error in create_form.non_field_errors %}<p class="mt-1 text-sm text-red-600">{{ error }}</p>{% endfor %}
       <button type="submit" class="inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-gray-900 rounded-md border border-gray-900 hover:bg-gray-800">Create post type</button>
@@ -34,8 +40,20 @@
       <div class="mt-4 space-y-6">
         {% for post_type in custom_post_types %}
           <article class="p-4 rounded-md border border-gray-200">
-            <form method="post" action="{% url 'project_custom_post_type_update' project.id post_type.id %}" class="space-y-3">
+            <form method="post" enctype="multipart/form-data" action="{% url 'project_custom_post_type_update' project.id post_type.id %}" class="space-y-3">
               {% csrf_token %}
+              <div class="flex gap-3 items-center">
+                {% if post_type.logo %}
+                  <img src="{{ post_type.logo.url }}" alt="{{ post_type.name }} logo" class="object-cover w-8 h-8 rounded" />
+                {% else %}
+                  <div class="flex justify-center items-center w-8 h-8 text-gray-500 bg-gray-100 rounded">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v12m6-6H6" />
+                    </svg>
+                  </div>
+                {% endif %}
+                <p class="text-sm font-medium text-gray-700">{{ post_type.name }}</p>
+              </div>
               <div>
                 <label class="block mb-1 text-sm font-medium text-gray-700">Name</label>
                 <input type="text" name="name" value="{{ post_type.name }}" maxlength="80" required class="block px-3 py-2 w-full text-sm text-gray-900 bg-white rounded-md border border-gray-300 focus:ring-gray-500 focus:border-gray-500" />
@@ -43,6 +61,11 @@
               <div>
                 <label class="block mb-1 text-sm font-medium text-gray-700">Prompt guidance</label>
                 <textarea name="prompt_guidance" rows="4" maxlength="1200" required class="block px-3 py-2 w-full text-sm text-gray-900 bg-white rounded-md border border-gray-300 focus:ring-gray-500 focus:border-gray-500">{{ post_type.prompt_guidance }}</textarea>
+              </div>
+              <div>
+                <label class="block mb-1 text-sm font-medium text-gray-700">Logo (optional)</label>
+                <input type="file" name="logo" accept="image/png,image/jpeg,image/webp,image/gif" class="block w-full text-sm text-gray-900 rounded-md border border-gray-300 cursor-pointer bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:border-gray-500" />
+                <p class="mt-1 text-xs text-gray-500">Accepted: PNG, JPG, WEBP, GIF · max 2MB.</p>
               </div>
               <div class="flex gap-3 items-center">
                 <button type="submit" class="inline-flex items-center px-3 py-2 text-sm font-medium text-gray-700 bg-white rounded-md border border-gray-300 hover:bg-gray-50">Save</button>

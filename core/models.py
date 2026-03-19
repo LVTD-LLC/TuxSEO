@@ -10,7 +10,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
-from django.core.validators import MaxLengthValidator
+from django.core.validators import FileExtensionValidator, MaxLengthValidator
 from django.db import models, transaction
 from django.urls import reverse
 from django.utils import timezone
@@ -769,6 +769,9 @@ class Project(BaseModel):
 
 
 class ProjectCustomPostType(BaseModel):
+    logo_max_file_size_bytes = 2 * 1024 * 1024
+    logo_allowed_content_types = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+
     project = models.ForeignKey(
         Project,
         on_delete=models.CASCADE,
@@ -777,6 +780,11 @@ class ProjectCustomPostType(BaseModel):
     name = models.CharField(max_length=80)
     normalized_name = models.CharField(max_length=80, editable=False)
     prompt_guidance = models.TextField(validators=[MaxLengthValidator(1200)])
+    logo = models.ImageField(
+        upload_to="custom_post_type_logos/",
+        blank=True,
+        validators=[FileExtensionValidator(allowed_extensions=["png", "jpg", "jpeg", "webp", "gif"])],
+    )
 
     class Meta:
         ordering = ["name"]
@@ -817,6 +825,13 @@ class ProjectCustomPostType(BaseModel):
             raise ValidationError({"prompt_guidance": "Prompt guidance must be 1200 characters or less."})
 
         self.prompt_guidance = prompt_guidance
+
+        if self.logo:
+            logo_file_size = getattr(self.logo, "size", 0) or 0
+            if logo_file_size > self.logo_max_file_size_bytes:
+                raise ValidationError({
+                    "logo": "Logo must be 2MB or smaller.",
+                })
 
     def save(self, *args, **kwargs):
         self.full_clean()
