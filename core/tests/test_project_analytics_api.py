@@ -193,3 +193,103 @@ def test_project_analytics_aggregation_does_not_mix_non_gsc_clicks(client):
     payload = response.json()
     assert payload["overview"]["clicks"] == 0
     assert payload["overview"]["impressions"] == 0
+
+
+@pytest.mark.django_db
+def test_project_analytics_aggregation_includes_daily_trend_and_page_breakdown(client):
+    user, project = _create_user_with_project("analytics-api-trend")
+    client.force_login(user)
+
+    today = timezone.now().date()
+
+    AnalyticsFactDaily.objects.create(
+        project=project,
+        provider=AnalyticsFactDaily.Provider.GA4,
+        metric_date=today,
+        dimension_scope=AnalyticsFactDaily.DimensionScope.SITE,
+        dimension_fingerprint="ga4-site-trend",
+        sessions=20,
+        conversions=2,
+    )
+    AnalyticsFactDaily.objects.create(
+        project=project,
+        provider=AnalyticsFactDaily.Provider.PLAUSIBLE,
+        metric_date=today,
+        dimension_scope=AnalyticsFactDaily.DimensionScope.SITE,
+        dimension_fingerprint="plausible-site-trend",
+        sessions=999,
+        conversions=999,
+    )
+    AnalyticsFactDaily.objects.create(
+        project=project,
+        provider=AnalyticsFactDaily.Provider.GSC,
+        metric_date=today,
+        dimension_scope=AnalyticsFactDaily.DimensionScope.SITE,
+        dimension_fingerprint="gsc-site-trend",
+        clicks=40,
+        impressions=400,
+    )
+    AnalyticsFactDaily.objects.create(
+        project=project,
+        provider=AnalyticsFactDaily.Provider.GSC,
+        metric_date=today,
+        dimension_scope=AnalyticsFactDaily.DimensionScope.PAGE_QUERY,
+        dimension_fingerprint="gsc-page-a",
+        page_url="https://analytics-api-trend.example.com/pricing",
+        clicks=8,
+        impressions=200,
+    )
+
+    response = client.get(f"/api/projects/{project.id}/analytics/aggregation")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["daily_trend"]
+    latest = payload["daily_trend"][-1]
+    assert latest["date"] == today.isoformat()
+    assert latest["clicks"] == 40
+    assert latest["sessions"] == 20
+    assert latest["conversions"] == 2.0
+
+    assert payload["page_breakdown"]
+    assert payload["page_breakdown"][0]["page_url"] == "https://analytics-api-trend.example.com/pricing"
+    assert payload["page_breakdown"][0]["ctr_pct"] == 4.0
+
+
+@pytest.mark.django_db
+def test_project_analytics_aggregation_prefers_page_scope_for_page_breakdown(client):
+    user, project = _create_user_with_project("analytics-api-page-scope")
+    client.force_login(user)
+
+    today = timezone.now().date()
+    page_url = "https://analytics-api-page-scope.example.com/pricing"
+
+    AnalyticsFactDaily.objects.create(
+        project=project,
+        provider=AnalyticsFactDaily.Provider.GSC,
+        metric_date=today,
+        dimension_scope=AnalyticsFactDaily.DimensionScope.PAGE,
+        dimension_fingerprint="page-scope-row",
+        page_url=page_url,
+        clicks=5,
+        impressions=100,
+    )
+    AnalyticsFactDaily.objects.create(
+        project=project,
+        provider=AnalyticsFactDaily.Provider.GSC,
+        metric_date=today,
+        dimension_scope=AnalyticsFactDaily.DimensionScope.PAGE_QUERY,
+        dimension_fingerprint="page-query-row",
+        page_url=page_url,
+        clicks=50,
+        impressions=1000,
+    )
+
+    response = client.get(f"/api/projects/{project.id}/analytics/aggregation")
+
+    assert response.status_code == 200
+    payload = response.json()
+    row = payload["page_breakdown"][0]
+    assert row["page_url"] == page_url
+    assert row["clicks"] == 5
+    assert row["impressions"] == 100

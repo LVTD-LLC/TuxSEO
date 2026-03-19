@@ -386,6 +386,20 @@ class AnalyticsSourceHealthOut(Schema):
     last_error: str = ""
 
 
+class AnalyticsDailyTrendPointOut(Schema):
+    date: str
+    clicks: int = 0
+    sessions: int = 0
+    conversions: float = 0.0
+
+
+class AnalyticsPageBreakdownOut(Schema):
+    page_url: str
+    clicks: int = 0
+    impressions: int = 0
+    ctr_pct: float = 0.0
+
+
 class AnalyticsOverviewOut(Schema):
     clicks: int = 0
     impressions: int = 0
@@ -403,6 +417,8 @@ class AnalyticsAggregationOut(Schema):
     overview: AnalyticsOverviewOut
     source_breakdown: list[AnalyticsSourceBreakdownOut] = []
     source_health: list[AnalyticsSourceHealthOut] = []
+    daily_trend: list[AnalyticsDailyTrendPointOut] = []
+    page_breakdown: list[AnalyticsPageBreakdownOut] = []
     cached: bool = False
     cache_key: str = ""
     message: str = ""

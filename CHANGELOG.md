@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Project Home "Analytics (GA4/GSC/Plausible)" UI section with provider connection badges, 30-day rollups, derived rates, 7-day trend deltas, and top low-CTR/high-impression SEO opportunities
   - new per-project Analytics page foundation (`/project/<pk>/analytics/`) with project-scoped access control, navigation wiring, integration-aware empty states/CTA, and section shells for Overview KPIs, Traffic/Engagement, Conversions/Revenue, and Data source health/status
   - project analytics aggregation API contract (`GET /api/projects/{project_id}/analytics/aggregation`) with validated date-range controls, normalized overview/source/source-health response blocks, cursor-aware partial-source health metadata, and short-lived cache hydration
+  - v1 detailed analytics experience on the dedicated Analytics page: date-range presets/custom picker with refresh, API-driven KPI cards, source health badges (connected/stale/missing), sessions trend bars, provider breakdown table, and top-page breakdown table
+  - project analytics aggregation API now includes `daily_trend` and `page_breakdown` blocks for UI chart/table rendering on date-range changes
+  - Project Home analytics simplified to summary-only snippets + clear "View detailed analytics" CTA to avoid duplicate dense analytics blocks
 - Pages
   - added changelog page
   - features to the pro plan on pricing page
