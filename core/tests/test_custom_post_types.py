@@ -426,3 +426,83 @@ def test_create_custom_post_type_rejects_oversized_logo(client):
 
     assert response.status_code == 200
     assert "Logo must be 2MB or smaller" in response.content.decode("utf-8")
+
+
+@pytest.mark.django_db
+def test_delete_custom_post_type_requires_confirmation(client):
+    user = User.objects.create_user("owner-delete-confirm", "owner-delete-confirm@example.com", "secret")
+    project = Project.objects.create(profile=user.profile, name="Site", url="https://site.test")
+    post_type = ProjectCustomPostType.objects.create(
+        project=project,
+        name="Roundup",
+        prompt_guidance="Summarize weekly updates.",
+    )
+
+    client.force_login(user)
+    response = client.post(
+        reverse("project_custom_post_type_delete", kwargs={"pk": project.id, "post_type_pk": post_type.id}),
+        {},
+        follow=True,
+    )
+
+    assert response.status_code == 200
+    assert ProjectCustomPostType.objects.filter(id=post_type.id).exists()
+    assert "Delete not confirmed" in response.content.decode("utf-8")
+
+
+@pytest.mark.django_db
+def test_delete_custom_post_type_blocks_when_in_active_use(client):
+    user = User.objects.create_user("owner-delete-block", "owner-delete-block@example.com", "secret")
+    project = Project.objects.create(profile=user.profile, name="Site", url="https://site.test")
+    post_type = ProjectCustomPostType.objects.create(
+        project=project,
+        name="Case Study",
+        prompt_guidance="Lead with outcomes.",
+    )
+    BlogPostTitleSuggestion.objects.create(
+        project=project,
+        custom_post_type=post_type,
+        title="How we improved conversions",
+        description="desc",
+        category="General Audience",
+        content_type=ContentType.SHARING,
+        archived=False,
+    )
+
+    client.force_login(user)
+    response = client.post(
+        reverse("project_custom_post_type_delete", kwargs={"pk": project.id, "post_type_pk": post_type.id}),
+        {"confirm_delete": "yes"},
+        follow=True,
+    )
+
+    assert response.status_code == 200
+    assert ProjectCustomPostType.objects.filter(id=post_type.id).exists()
+    page = response.content.decode("utf-8")
+    assert "Cannot delete" in page
+    assert "active idea(s)" in page
+
+
+@pytest.mark.django_db
+def test_delete_custom_post_type_removes_it_from_custom_post_type_lists(client):
+    user = User.objects.create_user("owner-delete-success", "owner-delete-success@example.com", "secret")
+    project = Project.objects.create(profile=user.profile, name="Site", url="https://site.test")
+    post_type = ProjectCustomPostType.objects.create(
+        project=project,
+        name="Checklist",
+        prompt_guidance="Use concise checklists.",
+    )
+
+    client.force_login(user)
+    response = client.post(
+        reverse("project_custom_post_type_delete", kwargs={"pk": project.id, "post_type_pk": post_type.id}),
+        {"confirm_delete": "yes"},
+        follow=True,
+    )
+
+    assert response.status_code == 200
+    assert not ProjectCustomPostType.objects.filter(id=post_type.id).exists()
+    assert (
+        reverse("project_custom_post_type_posts", kwargs={"pk": project.id, "post_type_pk": post_type.id})
+        not in response.content.decode("utf-8")
+    )

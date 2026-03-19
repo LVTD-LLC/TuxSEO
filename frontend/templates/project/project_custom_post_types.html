@@ -34,7 +34,7 @@
     </form>
   </section>
 
-  <section class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm">
+  <section class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm" data-controller="custom-post-type-delete-modal">
     <h3 class="text-lg font-semibold text-gray-900">Existing custom post types</h3>
     {% if custom_post_types %}
       <div class="mt-4 space-y-6">
@@ -59,10 +59,45 @@
               <a href="{% url 'project_custom_post_type_edit' project.id post_type.id %}" class="inline-flex items-center px-3 py-2 text-sm font-medium text-gray-700 bg-white rounded-md border border-gray-300 hover:bg-gray-50">Edit</a>
               <a href="{% url 'project_custom_post_type_posts' project.id post_type.id %}" class="inline-flex items-center px-3 py-2 text-sm font-medium text-gray-700 bg-white rounded-md border border-gray-300 hover:bg-gray-50">Open</a>
             </div>
-            <form method="post" action="{% url 'project_custom_post_type_delete' project.id post_type.id %}" class="mt-3" onsubmit="return confirm('Delete this custom post type? Existing generated ideas stay but type will be removed.');">
-              {% csrf_token %}
-              <button type="submit" class="text-sm font-medium text-red-600 hover:text-red-700">Delete</button>
-            </form>
+            <div class="mt-3">
+              <button
+                type="button"
+                class="text-sm font-medium text-red-600 hover:text-red-700"
+                data-action="click->custom-post-type-delete-modal#open"
+                data-delete-modal-id="delete-post-type-modal-{{ post_type.id }}"
+              >
+                Delete
+              </button>
+            </div>
+
+            <dialog id="delete-post-type-modal-{{ post_type.id }}" class="p-0 w-full max-w-md rounded-lg border border-gray-200 shadow-xl backdrop:bg-black/50" data-action="click->custom-post-type-delete-modal#closeOnBackdrop">
+              <div class="p-6 space-y-4">
+                <div>
+                  <h4 class="text-lg font-semibold text-gray-900">Delete "{{ post_type.name }}"?</h4>
+                  <p class="mt-2 text-sm text-gray-600">
+                    This action cannot be undone. Deletion is blocked if this type is still used by active ideas.
+                  </p>
+                </div>
+
+                <form method="post" action="{% url 'project_custom_post_type_delete' project.id post_type.id %}" class="space-y-4">
+                  {% csrf_token %}
+                  <input type="hidden" name="confirm_delete" value="yes" />
+                  <label class="flex gap-2 items-start text-sm text-gray-700">
+                    <input type="checkbox" required class="mt-0.5 rounded border-gray-300" />
+                    <span>I understand this will permanently delete this custom post type if it is safe to do so.</span>
+                  </label>
+
+                  <div class="flex gap-3 justify-end items-center">
+                    <button type="button" class="inline-flex items-center px-3 py-2 text-sm font-medium text-gray-700 bg-white rounded-md border border-gray-300 hover:bg-gray-50" data-action="click->custom-post-type-delete-modal#close">
+                      Cancel
+                    </button>
+                    <button type="submit" class="inline-flex items-center px-3 py-2 text-sm font-medium text-white bg-red-600 rounded-md border border-red-600 hover:bg-red-700">
+                      Delete post type
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </dialog>
           </article>
         {% endfor %}
       </div>

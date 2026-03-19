@@ -1639,6 +1639,22 @@ class ProjectCustomPostTypeDeleteView(LoginRequiredMixin, View):
     def post(self, request, pk, post_type_pk):
         project = get_object_or_404(Project, pk=pk, profile=request.user.profile)
         custom_post_type = get_object_or_404(ProjectCustomPostType, pk=post_type_pk, project=project)
+
+        if request.POST.get("confirm_delete") != "yes":
+            messages.error(request, "Delete not confirmed. Custom post type was not deleted.")
+            return redirect("project_custom_post_types", pk=project.pk)
+
+        active_dependency_count = custom_post_type.title_suggestions.filter(archived=False).count()
+        if active_dependency_count > 0:
+            messages.error(
+                request,
+                (
+                    f"Cannot delete '{custom_post_type.name}' because it is used by "
+                    f"{active_dependency_count} active idea(s). Archive those ideas first, then retry."
+                ),
+            )
+            return redirect("project_custom_post_types", pk=project.pk)
+
         deleted_name = custom_post_type.name
         custom_post_type.delete()
         messages.success(request, f"Deleted custom post type '{deleted_name}'.")

@@ -57,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - custom post-type guidance now also propagates into full article generation, with regression coverage for both title and content generation paths
   - custom post type create/edit flow now supports optional logo uploads (PNG/JPG/WEBP/GIF up to 2MB), persists logos on the type record, renders logos across post-type UI surfaces, and falls back to default icons when no logo is set
   - dedicated custom post type edit page with validated updates for name/prompt/logo, explicit logo removal, and regression coverage for edit persistence + validation failures
+  - safe custom post type deletion flow with explicit confirmation modal, backend dependency guardrails that block deletion while active ideas still reference the type, and regression tests for confirmed-delete + blocked-delete paths
 - Emails
   - Feedback email (for profiles with one product)
   - create project reminder for signed up users without project
