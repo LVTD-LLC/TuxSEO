@@ -1,3 +1,4 @@
+import random
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -63,6 +64,10 @@ _DEFAULT_SCORING_CONFIG = {
     "REFRESH_LOCK_TTL_SECONDS": 5 * 60,
     "ENRICH_FETCH_TIMEOUT_SECONDS": 5,
     "ENRICH_TOTAL_BUDGET_SECONDS": 20,
+    "EXA_REQUEST_TIMEOUT_SECONDS": 20,
+    "PROVIDER_MAX_RETRIES": 2,
+    "PROVIDER_RETRY_BACKOFF_SECONDS": 0.75,
+    "PROVIDER_RETRY_BACKOFF_MAX_SECONDS": 8,
     "SCORING_WEIGHTS": {
         "topic_match": 0.45,
         "content_type_fit": 0.2,
@@ -210,6 +215,24 @@ def get_backlink_prospects_cache_key(project_page_id: int) -> str:
 
 def get_backlink_prospects_refresh_lock_key(project_page_id: int) -> str:
     return f"project-page:{project_page_id}:backlink-prospects-refresh-lock-v1"
+
+
+def get_backlink_discovery_debug_cache_key(project_page_id: int) -> str:
+    return f"project-page:{project_page_id}:backlink-prospects-debug-v1"
+
+
+def set_backlink_discovery_debug_state(project_page_id: int, state: dict) -> None:
+    config = _get_scoring_config()
+    cache.set(
+        get_backlink_discovery_debug_cache_key(project_page_id),
+        state,
+        timeout=int(config["CACHE_TTL_SECONDS"]),
+    )
+
+
+def get_backlink_discovery_debug_state(project_page_id: int) -> dict:
+    payload = cache.get(get_backlink_discovery_debug_cache_key(project_page_id))
+    return payload if isinstance(payload, dict) else {}
 
 
 def get_cached_backlink_prospects(project_page_id: int) -> list[dict] | None:
@@ -937,26 +960,44 @@ def _score_candidate(*, topic: str, candidate: dict, project_page) -> dict:
 
 
 def _search_exa_for_topic(*, exa_api_key: str, topic: str, num_results: int = 6) -> list[dict]:
-    response = requests.post(
-        "https://api.exa.ai/search",
-        headers={
-            "x-api-key": exa_api_key,
-            "Content-Type": "application/json",
-        },
-        json={
-            "query": f"{topic} best practices guide",
-            "type": "auto",
-            "num_results": max(4, min(12, int(num_results or 6))),
-            "contents": {
-                "highlights": {
-                    "numSentences": 2,
-                }
-            },
-        },
-        timeout=20,
-    )
-    response.raise_for_status()
-    return response.json().get("results", [])
+    config = _get_scoring_config()
+    timeout_seconds = max(2, float(config.get("EXA_REQUEST_TIMEOUT_SECONDS", 20)))
+    max_retries = max(0, int(config.get("PROVIDER_MAX_RETRIES", 2)))
+    backoff_seconds = max(0.0, float(config.get("PROVIDER_RETRY_BACKOFF_SECONDS", 0.75)))
+    max_backoff_seconds = max(1.0, float(config.get("PROVIDER_RETRY_BACKOFF_MAX_SECONDS", 8.0)))
+
+    for attempt in range(max_retries + 1):
+        try:
+            response = requests.post(
+                "https://api.exa.ai/search",
+                headers={
+                    "x-api-key": exa_api_key,
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "query": f"{topic} best practices guide",
+                    "type": "auto",
+                    "num_results": max(4, min(12, int(num_results or 6))),
+                    "contents": {
+                        "highlights": {
+                            "numSentences": 2,
+                        }
+                    },
+                },
+                timeout=timeout_seconds,
+            )
+            response.raise_for_status()
+            return response.json().get("results", [])
+        except requests.RequestException:
+            if attempt >= max_retries:
+                raise
+
+            sleep_for = min(max_backoff_seconds, backoff_seconds * (2**attempt)) + random.uniform(
+                0.0, 0.25
+            )
+            time.sleep(sleep_for)
+
+    return []
 
 
 def discover_backlink_prospects(
@@ -968,11 +1009,27 @@ def discover_backlink_prospects(
     exa_api_key = (getattr(settings, "EXA_API_KEY", "") or "").strip()
 
     if not exa_api_key:
+        set_backlink_discovery_debug_state(
+            project_page.id,
+            {
+                "status": "skipped",
+                "reason": "missing_exa_api_key",
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
         return []
 
     project = project_page.project
     topics = extract_backlink_topics(project, project_page, max_topics=max_topics)
     if not topics:
+        set_backlink_discovery_debug_state(
+            project_page.id,
+            {
+                "status": "skipped",
+                "reason": "no_topics",
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
         return []
 
     project_domain = _registrable_domain(urlparse(getattr(project, "url", "")).hostname or "")
@@ -1038,7 +1095,10 @@ def discover_backlink_prospects(
         candidates.sort(key=lambda candidate: candidate.get("relevance_score", 0.0), reverse=True)
 
         selected = candidates[:max_candidates]
-        if selected:
+        contact_enrichment_enabled = bool(
+            getattr(settings, "DETAIL_VIEW_CONTACT_ENRICHMENT_ENABLED", True)
+        )
+        if selected and contact_enrichment_enabled:
             max_workers = max(1, min(4, len(selected)))
             total_budget_seconds = max(1.0, float(config.get("ENRICH_TOTAL_BUDGET_SECONDS", 20)))
             deadline_monotonic = time.monotonic() + total_budget_seconds
@@ -1062,14 +1122,42 @@ def discover_backlink_prospects(
                 candidate["actionable_outreach_paths"] = actionable_paths
                 candidate["actionable_outreach_count"] = len(actionable_paths)
 
+        set_backlink_discovery_debug_state(
+            project_page.id,
+            {
+                "status": "succeeded",
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+                "project_id": getattr(project, "id", None),
+                "project_page_id": getattr(project_page, "id", None),
+                "topics_count": len(topics),
+                "candidates_count": len(selected),
+                "contact_enrichment_enabled": contact_enrichment_enabled,
+            },
+        )
+
         return selected
 
     except requests.RequestException as error:
+        set_backlink_discovery_debug_state(
+            project_page.id,
+            {
+                "status": "failed",
+                "reason": "provider_request_exception",
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+                "project_id": getattr(project, "id", None),
+                "project_page_id": getattr(project_page, "id", None),
+                "error": str(error),
+                "error_type": error.__class__.__name__,
+            },
+        )
         logger.warning(
             "[BacklinkProspects] Exa lookup failed",
             error=str(error),
+            error_type=error.__class__.__name__,
             project_id=getattr(project, "id", None),
             project_page_id=getattr(project_page, "id", None),
+            max_candidates=max_candidates,
+            max_topics=max_topics,
             exc_info=True,
         )
         return []
@@ -1080,5 +1168,27 @@ def refresh_backlink_prospects_cache(project_page) -> list[dict]:
         candidates = discover_backlink_prospects(project_page)
         set_cached_backlink_prospects(project_page.id, candidates)
         return candidates
+    except Exception as error:
+        set_backlink_discovery_debug_state(
+            project_page.id,
+            {
+                "status": "failed",
+                "reason": "unexpected_exception",
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+                "project_id": getattr(project_page, "project_id", None),
+                "project_page_id": getattr(project_page, "id", None),
+                "error": str(error),
+                "error_type": error.__class__.__name__,
+            },
+        )
+        logger.warning(
+            "[BacklinkProspects] Unexpected exception while refreshing cache",
+            project_id=getattr(project_page, "project_id", None),
+            project_page_id=getattr(project_page, "id", None),
+            error=str(error),
+            error_type=error.__class__.__name__,
+            exc_info=True,
+        )
+        raise
     finally:
         cache.delete(get_backlink_prospects_refresh_lock_key(project_page.id))

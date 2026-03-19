@@ -31,6 +31,11 @@ from core.choices import (
     ProfileStates,
     ProjectPageSource,
 )
+from core.detail_view_controls import (
+    MODULE_BACKLINK_DISCOVERY,
+    MODULE_SEO_ANALYSIS,
+    is_module_enabled,
+)
 from core.execution_reliability import append_job_history, build_failure_payload
 from core.integration_analytics import sync_project_provider_analytics
 from core.models import (
@@ -331,7 +336,9 @@ def execute_project_page_analysis_run(run_id: int):
     from core.project_page_analysis_runs import execute_run
 
     try:
-        run = ProjectPageAnalysisRun.objects.select_related("project_page", "project").get(id=run_id)
+        run = ProjectPageAnalysisRun.objects.select_related(
+            "project_page", "project", "requested_by", "project__profile"
+        ).get(id=run_id)
     except ProjectPageAnalysisRun.DoesNotExist:
         logger.warning(
             "[Project Page Analysis Run] Run not found",
@@ -339,9 +346,43 @@ def execute_project_page_analysis_run(run_id: int):
         )
         return f"Run {run_id} not found"
 
-    execute_run(run=run)
+    if not is_module_enabled(MODULE_SEO_ANALYSIS):
+        run.status = ProjectPageAnalysisRun.Status.FAILED
+        run.finished_at = timezone.now()
+        run.failure_message = "SEO analysis module disabled by feature flag"
+        run.failure_details = {
+            "reason": "feature_flag_disabled",
+            "module": MODULE_SEO_ANALYSIS,
+        }
+        run.save(update_fields=["status", "finished_at", "failure_message", "failure_details", "updated_at"])
+    else:
+        execute_run(run=run)
 
     run.refresh_from_db()
+
+    analytics_profile = run.requested_by or run.project.profile
+    if analytics_profile:
+        event_name = (
+            ANALYTICS_EVENTS.SEO_ANALYSIS_RUN_COMPLETED
+            if run.status == ProjectPageAnalysisRun.Status.SUCCEEDED
+            else ANALYTICS_EVENTS.SEO_ANALYSIS_RUN_FAILED
+        )
+        track_event(
+            profile_id=analytics_profile.id,
+            event_name=event_name,
+            properties={
+                "project_id": run.project_id,
+                "project_page_id": run.project_page_id,
+                "run_id": run.id,
+                "trigger": run.trigger,
+                "result_status": "succeeded"
+                if run.status == ProjectPageAnalysisRun.Status.SUCCEEDED
+                else "failed",
+                "failure_reason": run.failure_message[:300] if run.failure_message else "",
+            },
+            source_function="execute_project_page_analysis_run",
+        )
+
     logger.info(
         "[Project Page Analysis Run] Completed run execution",
         run_id=run.id,
@@ -353,10 +394,16 @@ def execute_project_page_analysis_run(run_id: int):
 
 
 def refresh_backlink_prospects_cache(project_page_id: int):
-    from core.backlink_prospects import refresh_backlink_prospects_cache as refresh_cache
+    from core.backlink_prospects import (
+        get_backlink_discovery_debug_state,
+        refresh_backlink_prospects_cache as refresh_cache,
+        set_backlink_discovery_debug_state,
+    )
 
     try:
-        project_page = ProjectPage.objects.select_related("project").get(id=project_page_id)
+        project_page = ProjectPage.objects.select_related("project", "project__profile").get(
+            id=project_page_id
+        )
     except ProjectPage.DoesNotExist:
         logger.warning(
             "[BacklinkProspects] ProjectPage not found for cache refresh",
@@ -364,14 +411,79 @@ def refresh_backlink_prospects_cache(project_page_id: int):
         )
         return f"ProjectPage {project_page_id} not found"
 
-    candidates = refresh_cache(project_page)
-    logger.info(
-        "[BacklinkProspects] Cache refresh completed",
-        project_page_id=project_page_id,
-        project_id=project_page.project_id,
-        candidates_count=len(candidates),
-    )
-    return f"Cached {len(candidates)} backlink prospects for page {project_page_id}"
+    analytics_profile = project_page.project.profile
+
+    if not is_module_enabled(MODULE_BACKLINK_DISCOVERY):
+        set_backlink_discovery_debug_state(
+            project_page_id,
+            {
+                "status": "skipped",
+                "reason": "feature_flag_disabled",
+                "module": MODULE_BACKLINK_DISCOVERY,
+                "recorded_at": timezone.now().isoformat(),
+            },
+        )
+        track_event(
+            profile_id=analytics_profile.id,
+            event_name=ANALYTICS_EVENTS.BACKLINK_DISCOVERY_FAILED,
+            properties={
+                "project_id": project_page.project_id,
+                "project_page_id": project_page.id,
+                "result_status": "failed",
+                "failure_reason": "feature_flag_disabled",
+            },
+            source_function="refresh_backlink_prospects_cache",
+        )
+        return "Backlink discovery module disabled"
+
+    try:
+        candidates = refresh_cache(project_page)
+        debug_state = get_backlink_discovery_debug_state(project_page.id)
+        track_event(
+            profile_id=analytics_profile.id,
+            event_name=ANALYTICS_EVENTS.BACKLINK_DISCOVERY_COMPLETED,
+            properties={
+                "project_id": project_page.project_id,
+                "project_page_id": project_page.id,
+                "result_status": "succeeded",
+                "candidates_count": len(candidates),
+                "contact_enrichment_enabled": bool(
+                    debug_state.get("contact_enrichment_enabled", True)
+                ),
+            },
+            source_function="refresh_backlink_prospects_cache",
+        )
+        logger.info(
+            "[BacklinkProspects] Cache refresh completed",
+            project_page_id=project_page_id,
+            project_id=project_page.project_id,
+            candidates_count=len(candidates),
+        )
+        return f"Cached {len(candidates)} backlink prospects for page {project_page_id}"
+    except Exception as error:
+        debug_state = get_backlink_discovery_debug_state(project_page.id)
+        track_event(
+            profile_id=analytics_profile.id,
+            event_name=ANALYTICS_EVENTS.BACKLINK_DISCOVERY_FAILED,
+            properties={
+                "project_id": project_page.project_id,
+                "project_page_id": project_page.id,
+                "result_status": "failed",
+                "failure_reason": str(error)[:300],
+                "debug_reason": debug_state.get("reason", ""),
+            },
+            source_function="refresh_backlink_prospects_cache",
+        )
+        logger.warning(
+            "[BacklinkProspects] Cache refresh failed",
+            project_page_id=project_page.id,
+            project_id=project_page.project_id,
+            error=str(error),
+            error_type=error.__class__.__name__,
+            debug_state=debug_state,
+            exc_info=True,
+        )
+        return f"Backlink discovery failed for page {project_page_id}: {str(error)}"
 
 
 def schedule_project_page_analysis(project_id):
