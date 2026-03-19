@@ -292,13 +292,18 @@ def get_project_analytics_aggregation(
         )
         current_day += timedelta(days=1)
 
+    gsc_page_scope = AnalyticsFactDaily.DimensionScope.PAGE
+    if not facts_qs.filter(
+        provider=AnalyticsFactDaily.Provider.GSC,
+        dimension_scope=gsc_page_scope,
+        page_url__gt="",
+    ).exists():
+        gsc_page_scope = AnalyticsFactDaily.DimensionScope.PAGE_QUERY
+
     page_breakdown_qs = (
         facts_qs.filter(
             provider=AnalyticsFactDaily.Provider.GSC,
-            dimension_scope__in=[
-                AnalyticsFactDaily.DimensionScope.PAGE,
-                AnalyticsFactDaily.DimensionScope.PAGE_QUERY,
-            ],
+            dimension_scope=gsc_page_scope,
             page_url__gt="",
         )
         .values("page_url")

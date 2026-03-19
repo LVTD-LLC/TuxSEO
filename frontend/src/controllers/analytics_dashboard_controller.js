@@ -18,6 +18,12 @@ function shortDateLabel(dateString) {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+function toLocalIsoDate(date) {
+  const localDate = new Date(date);
+  localDate.setMinutes(localDate.getMinutes() - localDate.getTimezoneOffset());
+  return localDate.toISOString().slice(0, 10);
+}
+
 function escapeHtml(value) {
   return String(value || "")
     .replace(/&/g, "&amp;")
@@ -113,8 +119,9 @@ export default class extends Controller {
 
   render(payload) {
     const overview = payload.overview || {};
+    const dateRange = payload.date_range || {};
 
-    this.windowLabelTarget.textContent = `${payload.date_range.start_date} → ${payload.date_range.end_date} (${payload.date_range.days} days)`;
+    this.windowLabelTarget.textContent = `${dateRange.start_date || "—"} → ${dateRange.end_date || "—"} (${dateRange.days || 0} days)`;
 
     this.kpiClicksTarget.textContent = formatNumber(overview.clicks);
     this.kpiImpressionsTarget.textContent = formatNumber(overview.impressions);
@@ -145,7 +152,7 @@ export default class extends Controller {
         return `
           <li class="flex flex-wrap gap-2 justify-between items-center px-3 py-2 rounded-md border border-gray-200 bg-gray-50">
             <div>
-              <p class="text-sm font-medium text-gray-900">${source}</p>
+              <p class="text-sm font-medium text-gray-900">${escapeHtml(source)}</p>
               <p class="text-xs text-gray-500">${escapeHtml(detail)}</p>
             </div>
             <span class="inline-flex items-center px-2.5 py-1 text-xs font-semibold rounded-full ${badge.classes}">${badge.label}</span>
@@ -308,8 +315,8 @@ export default class extends Controller {
     const end = new Date();
     const start = new Date(end.getTime() - (numericDays - 1) * DAY);
     return {
-      start: start.toISOString().slice(0, 10),
-      end: end.toISOString().slice(0, 10),
+      start: toLocalIsoDate(start),
+      end: toLocalIsoDate(end),
     };
   }
 }
