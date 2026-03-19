@@ -98,7 +98,6 @@ _LOW_SIGNAL_PATH_PATTERNS = (
     "/categories/",
     "/author/",
     "/authors/",
-    "/search",
     "/login",
     "/signup",
     "/sign-up",
