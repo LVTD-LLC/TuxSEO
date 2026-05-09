@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- Account
+  - added `ALLOW_SIGNUPS` environment flag (default `true`) to pause new email/social registrations while keeping existing user logins available.
 - Analytics
   - implementation-ready integration analytics architecture spec covering GA4, GSC, and Plausible (`docs/integration-analytics-architecture-v1.md`)
   - analytics ingestion models: `AnalyticsSourceSnapshot`, `AnalyticsFactDaily`, and `AnalyticsSyncCursor`

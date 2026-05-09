@@ -26,7 +26,12 @@ from sentry_sdk.integrations.redis import RedisIntegration
 from structlog_sentry import SentryProcessor
 
 from tuxseo.logging_utils import scrubbing_callback
-from tuxseo.posthog_logs import PostHogLogsEmitter, PostHogLogsProcessor, ensure_exception_fields, redact_event
+from tuxseo.posthog_logs import (
+    PostHogLogsEmitter,
+    PostHogLogsProcessor,
+    ensure_exception_fields,
+    redact_event,
+)
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -289,6 +294,7 @@ ACCOUNT_SIGNUP_PASSWORD_ENTER_TWICE = False
 ACCOUNT_UNIQUE_EMAIL = True
 ACCOUNT_SESSION_REMEMBER = True
 ACCOUNT_CONFIRM_EMAIL_ON_GET = True
+ALLOW_SIGNUPS = env.bool("ALLOW_SIGNUPS", default=True)
 ACCOUNT_ADAPTER = "core.adapters.CustomAccountAdapter"
 ACCOUNT_FORMS = {
     "signup": "core.forms.CustomSignUpForm",
@@ -396,9 +402,7 @@ SITEMAP_SYNC_RETRY_BACKOFF_SECONDS = max(
 )
 SITEMAP_SYNC_MAX_INDEX_DEPTH = max(0, env.int("SITEMAP_SYNC_MAX_INDEX_DEPTH", default=2))
 SITEMAP_SYNC_MAX_CHILD_SITEMAPS = max(1, env.int("SITEMAP_SYNC_MAX_CHILD_SITEMAPS", default=50))
-SITEMAP_SYNC_LOCK_TTL_SECONDS = max(
-    60, env.int("SITEMAP_SYNC_LOCK_TTL_SECONDS", default=3600)
-)
+SITEMAP_SYNC_LOCK_TTL_SECONDS = max(60, env.int("SITEMAP_SYNC_LOCK_TTL_SECONDS", default=3600))
 
 
 def extract_from_record(logger, name, event_dict):

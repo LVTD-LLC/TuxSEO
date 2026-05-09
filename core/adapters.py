@@ -4,6 +4,7 @@ from urllib.parse import urlencode
 
 from allauth.account.adapter import DefaultAccountAdapter
 from allauth.socialaccount.adapter import DefaultSocialAccountAdapter
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 from django_q.tasks import async_task
@@ -38,6 +39,10 @@ class CustomAccountAdapter(DefaultAccountAdapter):
         """Ensure username exists even when signup form does not request it."""
         if not user.username:
             user.username = self._generate_unique_username_from_email(user.email)
+
+    def is_open_for_signup(self, request):
+        """Allow operators to pause new registrations without affecting existing users."""
+        return settings.ALLOW_SIGNUPS and super().is_open_for_signup(request)
 
     def send_confirmation_mail(self, request, emailconfirmation, signup):
         """
@@ -102,6 +107,10 @@ class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
     Custom adapter to automatically generate usernames from email addresses
     during social authentication signup, bypassing the username selection page.
     """
+
+    def is_open_for_signup(self, request, sociallogin):
+        """Mirror email signup gating for social-account auto-signups."""
+        return settings.ALLOW_SIGNUPS and super().is_open_for_signup(request, sociallogin)
 
     def populate_user(self, request, sociallogin, data):
         """
