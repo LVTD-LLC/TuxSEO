@@ -42,7 +42,7 @@ class CustomAccountAdapter(DefaultAccountAdapter):
 
     def is_open_for_signup(self, request):
         """Allow operators to pause new registrations without affecting existing users."""
-        return settings.ALLOW_SIGNUPS
+        return settings.ALLOW_SIGNUPS and super().is_open_for_signup(request)
 
     def send_confirmation_mail(self, request, emailconfirmation, signup):
         """
@@ -110,7 +110,7 @@ class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
 
     def is_open_for_signup(self, request, sociallogin):
         """Mirror email signup gating for social-account auto-signups."""
-        return settings.ALLOW_SIGNUPS
+        return settings.ALLOW_SIGNUPS and super().is_open_for_signup(request, sociallogin)
 
     def populate_user(self, request, sociallogin, data):
         """

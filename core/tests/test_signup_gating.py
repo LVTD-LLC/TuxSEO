@@ -19,6 +19,13 @@ def test_account_signup_adapter_can_close_new_signups():
     assert CustomAccountAdapter().is_open_for_signup(request) is False
 
 
+@override_settings(ALLOW_SIGNUPS=True)
+def test_social_signup_adapter_defaults_open_for_signups():
+    request = RequestFactory().get("/accounts/google/login/callback/")
+
+    assert CustomSocialAccountAdapter().is_open_for_signup(request, sociallogin=None) is True
+
+
 @override_settings(ALLOW_SIGNUPS=False)
 def test_social_signup_adapter_uses_same_signup_gate():
     request = RequestFactory().get("/accounts/google/login/callback/")
