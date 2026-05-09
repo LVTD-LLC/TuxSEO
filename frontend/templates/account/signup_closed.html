@@ -1,11 +1,11 @@
 {% extends "base_landing.html" %}
 
 {% block content %}
-<div class="flex justify-center items-center px-4 py-16 my-4 sm:px-6 lg:px-8">
-  <div class="space-y-6 w-full max-w-md text-center">
+<main class="flex justify-center items-center px-4 py-16 my-4 sm:px-6 lg:px-8">
+  <section class="space-y-6 w-full max-w-md text-center" aria-labelledby="signup-closed-heading">
     <div>
       <p class="text-sm font-semibold tracking-wide text-gray-500 uppercase">Signups paused</p>
-      <h1 class="mt-3 text-3xl font-extrabold text-gray-900">TuxSEO is not accepting new accounts right now.</h1>
+      <h1 id="signup-closed-heading" class="mt-3 text-3xl font-extrabold text-gray-900">TuxSEO is not accepting new accounts right now.</h1>
       <p class="mt-4 text-sm leading-6 text-gray-600">
         Existing users can continue using the product as usual. New account creation is paused for now.
       </p>
@@ -14,6 +14,6 @@
        class="inline-flex justify-center px-5 py-3 text-sm font-semibold text-white bg-gray-800 rounded-md hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500">
       Log in to your account
     </a>
-  </div>
-</div>
+  </section>
+</main>
 {% endblock content %}

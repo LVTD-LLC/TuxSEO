@@ -1,6 +1,20 @@
-from pathlib import Path
-
+from django.template.loader import render_to_string
 from django.test import RequestFactory, override_settings
+from django.urls import path
+from django.views.generic import TemplateView
+
+urlpatterns = [
+    path("", TemplateView.as_view(), name="landing"),
+    path("accounts/login/", TemplateView.as_view(), name="account_login"),
+    path("accounts/signup/", TemplateView.as_view(), name="account_signup"),
+    path("app/", TemplateView.as_view(), name="home"),
+    path("blog/", TemplateView.as_view(), name="blog_posts"),
+    path("changelog/", TemplateView.as_view(), name="changelog"),
+    path("docs/<slug:category>/<slug:page>/", TemplateView.as_view(), name="docs_page"),
+    path("pricing/", TemplateView.as_view(), name="pricing"),
+    path("privacy/", TemplateView.as_view(), name="privacy_policy"),
+    path("terms/", TemplateView.as_view(), name="terms_of_service"),
+]
 
 from core.adapters import CustomAccountAdapter, CustomSocialAccountAdapter
 
@@ -33,15 +47,12 @@ def test_social_signup_adapter_uses_same_signup_gate():
     assert CustomSocialAccountAdapter().is_open_for_signup(request, sociallogin=None) is False
 
 
+@override_settings(ROOT_URLCONF=__name__)
 def test_signup_closed_template_tells_existing_users_to_log_in():
-    template_path = (
-        Path(__file__).resolve().parents[2] / "frontend/templates/account/signup_closed.html"
-    )
-
-    content = template_path.read_text(encoding="utf-8")
+    content = render_to_string("account/signup_closed.html")
 
     assert "Signups paused" in content
     assert "Existing users can continue using the product as usual" in content
-    assert "account_login" in content
+    assert 'href="/accounts/login/"' in content
     assert 'name="email"' not in content
     assert 'name="password1"' not in content
