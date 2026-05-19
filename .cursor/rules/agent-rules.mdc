@@ -1,7 +1,0 @@
----
-description: Always add AGENTS.md into context
-globs:
-alwaysApply: true
----
-
-Always add @AGENTS.md into AI context!

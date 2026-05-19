@@ -1,5 +1,0 @@
----
-globs: *.py
-alwaysApply: false
----
-- Use try-except blocks for specific errors, avoid excepting Exception
