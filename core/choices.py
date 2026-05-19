@@ -114,6 +114,25 @@ class BlogPostStatus(models.TextChoices):
     PUBLISHED = "PUBLISHED"
 
 
+class CompetitorPostGenerationStatus(models.TextChoices):
+    IDLE = "IDLE", "Idle"
+    PROCESSING = "PROCESSING", "Processing"
+    COMPLETED = "COMPLETED", "Completed"
+    FAILED = "FAILED", "Failed"
+
+
+class ExecutionJobOperation(models.TextChoices):
+    GENERATE_BLOG_POST = "GENERATE_BLOG_POST", "Generate Blog Post"
+
+
+class ExecutionJobStatus(models.TextChoices):
+    QUEUED = "QUEUED", "Queued"
+    RUNNING = "RUNNING", "Running"
+    SUCCEEDED = "SUCCEEDED", "Succeeded"
+    FAILED = "FAILED", "Failed"
+    CANCELED = "CANCELED", "Canceled"
+
+
 class ProjectPageSource(models.TextChoices):
     AI = "AI", "AI"
     SITEMAP = "SITEMAP", "Sitemap"
@@ -125,6 +144,7 @@ class EmailType(models.TextChoices):
     FEEDBACK_NOTIFICATION = "FEEDBACK_NOTIFICATION", "Feedback Notification"
     BLOG_POST_READY = "BLOG_POST_READY", "Blog Post Ready"
     FEEDBACK_REQUEST = "FEEDBACK_REQUEST", "Feedback Request"
+    PROJECT_FEEDBACK_CHECKIN = "PROJECT_FEEDBACK_CHECKIN", "Project Feedback Check-in"
     CREATE_PROJECT_REMINDER = "CREATE_PROJECT_REMINDER", "Create Project Reminder"
     PROJECT_SETUP_COMPLETE = "PROJECT_SETUP_COMPLETE", "Project Setup Complete"
 

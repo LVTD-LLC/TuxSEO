@@ -1,23 +1,36 @@
+from datetime import date, timedelta
+
 import replicate
 import requests
 from django.conf import settings
+from django.core.cache import cache
+from django.db import transaction
+from django.db.models import Sum
 from django.http import HttpRequest
 from django.shortcuts import get_object_or_404
 from django.template.loader import render_to_string
+from django.urls import reverse
 from django.utils import timezone
 from django_q.models import Task
 from django_q.tasks import async_task, result
 from ninja import NinjaAPI
 
+from core.abuse_prevention import enforce_verified_email_for_expensive_action
+from core.analytics import ANALYTICS_EVENTS, enqueue_track_event
 from core.api.auth import session_auth, superuser_api_auth
 from core.api.schemas import (
+    APIKeyOut,
     AddCompetitorIn,
     AddKeywordIn,
     AddKeywordOut,
     AddPricingPageIn,
+    AnalyticsAggregationOut,
     BlogPostIn,
     BlogPostOut,
+    BlogPostUpdateIn,
     CompetitorAnalysisOut,
+    CompetitorPostGenerationStatusOut,
+    ConfirmProjectOnboardingIn,
     DeleteProjectKeywordIn,
     DeleteProjectKeywordOut,
     FixGeneratedBlogPostIn,
@@ -31,12 +44,15 @@ from core.api.schemas import (
     GenerateTitleSuggestionsIn,
     GenerateTitleSuggestionsOut,
     GetKeywordDetailsOut,
+    InternalBlogPostDetailOut,
+    InternalBlogPostListOut,
     PostGeneratedBlogPostIn,
     PostGeneratedBlogPostOut,
     ProjectScanIn,
     ProjectScanOut,
     SubmitFeedbackIn,
     SubmitSitemapIn,
+    SyncSitemapNowOut,
     TaskStatusOut,
     ToggleAutoSubmissionOut,
     ToggleLinkExchangeOut,
@@ -53,24 +69,370 @@ from core.api.schemas import (
     ValidateUrlIn,
     ValidateUrlOut,
 )
-from core.choices import ContentType, ProjectPageType
+from core.api_error_semantics import PlanEntitlement, evaluate_plan_entitlement, ownership_not_found_payload
+from core.choices import CompetitorPostGenerationStatus, ContentType, ProjectPageType
 from core.models import (
+    AnalyticsFactDaily,
+    AnalyticsSyncCursor,
     BlogPost,
     BlogPostTitleSuggestion,
     Competitor,
     Feedback,
     GeneratedBlogPost,
     Keyword,
+    Profile,
     Project,
+    ProjectCustomPostType,
+    ProjectIntegration,
     ProjectKeyword,
     ProjectPage,
 )
-from core.utils import download_image_from_url
+from core.publish_quality_gate import evaluate_pre_publish_quality_gate
+from core.utils import download_image_from_url, generate_random_key
 from tuxseo.utils import get_tuxseo_logger
 
 logger = get_tuxseo_logger(__name__)
 
-api = NinjaAPI(docs_url=None)
+api = NinjaAPI(docs_url=None, openapi_url=None)
+
+
+def pro_monthly_checkout_url() -> str:
+    return reverse("user_upgrade_checkout_session", kwargs={"product_name": "Pro - Monthly"})
+
+
+def get_verified_email_gate_error(profile, action_name: str) -> dict | None:
+    return enforce_verified_email_for_expensive_action(profile=profile, action_name=action_name)
+
+
+def get_entitlement_error(profile, entitlement: PlanEntitlement) -> dict | None:
+    error = evaluate_plan_entitlement(
+        profile,
+        entitlement,
+        upgrade_url=pro_monthly_checkout_url(),
+    )
+    if not error:
+        return None
+
+    if error.get("upgrade_url") and entitlement in {
+        PlanEntitlement.TITLE_GENERATION,
+        PlanEntitlement.CONTENT_GENERATION,
+        PlanEntitlement.KEYWORD_ADD,
+    }:
+        upgrade_link = f"<a class='underline' href='{pro_monthly_checkout_url()}'>Upgrade to Pro</a>"
+        error["message"] = f"{error['message']} {upgrade_link}"
+
+    return error
+
+
+def should_allow_unverified_first_onboarding_project(profile, project_source: str) -> bool:
+    is_onboarding_modal_source = project_source == "onboarding_modal"
+    has_no_existing_projects = not Project.objects.filter(profile=profile).exists()
+    return is_onboarding_modal_source and has_no_existing_projects
+
+
+def get_custom_post_type_for_generation(*, project: Project, post_type_id: int | None):
+    if post_type_id is None:
+        return None
+
+    return ProjectCustomPostType.objects.filter(id=post_type_id, project=project).first()
+
+
+def build_effective_user_prompt(*, custom_post_type, user_prompt: str) -> str:
+    _ = custom_post_type
+    return (user_prompt or "").strip()
+
+
+def _safe_pct(numerator: float | int, denominator: float | int) -> float:
+    if not denominator:
+        return 0.0
+    return round((float(numerator) / float(denominator)) * 100, 2)
+
+
+def _parse_analytics_date_range(
+    *,
+    start_date_raw: str | None,
+    end_date_raw: str | None,
+) -> tuple[date | None, date | None, str | None]:
+    today = timezone.now().date()
+    default_start = today - timedelta(days=29)
+
+    if not start_date_raw and not end_date_raw:
+        return default_start, today, None
+
+    try:
+        end_date = date.fromisoformat(end_date_raw) if end_date_raw else today
+        start_date = date.fromisoformat(start_date_raw) if start_date_raw else end_date - timedelta(days=29)
+    except ValueError:
+        return None, None, "Invalid date format. Use YYYY-MM-DD."
+
+    if start_date > end_date:
+        return None, None, "start_date must be less than or equal to end_date."
+    if end_date > today:
+        return None, None, "end_date cannot be in the future."
+
+    days = (end_date - start_date).days + 1
+    if days > 180:
+        return None, None, "Date range cannot exceed 180 days."
+
+    return start_date, end_date, None
+
+
+@api.get(
+    "/projects/{project_id}/analytics/aggregation",
+    response={200: AnalyticsAggregationOut, 400: dict},
+    auth=[session_auth],
+)
+def get_project_analytics_aggregation(
+    request: HttpRequest,
+    project_id: int,
+    start_date: str | None = None,
+    end_date: str | None = None,
+):
+    profile = request.auth
+    project = get_object_or_404(Project, id=project_id, profile=profile)
+
+    start_date, end_date, parse_error = _parse_analytics_date_range(
+        start_date_raw=start_date,
+        end_date_raw=end_date,
+    )
+    if parse_error:
+        return 400, {"status": "error", "message": parse_error}
+
+    cache_key = (
+        f"analytics_aggregation:v2:project:{project.id}:"
+        f"{start_date.isoformat()}:{end_date.isoformat()}"
+    )
+    cached_payload = cache.get(cache_key)
+    if cached_payload:
+        return {**cached_payload, "cached": True}
+
+    facts_qs = AnalyticsFactDaily.objects.filter(
+        project=project,
+        metric_date__gte=start_date,
+        metric_date__lte=end_date,
+    )
+    aggregated_facts_qs = facts_qs.filter(dimension_scope=AnalyticsFactDaily.DimensionScope.SITE)
+
+    by_provider = {
+        provider: aggregated_facts_qs.filter(provider=provider).aggregate(
+            clicks=Sum("clicks"),
+            impressions=Sum("impressions"),
+            sessions=Sum("sessions"),
+            users=Sum("users"),
+            conversions=Sum("conversions"),
+        )
+        for provider in [
+            AnalyticsFactDaily.Provider.GA4,
+            AnalyticsFactDaily.Provider.GSC,
+            AnalyticsFactDaily.Provider.PLAUSIBLE,
+        ]
+    }
+
+    source_breakdown = []
+    for provider, label in [
+        (AnalyticsFactDaily.Provider.GA4, "ga4"),
+        (AnalyticsFactDaily.Provider.GSC, "gsc"),
+        (AnalyticsFactDaily.Provider.PLAUSIBLE, "plausible"),
+    ]:
+        row = by_provider[provider]
+        source_breakdown.append(
+            {
+                "source": label,
+                "clicks": int(row.get("clicks") or 0),
+                "impressions": int(row.get("impressions") or 0),
+                "sessions": int(row.get("sessions") or 0),
+                "users": int(row.get("users") or 0),
+                "conversions": float(row.get("conversions") or 0.0),
+            }
+        )
+
+    gsc_daily = {
+        row["metric_date"]: int(row.get("clicks") or 0)
+        for row in facts_qs.filter(
+            provider=AnalyticsFactDaily.Provider.GSC,
+            dimension_scope=AnalyticsFactDaily.DimensionScope.SITE,
+        )
+        .values("metric_date")
+        .annotate(clicks=Sum("clicks"))
+    }
+
+    session_daily = {}
+    session_daily_rows = (
+        facts_qs.filter(
+            provider__in=[AnalyticsFactDaily.Provider.GA4, AnalyticsFactDaily.Provider.PLAUSIBLE],
+            dimension_scope=AnalyticsFactDaily.DimensionScope.SITE,
+        )
+        .values("metric_date", "provider")
+        .annotate(sessions=Sum("sessions"), conversions=Sum("conversions"))
+        .order_by("metric_date", "provider")
+    )
+    for row in session_daily_rows:
+        metric_date = row["metric_date"]
+        provider = row["provider"]
+        existing = session_daily.get(metric_date)
+        if existing and existing["provider"] == AnalyticsFactDaily.Provider.GA4:
+            continue
+        session_daily[metric_date] = {
+            "provider": provider,
+            "sessions": int(row.get("sessions") or 0),
+            "conversions": float(row.get("conversions") or 0.0),
+        }
+
+    daily_trend = []
+    current_day = start_date
+    while current_day <= end_date:
+        session_row = session_daily.get(current_day, {"sessions": 0, "conversions": 0.0})
+        daily_trend.append(
+            {
+                "date": current_day.isoformat(),
+                "clicks": gsc_daily.get(current_day, 0),
+                "sessions": session_row["sessions"],
+                "conversions": session_row["conversions"],
+            }
+        )
+        current_day += timedelta(days=1)
+
+    gsc_page_scope = AnalyticsFactDaily.DimensionScope.PAGE
+    if not facts_qs.filter(
+        provider=AnalyticsFactDaily.Provider.GSC,
+        dimension_scope=gsc_page_scope,
+        page_url__gt="",
+    ).exists():
+        gsc_page_scope = AnalyticsFactDaily.DimensionScope.PAGE_QUERY
+
+    page_breakdown_qs = (
+        facts_qs.filter(
+            provider=AnalyticsFactDaily.Provider.GSC,
+            dimension_scope=gsc_page_scope,
+            page_url__gt="",
+        )
+        .values("page_url")
+        .annotate(clicks=Sum("clicks"), impressions=Sum("impressions"))
+        .order_by("-impressions", "-clicks")
+    )
+    page_breakdown = [
+        {
+            "page_url": row["page_url"],
+            "clicks": int(row.get("clicks") or 0),
+            "impressions": int(row.get("impressions") or 0),
+            "ctr_pct": _safe_pct(int(row.get("clicks") or 0), int(row.get("impressions") or 0)),
+        }
+        for row in page_breakdown_qs[:8]
+    ]
+
+    gsc_row = by_provider[AnalyticsFactDaily.Provider.GSC]
+    ga4_row = by_provider[AnalyticsFactDaily.Provider.GA4]
+    plausible_row = by_provider[AnalyticsFactDaily.Provider.PLAUSIBLE]
+
+    # GSC is the canonical source for search clicks/impressions. Do not
+    # cross-source fallback into GA4/Plausible to avoid semantic mixing.
+    overview_clicks = int(gsc_row.get("clicks") or 0)
+    overview_impressions = int(gsc_row.get("impressions") or 0)
+
+    session_source = ga4_row if (ga4_row.get("sessions") or 0) > 0 else plausible_row
+    overview_sessions = int(session_source.get("sessions") or 0)
+    overview_users = int(session_source.get("users") or 0)
+    overview_conversions = float(session_source.get("conversions") or 0.0)
+
+    integration_by_provider = {
+        ProjectIntegration.Provider.GOOGLE_ANALYTICS: "ga4",
+        ProjectIntegration.Provider.GOOGLE_SEARCH_CONSOLE: "gsc",
+        ProjectIntegration.Provider.PLAUSIBLE: "plausible",
+    }
+
+    integrations = {
+        integration.provider: integration
+        for integration in ProjectIntegration.objects.filter(project=project)
+    }
+
+    cursor_by_provider = {}
+    for cursor in AnalyticsSyncCursor.objects.filter(project=project).order_by("provider", "-updated_at"):
+        if cursor.provider not in cursor_by_provider:
+            cursor_by_provider[cursor.provider] = cursor
+
+    provider_by_source = {
+        "ga4": AnalyticsFactDaily.Provider.GA4,
+        "gsc": AnalyticsFactDaily.Provider.GSC,
+        "plausible": AnalyticsFactDaily.Provider.PLAUSIBLE,
+    }
+    providers_with_data = set(facts_qs.values_list("provider", flat=True).distinct())
+
+    source_health = []
+    degraded_sources = []
+    for integration_provider, source in integration_by_provider.items():
+        integration = integrations.get(integration_provider)
+        cursor = cursor_by_provider.get(integration_provider)
+        is_connected = bool(integration and integration.status == ProjectIntegration.Status.CONNECTED)
+        has_data = provider_by_source[source] in providers_with_data
+
+        status = "disconnected"
+        stale_days = None
+        last_synced_at = None
+        last_error = ""
+        if is_connected and cursor:
+            last_error = cursor.last_error or ""
+            if cursor.last_run_finished_at:
+                last_synced_at = cursor.last_run_finished_at.isoformat()
+                stale_days = (timezone.now().date() - cursor.last_run_finished_at.date()).days
+            if cursor.last_status in {
+                AnalyticsSyncCursor.SyncStatus.FAILED,
+                AnalyticsSyncCursor.SyncStatus.PARTIAL,
+            }:
+                status = "degraded"
+            elif stale_days is not None and stale_days > 2:
+                status = "stale"
+            else:
+                status = "healthy"
+        elif is_connected:
+            status = "pending"
+
+        if status in {"degraded", "stale"}:
+            degraded_sources.append(source)
+
+        source_health.append(
+            {
+                "source": source,
+                "integration_connected": is_connected,
+                "has_data": has_data,
+                "status": status,
+                "last_synced_at": last_synced_at,
+                "stale_days": stale_days,
+                "last_error": last_error,
+            }
+        )
+
+    payload = {
+        "status": "success",
+        "project_id": project.id,
+        "date_range": {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "days": (end_date - start_date).days + 1,
+        },
+        "overview": {
+            "clicks": overview_clicks,
+            "impressions": overview_impressions,
+            "sessions": overview_sessions,
+            "users": overview_users,
+            "conversions": overview_conversions,
+            "ctr_pct": _safe_pct(overview_clicks, overview_impressions),
+            "conversion_rate_pct": _safe_pct(overview_conversions, overview_sessions),
+        },
+        "source_breakdown": source_breakdown,
+        "source_health": source_health,
+        "daily_trend": daily_trend,
+        "page_breakdown": page_breakdown,
+        "cached": False,
+        "cache_key": "",
+        "message": (
+            f"Partial source health issues detected: {', '.join(degraded_sources)}"
+            if degraded_sources
+            else ""
+        ),
+    }
+
+    cache.set(cache_key, payload, timeout=300)
+    return payload
 
 
 @api.post("/validate-url", response=ValidateUrlOut, auth=[session_auth])
@@ -84,7 +446,7 @@ def validate_url(request: HttpRequest, data: ValidateUrlIn):
             "message": "URL cannot be empty",
         }
 
-    if not url_to_check.startswith(("http://", "https://")):
+    if not url_to_check.lower().startswith(("http://", "https://")):
         return {
             "status": "error",
             "reachable": False,
@@ -135,26 +497,78 @@ def validate_url(request: HttpRequest, data: ValidateUrlIn):
         }
 
 
+@api.get("/settings/api-key", response=APIKeyOut, auth=[session_auth])
+def get_api_key(request: HttpRequest):
+    return {
+        "status": "success",
+        "key": request.auth.key,
+    }
+
+
+@api.post("/settings/api-key/regenerate", response=APIKeyOut, auth=[session_auth])
+def regenerate_api_key(request: HttpRequest):
+    profile = request.auth
+    max_attempts = 10
+
+    for _ in range(max_attempts):
+        regenerated_key = generate_random_key()
+        if regenerated_key == profile.key:
+            continue
+        if Profile.objects.filter(key=regenerated_key).exists():
+            continue
+
+        profile.key = regenerated_key
+        profile.save(update_fields=["key"])
+
+        logger.info(
+            "[API Key] Regenerated key for profile",
+            profile_id=profile.id,
+            user_id=profile.user_id,
+        )
+        return {
+            "status": "success",
+            "key": regenerated_key,
+        }
+
+    logger.error(
+        "[API Key] Failed to regenerate unique key",
+        profile_id=profile.id,
+        user_id=profile.user_id,
+    )
+    return 500, {
+        "status": "error",
+        "key": "",
+        "message": "Failed to regenerate API key. Please try again.",
+    }
+
+
 @api.post("/projects/", response=ProjectScanOut, auth=[session_auth])
 def create_project(request: HttpRequest, data: ProjectScanIn):
     profile = request.auth
 
-    if Project.objects.filter(url=data.url).exists():
+    gate_error = get_verified_email_gate_error(profile, "project creation")
+    is_allowed_unverified_onboarding_project = should_allow_unverified_first_onboarding_project(
+        profile=profile, project_source=data.source
+    )
+    if gate_error and not is_allowed_unverified_onboarding_project:
+        return gate_error
+    if gate_error and is_allowed_unverified_onboarding_project:
+        logger.info(
+            "[VerifiedEmailGate] Allowing unverified first onboarding project creation",
+            profile_id=profile.id,
+            user_id=profile.user.id,
+            source=data.source,
+        )
+
+    if Project.objects.filter(profile=profile, url=data.url).exists():
         return {
             "status": "error",
-            "message": "A project with this URL already exists",
+            "message": "You already added this project URL",
         }
 
-    if not profile.can_create_project:
-        limit = profile.project_limit
-        if profile.is_on_free_plan:
-            message = f"Project creation limit reached ({limit} project on Free plan). Upgrade to Pro to create more projects."  # noqa: E501
-        else:
-            message = "Project creation limit reached. Contact support for assistance."
-        return {
-            "status": "error",
-            "message": message,
-        }
+    entitlement_error = get_entitlement_error(profile, PlanEntitlement.PROJECT_CREATE)
+    if entitlement_error:
+        return entitlement_error
 
     project = profile.get_or_create_project(url=data.url, source=data.source)
 
@@ -172,6 +586,19 @@ def create_project(request: HttpRequest, data: ProjectScanIn):
             }
 
         if analyzed_project:
+            try:
+                async_task(
+                    "core.tasks.auto_discover_and_ingest_sitemap",
+                    project.id,
+                    group="Discover Sitemap",
+                )
+            except Exception as task_error:
+                logger.warning(
+                    "[Create Project] Failed to enqueue sitemap auto-discovery",
+                    project_id=project.id,
+                    error=str(task_error),
+                )
+
             return {
                 "status": "success",
                 "project_id": project.id,
@@ -180,6 +607,7 @@ def create_project(request: HttpRequest, data: ProjectScanIn):
                 "type": project.get_type_display(),
                 "url": project.url,
                 "summary": project.summary,
+                "description": project.description,
             }
         else:
             logger.error(
@@ -212,9 +640,37 @@ def create_project(request: HttpRequest, data: ProjectScanIn):
         }
 
 
+@api.post("/projects/{project_id}/confirm-onboarding", response={200: dict}, auth=[session_auth])
+def confirm_project_onboarding(
+    request: HttpRequest, project_id: int, data: ConfirmProjectOnboardingIn
+):
+    profile = request.auth
+    project = get_object_or_404(Project, id=project_id, profile=profile)
+
+    name = data.name.strip() or project.name or project.url
+    summary = data.summary.strip()
+    description = data.description.strip()
+
+    project.name = name
+    project.summary = summary
+    project.description = description
+    project.save(update_fields=["name", "summary", "description"])
+
+    return {"status": "success"}
+
+
 @api.post("/generate-title-suggestions", response=GenerateTitleSuggestionsOut, auth=[session_auth])
 def generate_title_suggestions(request: HttpRequest, data: GenerateTitleSuggestionsIn):
     profile = request.auth
+
+    gate_error = get_verified_email_gate_error(profile, "title generation")
+    if gate_error:
+        return {
+            "suggestions": [],
+            "suggestions_html": [],
+            **gate_error,
+        }
+
     project = get_object_or_404(Project, id=data.project_id, profile=profile)
 
     try:
@@ -227,15 +683,24 @@ def generate_title_suggestions(request: HttpRequest, data: GenerateTitleSuggesti
             "message": f"Invalid content type: {data.content_type}",
         }
 
-    if not profile.can_generate_title_suggestions:
-        limit = profile.title_suggestion_limit
-        current_count = profile.number_of_title_suggestions_this_month
-        message = f"Title generation limit reached ({current_count}/{limit} suggestions this month on Free plan). <a class='underline' href='/settings'>Upgrade to Pro</a> for unlimited suggestions."  # noqa: E501
+    entitlement_error = get_entitlement_error(profile, PlanEntitlement.TITLE_GENERATION)
+    if entitlement_error:
+        return {
+            "suggestions": [],
+            "suggestions_html": [],
+            **entitlement_error,
+        }
+
+    custom_post_type = get_custom_post_type_for_generation(
+        project=project,
+        post_type_id=data.post_type_id,
+    )
+    if data.post_type_id and custom_post_type is None:
         return {
             "suggestions": [],
             "suggestions_html": [],
             "status": "error",
-            "message": message,
+            "message": "Custom post type not found for this project.",
         }
 
     titles_to_generate = data.num_titles
@@ -245,9 +710,24 @@ def generate_title_suggestions(request: HttpRequest, data: GenerateTitleSuggesti
         )
         titles_to_generate = min(data.num_titles, remaining_ideas)
 
-    suggestions = project.generate_title_suggestions(
-        content_type=content_type, num_titles=titles_to_generate
+    effective_user_prompt = build_effective_user_prompt(
+        custom_post_type=custom_post_type,
+        user_prompt=data.user_prompt,
     )
+
+    suggestions = project.generate_title_suggestions(
+        content_type=content_type,
+        num_titles=titles_to_generate,
+        user_prompt=effective_user_prompt,
+        custom_post_type_prompt=(custom_post_type.prompt_guidance if custom_post_type else ""),
+    )
+
+    if custom_post_type:
+        BlogPostTitleSuggestion.objects.filter(id__in=[s.id for s in suggestions]).update(
+            custom_post_type=custom_post_type
+        )
+        for suggestion in suggestions:
+            suggestion.custom_post_type = custom_post_type
 
     # Render HTML for each suggestion using the Django template
     suggestions_html = []
@@ -279,6 +759,19 @@ def generate_title_suggestions(request: HttpRequest, data: GenerateTitleSuggesti
         html = render_to_string("components/blog_post_suggestion_card.html", context)
         suggestions_html.append(html)
 
+    enqueue_track_event(
+        profile_id=profile.id,
+        event_name=ANALYTICS_EVENTS.TITLE_GENERATION_COMPLETED,
+        properties={
+            "project_id": project.id,
+            "content_type": content_type,
+            "title_count": len(suggestions),
+            "result_status": "succeeded",
+            "custom_post_type": custom_post_type.name if custom_post_type else "",
+        },
+        source_function="api.generate_title_suggestions",
+    )
+
     return {
         "suggestions": suggestions,
         "suggestions_html": suggestions_html,
@@ -290,16 +783,23 @@ def generate_title_suggestions(request: HttpRequest, data: GenerateTitleSuggesti
 @api.post("/generate-title-from-idea", response=GenerateTitleSuggestionOut, auth=[session_auth])
 def generate_title_from_idea(request: HttpRequest, data: GenerateTitleSuggestionsIn):
     profile = request.auth
+
+    gate_error = get_verified_email_gate_error(profile, "title generation")
+    if gate_error:
+        return gate_error
+
     project = get_object_or_404(Project, id=data.project_id, profile=profile)
 
-    if profile.reached_title_generation_limit:
-        limit = profile.title_suggestion_limit
-        current_count = profile.number_of_title_suggestions_this_month
-        message = f"Title generation limit reached ({current_count}/{limit} suggestions this month on Free plan). <a class='underline' href='/settings'>Upgrade to Pro</a> for unlimited suggestions."  # noqa: E501
-        return {
-            "status": "error",
-            "message": message,
-        }
+    entitlement_error = get_entitlement_error(profile, PlanEntitlement.TITLE_GENERATION)
+    if entitlement_error:
+        return entitlement_error
+
+    custom_post_type = get_custom_post_type_for_generation(
+        project=project,
+        post_type_id=data.post_type_id,
+    )
+    if data.post_type_id and custom_post_type is None:
+        return {"status": "error", "message": "Custom post type not found for this project."}
 
     try:
         try:
@@ -307,14 +807,26 @@ def generate_title_from_idea(request: HttpRequest, data: GenerateTitleSuggestion
         except KeyError:
             return {"status": "error", "message": f"Invalid content type: {data.content_type}"}
 
+        effective_user_prompt = build_effective_user_prompt(
+            custom_post_type=custom_post_type,
+            user_prompt=data.user_prompt,
+        )
+
         suggestions = project.generate_title_suggestions(
-            content_type=content_type, num_titles=1, user_prompt=data.user_prompt
+            content_type=content_type,
+            num_titles=1,
+            user_prompt=effective_user_prompt,
+            custom_post_type_prompt=(custom_post_type.prompt_guidance if custom_post_type else ""),
         )
 
         if not suggestions:
             return {"status": "error", "message": "No suggestions were generated"}
 
         suggestion = suggestions[0]
+
+        if custom_post_type:
+            suggestion.custom_post_type = custom_post_type
+            suggestion.save(update_fields=["custom_post_type"])
 
         # Add keyword usage info to the suggestion
         project_keywords = project.get_keywords()
@@ -341,6 +853,19 @@ def generate_title_from_idea(request: HttpRequest, data: GenerateTitleSuggestion
             "has_auto_submission_setting": project.has_auto_submission_setting,
         }
         suggestion_html = render_to_string("components/blog_post_suggestion_card.html", context)
+
+        enqueue_track_event(
+            profile_id=profile.id,
+            event_name=ANALYTICS_EVENTS.TITLE_GENERATION_COMPLETED,
+            properties={
+                "project_id": project.id,
+                "content_type": content_type,
+                "title_count": 1,
+                "result_status": "succeeded",
+                "custom_post_type": custom_post_type.name if custom_post_type else "",
+            },
+            source_function="api.generate_title_from_idea",
+        )
 
         return {
             "status": "success",
@@ -372,18 +897,23 @@ def generate_title_from_idea(request: HttpRequest, data: GenerateTitleSuggestion
 )
 def generate_blog_content(request: HttpRequest, suggestion_id: int):
     profile = request.auth
+
+    gate_error = get_verified_email_gate_error(profile, "blog content generation")
+    if gate_error:
+        return {
+            "task_id": None,
+            **gate_error,
+        }
+
     suggestion = get_object_or_404(
         BlogPostTitleSuggestion, id=suggestion_id, project__profile=profile
     )
 
-    if profile.reached_content_generation_limit:
-        limit = profile.blog_post_generation_limit
-        current_count = profile.number_of_generated_blog_posts_this_month
-        message = f"Content generation limit reached ({current_count}/{limit} blog posts this month on Free plan). <a class='underline' href='/settings'>Upgrade to Pro</a> for unlimited content."  # noqa: E501
+    entitlement_error = get_entitlement_error(profile, PlanEntitlement.CONTENT_GENERATION)
+    if entitlement_error:
         return {
-            "status": "error",
             "task_id": None,
-            "message": message,
+            **entitlement_error,
         }
 
     try:
@@ -626,15 +1156,23 @@ def toggle_link_exchange(request: HttpRequest, project_id: int):
     profile = request.auth
     project = get_object_or_404(Project, id=project_id, profile=profile)
 
-    if not profile.is_on_pro_plan:
-        return {
-            "status": "error",
-            "enabled": False,
-            "message": "Link Exchange is only available on the Pro plan. Please upgrade to access this feature.",  # noqa: E501
-        }
+    entitlement_error = get_entitlement_error(profile, PlanEntitlement.PRO_LINK_EXCHANGE)
+    if entitlement_error:
+        return {"enabled": False, **entitlement_error}
 
     project.particiate_in_link_exchange = not project.particiate_in_link_exchange
     project.save(update_fields=["particiate_in_link_exchange"])
+
+    enqueue_track_event(
+        profile_id=profile.id,
+        event_name=ANALYTICS_EVENTS.LINK_EXCHANGE_TOGGLED,
+        properties={
+            "project_id": project.id,
+            "enabled": project.particiate_in_link_exchange,
+            "result_status": "succeeded",
+        },
+        source_function="api.toggle_link_exchange",
+    )
 
     return {"status": "success", "enabled": project.particiate_in_link_exchange}
 
@@ -646,6 +1184,11 @@ def update_sitemap_url(request: HttpRequest, data: UpdateSitemapUrlIn):
     it triggers automatic parsing and analysis of the sitemap pages.
     """
     profile = request.auth
+
+    gate_error = get_verified_email_gate_error(profile, "sitemap processing")
+    if gate_error:
+        return gate_error
+
     project = get_object_or_404(Project, id=data.project_id, profile=profile)
 
     sitemap_url = data.sitemap_url.strip()
@@ -690,6 +1233,11 @@ def submit_sitemap(request: HttpRequest, project_id: int, data: SubmitSitemapIn)
     it triggers automatic parsing and analysis of the sitemap pages.
     """  # noqa: E501
     profile = request.auth
+
+    gate_error = get_verified_email_gate_error(profile, "sitemap processing")
+    if gate_error:
+        return gate_error
+
     project = get_object_or_404(Project, id=project_id, profile=profile)
 
     sitemap_url = data.sitemap_url.strip()
@@ -722,6 +1270,32 @@ def submit_sitemap(request: HttpRequest, project_id: int, data: SubmitSitemapIn)
     return {
         "status": "success",
         "message": "Sitemap submitted successfully! Your pages will be analyzed shortly.",
+    }
+
+
+@api.post(
+    "/project/{project_id}/sitemap/sync-now/",
+    response=SyncSitemapNowOut,
+    auth=[session_auth],
+)
+def sync_sitemap_now(request: HttpRequest, project_id: int):
+    """Manually trigger sitemap sync for a project (debug/support helper)."""
+    profile = request.auth
+    project = get_object_or_404(Project, id=project_id, profile=profile)
+
+    if not project.sitemap_url.strip():
+        return {
+            "status": "error",
+            "message": "Project has no sitemap URL configured.",
+            "task_id": "",
+        }
+
+    task_id = async_task("core.tasks.parse_sitemap_and_save_urls", project.id, group="Parse Sitemap")
+
+    return {
+        "status": "success",
+        "message": "Sitemap sync queued.",
+        "task_id": str(task_id),
     }
 
 
@@ -777,7 +1351,14 @@ def update_archive_status(request: HttpRequest, suggestion_id: int, data: Update
 @api.post("/add-pricing-page", auth=[session_auth])
 def add_pricing_page(request: HttpRequest, data: AddPricingPageIn):
     profile = request.auth
-    project = Project.objects.get(id=data.project_id, profile=profile)
+
+    gate_error = get_verified_email_gate_error(profile, "pricing page analysis")
+    if gate_error:
+        return gate_error
+
+    project = Project.objects.filter(id=data.project_id, profile=profile).first()
+    if project is None:
+        return ownership_not_found_payload("Project")
 
     project_page = ProjectPage.objects.create(
         project=project, url=data.url, type=ProjectPageType.PRICING
@@ -792,14 +1373,16 @@ def add_pricing_page(request: HttpRequest, data: AddPricingPageIn):
 @api.post("/add-competitor", response=CompetitorAnalysisOut, auth=[session_auth])
 def add_competitor(request: HttpRequest, data: AddCompetitorIn):
     profile = request.auth
+
+    gate_error = get_verified_email_gate_error(profile, "competitor analysis")
+    if gate_error:
+        return gate_error
+
     project = get_object_or_404(Project, id=data.project_id, profile=profile)
 
-    # Check if user has reached competitor limit
-    if not profile.can_add_competitors:
-        return {
-            "status": "error",
-            "message": f"You have reached the competitor limit for your {profile.product_name} plan. Please upgrade to add more competitors.",  # noqa: E501
-        }
+    entitlement_error = get_entitlement_error(profile, PlanEntitlement.COMPETITOR_ADD)
+    if entitlement_error:
+        return entitlement_error
 
     try:
         if Competitor.objects.filter(project=project, url=data.url).exists():
@@ -859,59 +1442,98 @@ def add_competitor(request: HttpRequest, data: AddCompetitorIn):
     "/generate-competitor-vs-title", response=GenerateCompetitorVsTitleOut, auth=[session_auth]
 )
 def generate_competitor_vs_title(request: HttpRequest, data: GenerateCompetitorVsTitleIn):
-    """Generate a competitor comparison blog post using Perplexity Sonar."""
+    """Queue competitor comparison blog post generation and persist async status."""
     profile = request.auth
-    competitor = get_object_or_404(Competitor, id=data.competitor_id)
+
+    gate_error = get_verified_email_gate_error(profile, "competitor comparison generation")
+    if gate_error:
+        return gate_error
+
+    competitor = Competitor.objects.select_related("project").filter(
+        id=data.competitor_id,
+        project__profile=profile,
+    ).first()
+    if competitor is None:
+        return ownership_not_found_payload("Competitor")
+
     project = competitor.project
 
-    if project.profile != profile:
-        return {
-            "status": "error",
-            "message": "You do not have permission to access this competitor",
-        }
-
-    # Check if user has reached competitor posts generation limit
-    if not profile.can_generate_competitor_posts:
-        return {
-            "status": "error",
-            "message": f"You have reached the competitor post generation limit for your {profile.product_name} plan. Please upgrade to generate more competitor comparison posts.",  # noqa: E501
-        }
-
-    if not profile.can_generate_blog_posts:
-        return {
-            "status": "error",
-            "message": f"You have reached the content generation limit for your {profile.product_name} plan",  # noqa: E501
-        }
-
-    try:
-        logger.info(
-            "Generating VS competitor blog post",
-            competitor_id=competitor.id,
-            competitor_name=competitor.name,
-            project_id=project.id,
-            profile_id=profile.id,
-        )
-
-        blog_post_content = competitor.generate_vs_blog_post()
-
-        logger.info(
-            "VS competitor blog post generated successfully",
-            competitor_id=competitor.id,
-            competitor_name=competitor.name,
-            content_length=len(blog_post_content),
-            project_id=project.id,
-            profile_id=profile.id,
-        )
-
+    if competitor.blog_post:
         return {
             "status": "success",
-            "message": "VS blog post generated successfully!",
+            "message": "VS blog post already generated.",
+            "competitor_id": competitor.id,
+        }
+
+    entitlement_error = get_entitlement_error(
+        profile,
+        PlanEntitlement.COMPETITOR_POST_GENERATION,
+    )
+    if entitlement_error:
+        return entitlement_error
+
+    entitlement_error = get_entitlement_error(profile, PlanEntitlement.CONTENT_GENERATION)
+    if entitlement_error:
+        return entitlement_error
+
+    try:
+        with transaction.atomic():
+            competitor = (
+                Competitor.objects.select_for_update()
+                .select_related("project")
+                .get(id=data.competitor_id, project__profile=profile)
+            )
+
+            if competitor.blog_post_generation_status == CompetitorPostGenerationStatus.PROCESSING:
+                return {
+                    "status": "processing",
+                    "message": "A competitor post is already being generated. Please wait a few minutes and refresh.",
+                    "competitor_id": competitor.id,
+                }
+
+            if competitor.blog_post:
+                return {
+                    "status": "success",
+                    "message": "VS blog post already generated.",
+                    "competitor_id": competitor.id,
+                }
+
+            competitor.blog_post_generation_status = CompetitorPostGenerationStatus.PROCESSING
+            competitor.blog_post_generation_started_at = timezone.now()
+            competitor.blog_post_generation_completed_at = None
+            competitor.blog_post_generation_error = ""
+            competitor.save(
+                update_fields=[
+                    "blog_post_generation_status",
+                    "blog_post_generation_started_at",
+                    "blog_post_generation_completed_at",
+                    "blog_post_generation_error",
+                ]
+            )
+
+        async_task(
+            "core.tasks.generate_competitor_vs_blog_post",
+            competitor.id,
+            group="Generate Competitor VS Blog Post",
+        )
+
+        logger.info(
+            "Queued VS competitor blog post generation",
+            competitor_id=competitor.id,
+            competitor_name=competitor.name,
+            project_id=project.id,
+            profile_id=profile.id,
+        )
+
+        return {
+            "status": "processing",
+            "message": "Generation started. This can take a few minutes. You can keep this page open or refresh later to view the post.",
             "competitor_id": competitor.id,
         }
 
     except Exception as e:
         logger.error(
-            "Failed to generate competitor vs. blog post",
+            "Failed to queue competitor vs. blog post generation",
             error=str(e),
             exc_info=True,
             competitor_id=data.competitor_id,
@@ -920,8 +1542,71 @@ def generate_competitor_vs_title(request: HttpRequest, data: GenerateCompetitorV
         )
         return {
             "status": "error",
-            "message": f"Failed to generate competitor comparison blog post: {str(e)}",
+            "message": "Failed to start competitor comparison blog post generation. Please try again.",
+            "competitor_id": competitor.id,
         }
+
+
+@api.get(
+    "/competitor-post-generation-status/{competitor_id}",
+    response=CompetitorPostGenerationStatusOut,
+    auth=[session_auth],
+)
+def competitor_post_generation_status(request: HttpRequest, competitor_id: int):
+    profile = request.auth
+
+    competitor = get_object_or_404(
+        Competitor.objects.select_related("project"),
+        id=competitor_id,
+        project__profile=profile,
+    )
+
+    if competitor.blog_post:
+        if competitor.blog_post_generation_status != CompetitorPostGenerationStatus.COMPLETED:
+            competitor.blog_post_generation_status = CompetitorPostGenerationStatus.COMPLETED
+            competitor.blog_post_generation_completed_at = competitor.blog_post_generation_completed_at or timezone.now()
+            competitor.blog_post_generation_error = ""
+            competitor.save(
+                update_fields=[
+                    "blog_post_generation_status",
+                    "blog_post_generation_completed_at",
+                    "blog_post_generation_error",
+                ]
+            )
+
+        return {
+            "status": "completed",
+            "message": "VS blog post is ready.",
+            "competitor_id": competitor.id,
+            "view_post_url": reverse(
+                "competitor_blog_post_detail",
+                kwargs={"project_pk": competitor.project_id, "pk": competitor.id},
+            ),
+        }
+
+    if competitor.blog_post_generation_status == CompetitorPostGenerationStatus.PROCESSING:
+        return {
+            "status": "processing",
+            "message": "Competitor comparison generation is still in progress.",
+            "competitor_id": competitor.id,
+            "view_post_url": None,
+        }
+
+    if competitor.blog_post_generation_status == CompetitorPostGenerationStatus.FAILED:
+        return {
+            "status": "failed",
+            "message": competitor.blog_post_generation_error
+            or "Competitor comparison generation failed. Please try again.",
+            "competitor_id": competitor.id,
+            "view_post_url": None,
+        }
+
+    return {
+        "status": "idle",
+        "message": "Ready to generate.",
+        "competitor_id": competitor.id,
+        "view_post_url": None,
+    }
 
 
 @api.post("/submit-feedback", auth=[session_auth])
@@ -965,14 +1650,16 @@ def user_settings(request: HttpRequest, project_id: int):
 @api.post("/keywords/add", response=AddKeywordOut, auth=[session_auth])
 def add_keyword_to_project(request: HttpRequest, data: AddKeywordIn):
     profile = request.auth
+
+    gate_error = get_verified_email_gate_error(profile, "keyword enrichment")
+    if gate_error:
+        return gate_error
+
     project = get_object_or_404(Project, id=data.project_id, profile=profile)
 
-    if not profile.can_add_keywords:
-        if profile.is_on_free_plan:
-            message = "Keyword additions are not available on the Free plan. <a class='underline' href='/settings'>Upgrade to Pro</a> to add custom keywords."  # noqa: E501
-        else:
-            message = "Keyword limit reached. <a class='underline' href='/settings'>Contact support</a> for assistance."  # noqa: E501
-        return {"status": "error", "message": message}
+    entitlement_error = get_entitlement_error(profile, PlanEntitlement.KEYWORD_ADD)
+    if entitlement_error:
+        return entitlement_error
 
     keyword_text_cleaned = data.keyword_text.strip().lower()
     if not keyword_text_cleaned:
@@ -1018,6 +1705,20 @@ def add_keyword_to_project(request: HttpRequest, data: AddKeywordIn):
             ],
         }
 
+        enqueue_track_event(
+            profile_id=profile.id,
+            event_name=ANALYTICS_EVENTS.KEYWORD_UPDATED,
+            properties={
+                "project_id": project.id,
+                "keyword_id": keyword.id,
+                "update_action": "added",
+                "result_status": "succeeded",
+                "already_existed": not created,
+                "already_associated": not pk_created,
+            },
+            source_function="api.add_keyword_to_project",
+        )
+
         return {
             "status": "success",
             "message": "Keyword added",
@@ -1045,6 +1746,20 @@ def toggle_project_keyword_use(request: HttpRequest, data: ToggleProjectKeywordU
         )
         project_keyword.use = not project_keyword.use
         project_keyword.save(update_fields=["use"])
+
+        enqueue_track_event(
+            profile_id=profile.id,
+            event_name=ANALYTICS_EVENTS.KEYWORD_UPDATED,
+            properties={
+                "project_id": project.id,
+                "keyword_id": project_keyword.keyword_id,
+                "update_action": "toggled_use",
+                "result_status": "succeeded",
+                "use": project_keyword.use,
+            },
+            source_function="api.toggle_project_keyword_use",
+        )
+
         return ToggleProjectKeywordUseOut(status="success", use=project_keyword.use)
     except Exception as e:
         logger.error(
@@ -1067,7 +1782,21 @@ def delete_project_keyword(request: HttpRequest, data: DeleteProjectKeywordIn):
             ProjectKeyword, project=project, keyword_id=data.keyword_id
         )
         keyword_text = project_keyword.keyword.keyword_text
+        keyword_id = project_keyword.keyword_id
         project_keyword.delete()
+
+        enqueue_track_event(
+            profile_id=profile.id,
+            event_name=ANALYTICS_EVENTS.KEYWORD_UPDATED,
+            properties={
+                "project_id": project.id,
+                "keyword_id": keyword_id,
+                "update_action": "deleted",
+                "result_status": "succeeded",
+            },
+            source_function="api.delete_project_keyword",
+        )
+
         return DeleteProjectKeywordOut(
             status="success", message=f"Keyword '{keyword_text}' removed from project"
         )
@@ -1088,6 +1817,10 @@ def delete_project_keyword(request: HttpRequest, data: DeleteProjectKeywordIn):
 @api.get("/keywords/details", response=GetKeywordDetailsOut, auth=[session_auth])
 def get_keyword_details(request: HttpRequest, keyword_text: str, project_id: int):
     profile = request.auth
+
+    gate_error = get_verified_email_gate_error(profile, "keyword enrichment")
+    if gate_error:
+        return GetKeywordDetailsOut(status="error", message=gate_error["message"])
 
     try:
         # Verify user has access to the project
@@ -1158,6 +1891,89 @@ def get_keyword_details(request: HttpRequest, keyword_text: str, project_id: int
         )
 
 
+def _serialize_internal_blog_post(blog_post: BlogPost) -> dict:
+    return {
+        "id": blog_post.id,
+        "title": blog_post.title,
+        "description": blog_post.description,
+        "slug": blog_post.slug,
+        "tags": blog_post.tags,
+        "content": blog_post.content,
+        "status": blog_post.status,
+        "icon_url": blog_post.icon.url if blog_post.icon else "",
+        "image_url": blog_post.image.url if blog_post.image else "",
+        "created_at": blog_post.created_at.isoformat(),
+        "updated_at": blog_post.updated_at.isoformat(),
+    }
+
+
+def _attach_blog_post_media_from_urls(
+    blog_post: BlogPost,
+    *,
+    icon_url: str | None,
+    image_url: str | None,
+    log_prefix: str,
+):
+    if icon_url:
+        icon_url = icon_url.strip()
+        if icon_url.startswith(("http://", "https://")):
+            icon_content = download_image_from_url(
+                image_url=icon_url,
+                field_name="icon",
+                instance_id=blog_post.id,
+            )
+            if icon_content:
+                filename = f"blog-post-icon-{blog_post.id}.png"
+                blog_post.icon.save(filename, icon_content, save=True)
+                logger.info(
+                    f"[{log_prefix}] Icon downloaded and saved",
+                    blog_post_id=blog_post.id,
+                    icon_url=icon_url,
+                )
+
+    if image_url:
+        image_url = image_url.strip()
+        if image_url.startswith(("http://", "https://")):
+            image_content = download_image_from_url(
+                image_url=image_url,
+                field_name="image",
+                instance_id=blog_post.id,
+            )
+            if image_content:
+                filename = f"blog-post-image-{blog_post.id}.png"
+                blog_post.image.save(filename, image_content, save=True)
+                logger.info(
+                    f"[{log_prefix}] Image downloaded and saved",
+                    blog_post_id=blog_post.id,
+                    image_url=image_url,
+                )
+
+
+@api.get("/internal/blog-posts", response=InternalBlogPostListOut, auth=[superuser_api_auth])
+def list_internal_blog_posts(request: HttpRequest):
+    blog_posts = BlogPost.objects.order_by("-created_at")
+    return {
+        "status": "success",
+        "blog_posts": [_serialize_internal_blog_post(blog_post) for blog_post in blog_posts],
+    }
+
+
+@api.get(
+    "/internal/blog-posts/{blog_post_id}",
+    response={200: InternalBlogPostDetailOut, 404: BlogPostOut},
+    auth=[superuser_api_auth],
+)
+def get_internal_blog_post(request: HttpRequest, blog_post_id: int):
+    blog_post = BlogPost.objects.filter(id=blog_post_id).first()
+    if not blog_post:
+        return 404, {"status": "error", "message": "Blog post not found."}
+
+    return {
+        "status": "success",
+        "blog_post": _serialize_internal_blog_post(blog_post),
+    }
+
+
 @api.post("/blog-posts/submit", response=BlogPostOut, auth=[superuser_api_auth])
 def submit_blog_post(request: HttpRequest, data: BlogPostIn):
     try:
@@ -1170,35 +1986,12 @@ def submit_blog_post(request: HttpRequest, data: BlogPostIn):
             status=data.status,
         )
 
-        if data.icon:
-            icon_url = data.icon.strip()
-            if icon_url.startswith(("http://", "https://")):
-                icon_content = download_image_from_url(
-                    image_url=icon_url, field_name="icon", instance_id=blog_post.id
-                )
-                if icon_content:
-                    filename = f"blog-post-icon-{blog_post.id}.png"
-                    blog_post.icon.save(filename, icon_content, save=True)
-                    logger.info(
-                        "[Submit Blog Post] Icon downloaded and saved",
-                        blog_post_id=blog_post.id,
-                        icon_url=icon_url,
-                    )
-
-        if data.image:
-            image_url = data.image.strip()
-            if image_url.startswith(("http://", "https://")):
-                image_content = download_image_from_url(
-                    image_url=image_url, field_name="image", instance_id=blog_post.id
-                )
-                if image_content:
-                    filename = f"blog-post-image-{blog_post.id}.png"
-                    blog_post.image.save(filename, image_content, save=True)
-                    logger.info(
-                        "[Submit Blog Post] Image downloaded and saved",
-                        blog_post_id=blog_post.id,
-                        image_url=image_url,
-                    )
+        _attach_blog_post_media_from_urls(
+            blog_post,
+            icon_url=data.icon,
+            image_url=data.image,
+            log_prefix="Submit Blog Post",
+        )
 
         return BlogPostOut(status="success", message="Blog post submitted successfully.")
     except Exception as e:
@@ -1212,6 +2005,104 @@ def submit_blog_post(request: HttpRequest, data: BlogPostIn):
         return BlogPostOut(status="error", message="Failed to submit blog post")
 
 
+@api.put(
+    "/internal/blog-posts/{blog_post_id}",
+    response={200: InternalBlogPostDetailOut, 404: BlogPostOut},
+    auth=[superuser_api_auth],
+)
+def update_internal_blog_post(request: HttpRequest, blog_post_id: int, data: BlogPostIn):
+    blog_post = BlogPost.objects.filter(id=blog_post_id).first()
+    if not blog_post:
+        return 404, {"status": "error", "message": "Blog post not found."}
+
+    blog_post.title = data.title
+    blog_post.description = data.description
+    blog_post.slug = data.slug
+    blog_post.tags = data.tags
+    blog_post.content = data.content
+    blog_post.status = data.status
+    blog_post.save(update_fields=["title", "description", "slug", "tags", "content", "status"])
+
+    _attach_blog_post_media_from_urls(
+        blog_post,
+        icon_url=data.icon,
+        image_url=data.image,
+        log_prefix="Update Blog Post",
+    )
+
+    return {
+        "status": "success",
+        "blog_post": _serialize_internal_blog_post(blog_post),
+        "message": "Blog post updated successfully.",
+    }
+
+
+@api.patch(
+    "/internal/blog-posts/{blog_post_id}",
+    response={200: InternalBlogPostDetailOut, 400: BlogPostOut, 404: BlogPostOut},
+    auth=[superuser_api_auth],
+)
+def patch_internal_blog_post(request: HttpRequest, blog_post_id: int, data: BlogPostUpdateIn):
+    blog_post = BlogPost.objects.filter(id=blog_post_id).first()
+    if not blog_post:
+        return 404, {"status": "error", "message": "Blog post not found."}
+
+    fields_to_update: list[str] = []
+
+    if "title" in data.model_fields_set and data.title is not None:
+        blog_post.title = data.title
+        fields_to_update.append("title")
+    if "description" in data.model_fields_set and data.description is not None:
+        blog_post.description = data.description
+        fields_to_update.append("description")
+    if "slug" in data.model_fields_set and data.slug is not None:
+        blog_post.slug = data.slug
+        fields_to_update.append("slug")
+    if "tags" in data.model_fields_set and data.tags is not None:
+        blog_post.tags = data.tags
+        fields_to_update.append("tags")
+    if "content" in data.model_fields_set and data.content is not None:
+        blog_post.content = data.content
+        fields_to_update.append("content")
+    if "status" in data.model_fields_set and data.status is not None:
+        blog_post.status = data.status
+        fields_to_update.append("status")
+
+    if fields_to_update:
+        blog_post.save(update_fields=fields_to_update)
+
+    if "icon" in data.model_fields_set or "image" in data.model_fields_set:
+        _attach_blog_post_media_from_urls(
+            blog_post,
+            icon_url=data.icon,
+            image_url=data.image,
+            log_prefix="Patch Blog Post",
+        )
+
+    if not fields_to_update and not ({"icon", "image"} & data.model_fields_set):
+        return 400, {"status": "error", "message": "No fields provided for update."}
+
+    return {
+        "status": "success",
+        "blog_post": _serialize_internal_blog_post(blog_post),
+        "message": "Blog post updated successfully.",
+    }
+
+
+@api.delete(
+    "/internal/blog-posts/{blog_post_id}",
+    response={200: BlogPostOut, 404: BlogPostOut},
+    auth=[superuser_api_auth],
+)
+def delete_internal_blog_post(request: HttpRequest, blog_post_id: int):
+    blog_post = BlogPost.objects.filter(id=blog_post_id).first()
+    if not blog_post:
+        return 404, {"status": "error", "message": "Blog post not found."}
+
+    blog_post.delete()
+    return {"status": "success", "message": "Blog post deleted successfully."}
+
+
 @api.post("/post-generated-blog-post", response=PostGeneratedBlogPostOut, auth=[session_auth])
 def post_generated_blog_post(request: HttpRequest, data: PostGeneratedBlogPostIn):
     profile = request.auth
@@ -1220,19 +2111,144 @@ def post_generated_blog_post(request: HttpRequest, data: PostGeneratedBlogPostIn
     if not blog_post_id:
         return {"status": "error", "message": "Missing generated blog post id."}
     try:
-        generated_post = GeneratedBlogPost.objects.get(id=blog_post_id)
-        if generated_post.project and generated_post.project.profile != profile:
-            return {"status": "error", "message": "Forbidden: You do not have access to this post."}
+        generated_post = GeneratedBlogPost.objects.filter(
+            id=blog_post_id,
+            project__profile=profile,
+        ).first()
+        if generated_post is None:
+            return ownership_not_found_payload("Generated blog post")
+
+        enqueue_track_event(
+            profile_id=profile.id,
+            event_name=ANALYTICS_EVENTS.PUBLISH_ATTEMPTED,
+            properties={
+                "project_id": getattr(generated_post, "project_id", None),
+                "blog_post_id": generated_post.id,
+                "result_status": "succeeded",
+            },
+            source_function="api.post_generated_blog_post",
+        )
+
+        if generated_post.publish_approval_status != GeneratedBlogPost.ApprovalStatus.APPROVED:
+            generated_post.create_workflow_audit_event(
+                checkpoint="PUBLISH",
+                event_type="ACTION_BLOCKED",
+                actor_profile=profile,
+                decision=generated_post.publish_approval_status,
+                reason="awaiting_publish_approval",
+            )
+            enqueue_track_event(
+                profile_id=profile.id,
+                event_name=ANALYTICS_EVENTS.PUBLISH_FAILED,
+                properties={
+                    "project_id": getattr(generated_post, "project_id", None),
+                    "blog_post_id": generated_post.id,
+                    "result_status": "failed",
+                    "failure_reason": "awaiting_publish_approval",
+                },
+                source_function="api.post_generated_blog_post",
+            )
+            return {
+                "status": "error",
+                "message": (
+                    "Publish blocked by approval checkpoint: "
+                    f"current_status={generated_post.publish_approval_status}"
+                ),
+            }
+
+        quality_gate_result = evaluate_pre_publish_quality_gate(generated_post)
+        if quality_gate_result["decision"] == "block":
+            logger.warning(
+                "[Publish Quality Gate] Blocking publish attempt",
+                blog_post_id=blog_post_id,
+                profile_id=profile.id,
+                checks=quality_gate_result["blocking_checks"],
+            )
+            generated_post.create_workflow_audit_event(
+                checkpoint="PUBLISH",
+                event_type="QUALITY_GATE_BLOCKED",
+                actor_profile=profile,
+                decision="BLOCKED",
+                reason=quality_gate_result["summary"],
+                metadata={"blocking_checks": quality_gate_result["blocking_checks"]},
+            )
+            enqueue_track_event(
+                profile_id=profile.id,
+                event_name=ANALYTICS_EVENTS.PUBLISH_FAILED,
+                properties={
+                    "project_id": getattr(generated_post, "project_id", None),
+                    "blog_post_id": generated_post.id,
+                    "result_status": "failed",
+                    "failure_reason": "quality_gate_blocked",
+                },
+                source_function="api.post_generated_blog_post",
+            )
+            return {
+                "status": "error",
+                "message": f"Publish blocked by quality gate: {quality_gate_result['summary']}",
+            }
+
+        if quality_gate_result["decision"] == "warn":
+            logger.warning(
+                "[Publish Quality Gate] Publish allowed with warnings",
+                blog_post_id=blog_post_id,
+                profile_id=profile.id,
+                checks=quality_gate_result["warning_checks"],
+                aggregate_score=quality_gate_result["aggregate_score"],
+            )
+
         result = generated_post.submit_blog_post_to_endpoint()
         if result is True:
             generated_post.posted = True
             generated_post.date_posted = timezone.now()
             generated_post.save(update_fields=["posted", "date_posted"])
-            return {"status": "success", "message": "Blog post published!"}
+
+            if quality_gate_result["decision"] == "warn":
+                publish_message = (
+                    f"Blog post published with quality warnings: {quality_gate_result['summary']}"
+                )
+            else:
+                publish_message = "Blog post published!"
+
+            generated_post.create_workflow_audit_event(
+                checkpoint="PUBLISH",
+                event_type="PUBLISHED",
+                actor_profile=profile,
+                decision="SUCCESS",
+                reason=publish_message,
+                metadata={"quality_gate_decision": quality_gate_result["decision"]},
+            )
+            enqueue_track_event(
+                profile_id=profile.id,
+                event_name=ANALYTICS_EVENTS.PUBLISH_SUCCEEDED,
+                properties={
+                    "project_id": getattr(generated_post, "project_id", None),
+                    "blog_post_id": generated_post.id,
+                    "result_status": "succeeded",
+                },
+                source_function="api.post_generated_blog_post",
+            )
+            return {"status": "success", "message": publish_message}
         else:
+            generated_post.create_workflow_audit_event(
+                checkpoint="PUBLISH",
+                event_type="PUBLISH_FAILED",
+                actor_profile=profile,
+                decision="FAILED",
+                reason="endpoint_submission_failed",
+            )
+            enqueue_track_event(
+                profile_id=profile.id,
+                event_name=ANALYTICS_EVENTS.PUBLISH_FAILED,
+                properties={
+                    "project_id": getattr(generated_post, "project_id", None),
+                    "blog_post_id": generated_post.id,
+                    "result_status": "failed",
+                    "failure_reason": "endpoint_submission_failed",
+                },
+                source_function="api.post_generated_blog_post",
+            )
             return {"status": "error", "message": "Failed to post blog."}
-    except GeneratedBlogPost.DoesNotExist:
-        return {"status": "error", "message": "Generated blog post not found."}
     except Exception as e:
         logger.error(
             "Failed to post generated blog post",
@@ -1252,14 +2268,15 @@ def fix_generated_blog_post(request: HttpRequest, data: FixGeneratedBlogPostIn):
         return {"status": "error", "message": "Missing generated blog post id."}
 
     try:
-        generated_post = GeneratedBlogPost.objects.get(id=blog_post_id)
-        if generated_post.project and generated_post.project.profile != profile:
-            return {"status": "error", "message": "Forbidden: You do not have access to this post."}
+        generated_post = GeneratedBlogPost.objects.filter(
+            id=blog_post_id,
+            project__profile=profile,
+        ).first()
+        if generated_post is None:
+            return ownership_not_found_payload("Generated blog post")
 
         return {"status": "success", "message": "Blog post issues have been fixed successfully."}
 
-    except GeneratedBlogPost.DoesNotExist:
-        return {"status": "error", "message": "Generated blog post not found."}
     except Exception as e:
         logger.error(
             "Failed to fix generated blog post",
@@ -1312,6 +2329,10 @@ def generate_og_image(request: HttpRequest, data: GenerateOGImageIn):
     Generate an Open Graph image for a blog post using Replicate flux-schnell model.
     """
     profile = request.auth
+
+    gate_error = get_verified_email_gate_error(profile, "OG image generation")
+    if gate_error:
+        return gate_error
 
     if not settings.REPLICATE_API_TOKEN:
         logger.error(

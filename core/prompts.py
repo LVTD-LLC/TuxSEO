@@ -177,10 +177,10 @@ I'll provide a blog post title, and I need you to generate high-quality, SEO-opt
    - Aim for a reading level appropriate to your audience (typically 7th-9th grade level)
 
 5. ENGAGEMENT ELEMENTS:
-   - Include 2-3 suggested places for relevant images, charts, or infographics with descriptive alt text
-   - Add internal linking opportunities to 3-5 related content pieces on your site
-   - Suggest 2-3 external authoritative sources to link to for supporting evidence
-   - Include questions throughout that prompt reader reflection
+   - Use concrete examples, mini case studies, or practical scenarios to keep readers engaged
+   - Add internal links directly in markdown only when they fit naturally in the sentence
+   - Add external authoritative links directly in markdown only when they support the claim
+   - Never include placeholder instructions (for example: "insert image here" or "add link later")
 
 6. E-E-A-T SIGNALS:
    - Demonstrate Expertise through depth of information

@@ -1,8 +1,11 @@
 import asyncio
-import random
-import string
+import re
+import secrets
+import time
+from urllib.parse import urlparse
 from urllib.request import urlopen
 
+import posthog
 import requests
 from django.conf import settings
 from django.core.files.base import ContentFile
@@ -13,6 +16,200 @@ from core.choices import OGImageStyle
 from tuxseo.utils import get_tuxseo_logger
 
 logger = get_tuxseo_logger(__name__)
+
+_AUTHORITY_MIN_SCORE = 0.15
+_AUTHORITY_MIN_OVERLAP_RATIO = 0.12
+LLM_ANALYTICS_EVENT = "$ai_generation"
+_LLM_INPUT_PREVIEW_LIMIT = 500
+_LLM_OUTPUT_PREVIEW_LIMIT = 1000
+
+
+def _preview_text(value, limit=500):
+    if value is None:
+        return ""
+    text = str(value)
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}..."
+
+
+def _safe_number(value):
+    try:
+        if value is None:
+            return None
+        number = float(value)
+        if number < 0:
+            return None
+        return number
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_non_none(*values):
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _extract_usage_metrics(result):
+    usage = None
+
+    usage_getter = getattr(result, "usage", None)
+    if callable(usage_getter):
+        usage = usage_getter()
+    elif usage_getter is not None:
+        usage = usage_getter
+
+    if usage is None:
+        return {}
+
+    input_tokens = _safe_number(
+        _first_non_none(
+            getattr(usage, "input_tokens", None),
+            getattr(usage, "request_tokens", None),
+            getattr(usage, "prompt_tokens", None),
+        )
+    )
+    output_tokens = _safe_number(
+        _first_non_none(
+            getattr(usage, "output_tokens", None),
+            getattr(usage, "response_tokens", None),
+            getattr(usage, "completion_tokens", None),
+        )
+    )
+    total_tokens = _safe_number(getattr(usage, "total_tokens", None))
+    if total_tokens is None and (input_tokens is not None or output_tokens is not None):
+        total_tokens = (input_tokens or 0) + (output_tokens or 0)
+
+    metrics = {}
+    if input_tokens is not None:
+        metrics["$ai_input_tokens"] = int(input_tokens)
+    if output_tokens is not None:
+        metrics["$ai_output_tokens"] = int(output_tokens)
+    if total_tokens is not None:
+        metrics["$ai_total_tokens"] = int(total_tokens)
+
+    return metrics
+
+
+def _resolve_distinct_id_from_deps(deps):
+    if deps is None:
+        return "tuxseo-agent"
+
+    candidates = []
+    candidates.append(getattr(deps, "distinct_id", None))
+
+    user = getattr(deps, "user", None)
+    if user is not None:
+        candidates.append(getattr(user, "email", None))
+        candidates.append(getattr(user, "id", None))
+
+    profile = getattr(deps, "profile", None)
+    if profile is not None:
+        profile_user = getattr(profile, "user", None)
+        candidates.append(getattr(profile_user, "email", None) if profile_user else None)
+        candidates.append(getattr(profile_user, "id", None) if profile_user else None)
+        candidates.append(getattr(profile, "id", None))
+
+    candidates.append(getattr(deps, "user_id", None))
+    candidates.append(getattr(deps, "profile_id", None))
+
+    project = getattr(deps, "project", None)
+    if project is not None:
+        candidates.append(getattr(project, "id", None))
+
+    candidates.append(getattr(deps, "id", None))
+
+    for value in candidates:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+
+    return "tuxseo-agent"
+
+
+def _resolve_agent_model_name(agent, fallback_model_name=""):
+    model = getattr(agent, "model", None)
+    if model is None:
+        return fallback_model_name or "unknown"
+
+    for attr in ("model_name", "model", "name"):
+        value = getattr(model, attr, None)
+        if isinstance(value, str) and value.strip():
+            return value
+
+    return fallback_model_name or str(model)
+
+
+def _emit_posthog_llm_generation(
+    *,
+    agent,
+    input_string,
+    result,
+    deps,
+    function_name,
+    model_name,
+    latency_seconds,
+    error=None,
+):
+    if not settings.POSTHOG_API_KEY:
+        return
+
+    resolved_model = _resolve_agent_model_name(agent, fallback_model_name=model_name)
+    feature_path = f"{model_name or 'unknown'}.{function_name or 'unknown'}"
+    status = "failed" if error else "succeeded"
+
+    properties = {
+        "$ai_model": resolved_model,
+        "$ai_input": [
+            {
+                "role": "user",
+                "content": _preview_text(input_string, limit=_LLM_INPUT_PREVIEW_LIMIT),
+            }
+        ],
+        "$ai_latency": round(max(latency_seconds, 0), 4),
+        "feature_path": feature_path,
+        "function_name": function_name,
+        "model_name": model_name,
+        "deps_type": deps.__class__.__name__ if deps is not None else None,
+        "result_status": status,
+    }
+
+    if result is not None:
+        properties["$ai_output_choices"] = [
+            {
+                "message": {
+                    "content": _preview_text(
+                        getattr(result, "output", ""),
+                        limit=_LLM_OUTPUT_PREVIEW_LIMIT,
+                    )
+                }
+            }
+        ]
+        properties.update(_extract_usage_metrics(result))
+
+    if error is not None:
+        properties["error_type"] = error.__class__.__name__
+        properties["error_message"] = _preview_text(error, limit=300)
+
+    cleaned_properties = {key: value for key, value in properties.items() if value is not None}
+
+    try:
+        posthog.capture(
+            _resolve_distinct_id_from_deps(deps),
+            event=LLM_ANALYTICS_EVENT,
+            properties=cleaned_properties,
+        )
+    except Exception:  # noqa: BLE001 - telemetry should never interrupt generation flows
+        logger.warning(
+            "[Run Agent Synchronously] Failed to emit PostHog LLM analytics event",
+            exc_info=True,
+            function_name=function_name,
+            model_name=model_name,
+        )
 
 
 class DivErrorList(ErrorList):
@@ -188,8 +385,12 @@ def get_jina_embedding(text: str) -> list[float] | None:
 
 
 def generate_random_key():
-    characters = string.ascii_letters + string.digits
-    return "".join(random.choice(characters) for _ in range(10))
+    """Generate a high-entropy API key with an explicit product prefix.
+
+    Format: ``tuxseo_<40 lowercase hex chars>`` (160 bits entropy)
+    Example: ``tuxseo_a3f5...``
+    """
+    return f"tuxseo_{secrets.token_hex(20)}"
 
 
 def get_html_content(url):
@@ -273,6 +474,7 @@ def run_agent_synchronously(agent, input_string, deps=None, function_name="", mo
         asyncio.set_event_loop(loop)
 
     with capture_run_messages() as messages:
+        started_at = time.perf_counter()
         try:
             logger.info(
                 "[Run Agent Synchronously] Running agent",
@@ -287,22 +489,46 @@ def run_agent_synchronously(agent, input_string, deps=None, function_name="", mo
             else:
                 result = loop.run_until_complete(agent.run(input_string))
 
+            elapsed = time.perf_counter() - started_at
+            _emit_posthog_llm_generation(
+                agent=agent,
+                input_string=input_string,
+                result=result,
+                deps=deps,
+                function_name=function_name,
+                model_name=model_name,
+                latency_seconds=elapsed,
+            )
+
             logger.info(
                 "[Run Agent Synchronously] Agent run successfully",
                 messages=messages,
                 input_string=input_string,
                 deps=deps,
                 result=result,
+                latency_seconds=elapsed,
                 function_name=function_name,
                 model_name=model_name,
             )
             return result
         except Exception as e:
+            elapsed = time.perf_counter() - started_at
+            _emit_posthog_llm_generation(
+                agent=agent,
+                input_string=input_string,
+                result=None,
+                deps=deps,
+                function_name=function_name,
+                model_name=model_name,
+                latency_seconds=elapsed,
+                error=e,
+            )
             logger.error(
                 "[Run Agent Synchronously] Failed execution",
                 messages=messages,
                 exc_info=True,
                 error=str(e),
+                latency_seconds=elapsed,
                 function_name=function_name,
                 model_name=model_name,
             )
@@ -596,15 +822,173 @@ def get_relevant_pages_for_blog_post(project, meta_description: str, max_pages: 
     return relevant_pages
 
 
+def _is_likely_authority_domain(domain: str) -> bool:
+    domain = (domain or "").lower()
+    if not domain:
+        return False
+
+    blocked_suffixes = (
+        "reddit.com",
+        "quora.com",
+        "pinterest.com",
+        "medium.com",
+        "substack.com",
+        "youtube.com",
+        "youtu.be",
+        "facebook.com",
+        "instagram.com",
+        "tiktok.com",
+        "x.com",
+        "twitter.com",
+    )
+
+    return not any(domain == suffix or domain.endswith(f".{suffix}") for suffix in blocked_suffixes)
+
+
+def _tokenize_relevance_text(value: str) -> set[str]:
+    stopwords = {
+        "about",
+        "after",
+        "also",
+        "because",
+        "from",
+        "have",
+        "into",
+        "more",
+        "that",
+        "their",
+        "them",
+        "they",
+        "this",
+        "what",
+        "when",
+        "where",
+        "with",
+        "your",
+    }
+    tokens = re.findall(r"[a-z0-9]{4,}", (value or "").lower())
+    return {token for token in tokens if token not in stopwords}
+
+
+def _passes_authority_relevance_gate(*, query: str, title: str, text_snippet: str, score) -> bool:
+    query_tokens = _tokenize_relevance_text(query)
+    if not query_tokens:
+        return False
+
+    candidate_tokens = _tokenize_relevance_text(f"{title} {text_snippet}")
+    overlap_ratio = len(query_tokens.intersection(candidate_tokens)) / max(len(query_tokens), 1)
+
+    parsed_score = None
+    if score is not None:
+        try:
+            parsed_score = float(score)
+        except (TypeError, ValueError):
+            parsed_score = None
+
+    if parsed_score is not None and parsed_score < _AUTHORITY_MIN_SCORE:
+        return False
+
+    return overlap_ratio >= _AUTHORITY_MIN_OVERLAP_RATIO
+
+
+def get_external_authority_link_candidates(meta_description: str, max_links: int = 2):
+    """Fetch relevance-gated external authority links for generation planning.
+
+    `max_links` is defensively clamped here as this helper may be called outside
+    generation context with unsanitized input.
+    """
+    max_links = max(1, min(3, int(max_links or 1)))
+
+    if not meta_description or not meta_description.strip():
+        return []
+
+    exa_api_key = (getattr(settings, "EXA_API_KEY", "") or "").strip()
+    if not exa_api_key:
+        return []
+
+    try:
+        response = requests.post(
+            "https://api.exa.ai/search",
+            headers={
+                "x-api-key": exa_api_key,
+                "Content-Type": "application/json",
+            },
+            json={
+                "query": meta_description,
+                "type": "auto",
+                "num_results": max(8, max_links * 4),
+                "contents": {
+                    "highlights": {
+                        "numSentences": 2,
+                    }
+                },
+            },
+            timeout=20,
+        )
+        response.raise_for_status()
+    except requests.RequestException as error:
+        logger.warning(
+            "[ExternalAuthorityLinks] Exa lookup failed",
+            error=str(error),
+            exc_info=True,
+            max_links=max_links,
+        )
+        return []
+
+    results = response.json().get("results", [])
+    selected_links = []
+    seen_urls = set()
+
+    for item in results:
+        url = (item.get("url") or "").strip()
+        if not url or url in seen_urls:
+            continue
+
+        parsed_url = urlparse(url)
+        if parsed_url.scheme not in {"http", "https"}:
+            continue
+
+        domain = (parsed_url.hostname or "").lower()
+        if not _is_likely_authority_domain(domain):
+            continue
+
+        title = (item.get("title") or "").strip()
+        highlights = item.get("highlights") or []
+        text_snippet = " ".join(highlights) if isinstance(highlights, list) else str(highlights)
+        if not _passes_authority_relevance_gate(
+            query=meta_description,
+            title=title,
+            text_snippet=text_snippet,
+            score=item.get("score"),
+        ):
+            continue
+
+        selected_links.append(
+            {
+                "url": url,
+                "title": title or domain,
+                "description": text_snippet[:280],
+                "summary": text_snippet[:400],
+                "link_source": "external",
+            }
+        )
+        seen_urls.add(url)
+
+        if len(selected_links) >= max_links:
+            break
+
+    return selected_links
+
+
 def get_relevant_external_pages_for_blog_post(
     meta_description: str, exclude_project=None, max_pages: int = 3
 ):
     """
-    Find the most relevant pages from other paying users' projects for a blog post.
+    Find the most relevant pages from other link-exchange projects for a blog post.
 
-    This function searches across all project pages from paying users,
-    finds those with analyzed content (embeddings), and returns the most relevant ones
-    based on semantic similarity to the blog post's meta description.
+    This function searches across project pages with embeddings,
+    finds those from projects participating in link exchange, and returns
+    the most relevant ones based on semantic similarity to the blog post's meta description.
 
     Args:
         meta_description: The meta description text to find relevant pages for
@@ -645,40 +1029,35 @@ def get_relevant_external_pages_for_blog_post(
         )
         return ProjectPage.objects.none()
 
-    pages_from_paying_users_query = ProjectPage.objects.filter(
+    eligible_external_pages_query = ProjectPage.objects.filter(
         embedding__isnull=False,
         date_analyzed__isnull=False,
         project__profile__isnull=False,
+        project__particiate_in_link_exchange=True,
     )
 
     if exclude_project:
-        pages_from_paying_users_query = pages_from_paying_users_query.exclude(
-            project=exclude_project
+        eligible_external_pages_query = eligible_external_pages_query.exclude(project=exclude_project)
+
+    eligible_external_pages = eligible_external_pages_query.select_related("project__profile")
+
+    relevant_external_pages = list(
+        eligible_external_pages.order_by(CosineDistance("embedding", meta_description_embedding))[
+            :max_pages
+        ]
+    )
+
+    if not relevant_external_pages:
+        logger.info(
+            "[GetRelevantExternalPages] No pages with embeddings found from link-exchange projects"
         )
-
-    pages_from_paying_users = pages_from_paying_users_query.select_related("project__profile")
-
-    pages_with_active_subscriptions = [
-        page for page in pages_from_paying_users if page.project.profile.has_product_or_subscription
-    ]
-
-    if not pages_with_active_subscriptions:
-        logger.info("[GetRelevantExternalPages] No pages with embeddings found from paying users")
         return ProjectPage.objects.none()
-
-    page_ids = [page.id for page in pages_with_active_subscriptions]
-
-    relevant_external_pages = ProjectPage.objects.filter(id__in=page_ids).order_by(
-        CosineDistance("embedding", meta_description_embedding)
-    )[:max_pages]
 
     logger.info(
         "[GetRelevantExternalPages] Successfully found relevant external pages",
         num_relevant_pages=len(relevant_external_pages),
         max_pages=max_pages,
-        total_pages_with_embeddings=len(pages_with_active_subscriptions),
         meta_description_preview=meta_description[:100],
-        page_ids=page_ids,
     )
 
     return relevant_external_pages

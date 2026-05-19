@@ -1,0 +1,876 @@
+import pytest
+from django.contrib.auth.models import User
+from django.core.cache import cache
+from django.test import override_settings
+from django.urls import reverse
+from django.utils import timezone
+
+from core.models import Project, ProjectPage, ProjectPageAnalysisRun
+from core.seo_analysis import analyze_project_page_seo
+
+
+@pytest.mark.django_db
+def test_project_pages_list_links_to_page_detail_view(client):
+    user = User.objects.create_user(
+        username="pages-list-link-user",
+        email="pages-list-link-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/features",
+        type_ai_guess="product page",
+    )
+
+    client.force_login(user)
+    response = client.get(reverse("project_pages", kwargs={"pk": project.id}))
+
+    assert response.status_code == 200
+    assert reverse(
+        "project_page_detail",
+        kwargs={"project_pk": project.id, "page_pk": page.id},
+    ) in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_project_page_detail_view_allows_paid_non_admin_users(client, monkeypatch):
+    user = User.objects.create_user(
+        username="page-detail-pro-user",
+        email="page-detail-pro-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/features",
+        summary="Feature page summary",
+        type_ai_guess="product page",
+    )
+
+    monkeypatch.setattr(
+        user.profile.__class__,
+        "is_on_pro_plan",
+        property(lambda _self: True),
+    )
+
+    client.force_login(user)
+    response = client.get(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        )
+    )
+
+    content = response.content.decode()
+    assert response.status_code == 200
+    assert "Page Command Center" in content
+    assert "Overview" in content
+    assert "SEO Analysis" in content
+    assert "Backlink Opportunities" in content
+
+
+@pytest.mark.django_db
+def test_project_page_detail_view_blocks_free_users_with_upgrade_cta(client):
+    user = User.objects.create_user(
+        username="page-detail-free-user",
+        email="page-detail-free-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/features",
+        type_ai_guess="product page",
+    )
+
+    client.force_login(user)
+    response = client.get(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        )
+    )
+
+    content = response.content.decode()
+    assert response.status_code == 403
+    assert "This feature is available on Pro" in content
+    assert reverse("user_upgrade_checkout_session", kwargs={"product_name": "Pro - Monthly"}) in content
+
+
+@pytest.mark.django_db
+def test_project_page_detail_view_returns_404_for_non_owner(client):
+    owner = User.objects.create_user(
+        username="page-detail-owner-user",
+        email="page-detail-owner-user@example.com",
+        password="secret",
+    )
+    other = User.objects.create_user(
+        username="page-detail-other-user",
+        email="page-detail-other-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=owner.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/features",
+        type_ai_guess="product page",
+    )
+
+    client.force_login(other)
+    response = client.get(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        )
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.django_db
+def test_project_page_detail_view_renders_deterministic_seo_analysis(client, monkeypatch):
+    user = User.objects.create_user(
+        username="page-detail-seo-analysis-user",
+        email="page-detail-seo-analysis-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/features",
+        title="SEO command center page title for deterministic checks",
+        description="Too short",
+        summary="This summary explains intent and page value with enough detail to pass deterministic summary checks.",
+        markdown_content="\n".join(
+            [
+                "# Feature overview",
+                "Our platform helps SaaS teams improve content operations.",
+                "[Pricing](/pricing)",
+                "[Use cases](https://example.com/use-cases)",
+                " ".join(["seo"] * 260),
+            ]
+        ),
+        date_analyzed=timezone.now(),
+        type_ai_guess="product page",
+    )
+
+    monkeypatch.setattr(
+        user.profile.__class__,
+        "is_on_pro_plan",
+        property(lambda _self: True),
+    )
+
+    client.force_login(user)
+    response = client.get(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        )
+    )
+
+    content = response.content.decode()
+    expected_analysis = analyze_project_page_seo(page)
+
+    assert response.status_code == 200
+    assert "Overall v1 score:" in content
+    assert f"{expected_analysis['score']}/100" in content
+    assert "Meta description length" in content
+    assert "Why it matters:" in content
+    assert "How to fix:" in content
+    assert "JSON-LD recommendations" in content
+    assert "Detected schema summary:" in content
+    assert "Suggested starter block (copy and customize): WebPage" in content
+
+
+@pytest.mark.django_db
+def test_project_page_detail_view_renders_backlink_candidates_for_pro_users(client, monkeypatch):
+    user = User.objects.create_superuser(
+        username="page-detail-backlink-user",
+        email="page-detail-backlink-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/features",
+        title="Features",
+        summary="Feature page summary",
+        type_ai_guess="product page",
+        date_analyzed=timezone.now(),
+    )
+
+    monkeypatch.setattr(
+        "core.views.get_cached_backlink_prospects",
+        lambda _project_page_id: [
+            {
+                "url": "https://developers.google.com/search/docs/fundamentals/seo-starter-guide",
+                "domain": "developers.google.com",
+                "title": "Google SEO Starter Guide",
+                "snippet": "Technical SEO indexing best practices",
+                "topic": "technical seo",
+                "source": "exa",
+                "relevance_score": 0.92,
+                "discovered_at": "2026-03-19T00:00:00+00:00",
+                "explanation": {"summary": "Topical and authority signals align well."},
+                "contact_methods": [
+                    {
+                        "type": "contact_page_url",
+                        "label": "Contact page",
+                        "status": "found",
+                        "confidence": "high",
+                        "value": "https://developers.google.com/contact",
+                        "source_trace": {
+                            "evidence": "Anchor text 'Contact us' links to contact-related URL.",
+                        },
+                    },
+                    {
+                        "type": "public_email",
+                        "label": "Public email",
+                        "status": "not_found",
+                        "confidence": "none",
+                        "value": "",
+                        "source_trace": {
+                            "evidence": "No reliable public signal detected.",
+                        },
+                    },
+                ],
+            }
+        ],
+    )
+
+    client.force_login(user)
+    response = client.get(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        )
+    )
+
+    content = response.content.decode()
+    assert response.status_code == 200
+    assert "Google SEO Starter Guide" in content
+    assert "1 opportunities shown" in content
+    assert "Sort" in content
+    assert "Open source page" in content
+    assert "Copy Contact page" in content
+    assert "Relevance 0.92" in content
+    assert "contact_method_copied" in content
+
+
+@pytest.mark.django_db
+def test_project_page_detail_view_filters_backlink_candidates_to_contactable_only(client, monkeypatch):
+    user = User.objects.create_superuser(
+        username="page-detail-backlink-filter-user",
+        email="page-detail-backlink-filter-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/features",
+        type_ai_guess="product page",
+        date_analyzed=timezone.now(),
+    )
+
+    monkeypatch.setattr(
+        "core.views.get_cached_backlink_prospects",
+        lambda _project_page_id: [
+            {
+                "url": "https://example.org/resources/seo",
+                "domain": "example.org",
+                "title": "SEO resources",
+                "snippet": "Curated resources",
+                "topic": "seo",
+                "source": "exa",
+                "relevance_score": 0.9,
+                "contact_methods": [
+                    {
+                        "type": "contact_page_url",
+                        "label": "Contact page",
+                        "status": "found",
+                        "confidence": "high",
+                        "value": "https://example.org/contact",
+                        "source_trace": {},
+                    }
+                ],
+            },
+            {
+                "url": "https://no-contact.example.com/blog/seo",
+                "domain": "no-contact.example.com",
+                "title": "SEO blog",
+                "snippet": "No contact signal",
+                "topic": "seo",
+                "source": "exa",
+                "relevance_score": 0.8,
+                "contact_methods": [
+                    {
+                        "type": "public_email",
+                        "label": "Public email",
+                        "status": "not_found",
+                        "confidence": "none",
+                        "value": "",
+                        "source_trace": {},
+                    }
+                ],
+            },
+        ],
+    )
+
+    client.force_login(user)
+    response = client.get(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        )
+        + "?backlink_has_contact=1"
+    )
+
+    content = response.content.decode()
+    assert response.status_code == 200
+    assert "SEO resources" in content
+    assert "SEO blog" not in content
+    assert "1 opportunities shown" in content
+
+
+@pytest.mark.django_db
+def test_project_page_detail_view_shows_filter_empty_state_when_no_matches(client, monkeypatch):
+    user = User.objects.create_superuser(
+        username="page-detail-backlink-filter-empty-user",
+        email="page-detail-backlink-filter-empty-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/features",
+        type_ai_guess="product page",
+        date_analyzed=timezone.now(),
+    )
+
+    monkeypatch.setattr(
+        "core.views.get_cached_backlink_prospects",
+        lambda _project_page_id: [
+            {
+                "url": "https://no-contact.example.com/blog/seo",
+                "domain": "no-contact.example.com",
+                "title": "SEO blog",
+                "snippet": "No contact signal",
+                "topic": "seo",
+                "source": "exa",
+                "relevance_score": 0.8,
+                "explanation": None,
+                "contact_methods": [
+                    {
+                        "type": "public_email",
+                        "label": "Public email",
+                        "status": "not_found",
+                        "confidence": "none",
+                        "value": "",
+                        "source_trace": {},
+                    }
+                ],
+            }
+        ],
+    )
+
+    client.force_login(user)
+    response = client.get(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        )
+        + "?backlink_has_contact=1"
+    )
+
+    content = response.content.decode()
+    assert response.status_code == 200
+    assert "No opportunities match the current filters." in content
+
+
+@pytest.mark.django_db
+def test_project_page_detail_view_backlink_refresh_action_queues_task(client, monkeypatch):
+    user = User.objects.create_user(
+        username="page-detail-backlink-refresh-user",
+        email="page-detail-backlink-refresh-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/features",
+        type_ai_guess="product page",
+        date_analyzed=timezone.now(),
+    )
+
+    scheduled_tasks = []
+
+    def _fake_async_task(*args, **kwargs):
+        scheduled_tasks.append((args, kwargs))
+        return "task-id"
+
+    monkeypatch.setattr(user.profile.__class__, "is_on_pro_plan", property(lambda _self: True))
+    monkeypatch.setattr("core.views.async_task", _fake_async_task)
+
+    client.force_login(user)
+    response = client.post(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        ),
+        data={"action": "run_backlink_refresh"},
+    )
+
+    assert response.status_code == 302
+    assert len(scheduled_tasks) == 1
+    assert scheduled_tasks[0][0][0] == "core.tasks.refresh_backlink_prospects_cache"
+
+
+@pytest.mark.django_db
+def test_project_page_detail_view_supports_explicit_error_state_for_shell(client):
+    user = User.objects.create_superuser(
+        username="page-detail-state-user",
+        email="page-detail-state-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/features",
+        type_ai_guess="product page",
+    )
+
+    client.force_login(user)
+    response = client.get(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        )
+        + "?state=error"
+    )
+
+    content = response.content.decode()
+    assert response.status_code == 200
+    assert "We could not load this page overview right now. Please try again." in content
+    assert "SEO analysis failed to load. Please retry with “Refresh analysis”." in content
+    assert "Could not load backlink opportunities. Please retry." in content
+
+
+@pytest.mark.django_db
+def test_project_page_detail_view_refresh_action_redirects_after_success(client, monkeypatch):
+    user = User.objects.create_user(
+        username="page-detail-refresh-success-user",
+        email="page-detail-refresh-success-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/features",
+        type_ai_guess="product page",
+    )
+
+    scheduled_tasks = []
+
+    def _fake_async_task(*args, **kwargs):
+        scheduled_tasks.append((args, kwargs))
+        return "task-id"
+
+    monkeypatch.setattr(user.profile.__class__, "is_on_pro_plan", property(lambda _self: True))
+    monkeypatch.setattr("core.views.async_task", _fake_async_task)
+
+    client.force_login(user)
+    response = client.post(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        ),
+        data={"action": "run_seo_analysis"},
+    )
+
+    assert response.status_code == 302
+    assert response.url == reverse(
+        "project_page_detail",
+        kwargs={"project_pk": project.id, "page_pk": page.id},
+    )
+    assert len(scheduled_tasks) == 1
+    assert scheduled_tasks[0][0][0] == "core.tasks.execute_project_page_analysis_run"
+    assert ProjectPageAnalysisRun.objects.filter(project_page=page).count() == 1
+
+
+@pytest.mark.django_db
+def test_project_page_detail_view_refresh_action_redirects_after_failure(client, monkeypatch):
+    user = User.objects.create_user(
+        username="page-detail-refresh-failed-user",
+        email="page-detail-refresh-failed-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/features",
+        type_ai_guess="product page",
+    )
+    ProjectPageAnalysisRun.objects.create(
+        project=project,
+        project_page=page,
+        requested_by=user.profile,
+        status=ProjectPageAnalysisRun.Status.FAILED,
+        finished_at=timezone.now(),
+    )
+
+    scheduled_tasks = []
+
+    def _fake_async_task(*args, **kwargs):
+        scheduled_tasks.append((args, kwargs))
+        return "task-id"
+
+    monkeypatch.setattr(user.profile.__class__, "is_on_pro_plan", property(lambda _self: True))
+    monkeypatch.setattr("core.views.async_task", _fake_async_task)
+
+    client.force_login(user)
+    response = client.post(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        ),
+        data={"action": "run_seo_analysis"},
+    )
+
+    assert response.status_code == 302
+    assert response.url == reverse(
+        "project_page_detail",
+        kwargs={"project_pk": project.id, "page_pk": page.id},
+    )
+    assert len(scheduled_tasks) == 1
+    assert ProjectPageAnalysisRun.objects.filter(project_page=page).count() == 2
+
+
+@pytest.mark.django_db
+def test_project_page_detail_view_refresh_action_forbidden_for_free_users(client):
+    user = User.objects.create_user(
+        username="page-detail-refresh-free-user",
+        email="page-detail-refresh-free-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example Project",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/features",
+        type_ai_guess="product page",
+    )
+
+    client.force_login(user)
+    response = client.post(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        ),
+        data={"action": "run_seo_analysis"},
+    )
+
+    assert response.status_code == 403
+
+
+@pytest.mark.django_db
+def test_project_page_detail_view_shows_failed_run_and_retry_action(client, monkeypatch):
+    user = User.objects.create_user(
+        username="page-detail-failed-run-user",
+        email="page-detail-failed-run-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/page",
+        type_ai_guess="product page",
+    )
+
+    ProjectPageAnalysisRun.objects.create(
+        project=project,
+        project_page=page,
+        requested_by=user.profile,
+        status=ProjectPageAnalysisRun.Status.FAILED,
+        failure_message="Failed to fetch page content for SEO analysis.",
+    )
+
+    monkeypatch.setattr(
+        user.profile.__class__,
+        "is_on_pro_plan",
+        property(lambda _self: True),
+    )
+    client.force_login(user)
+
+    response = client.get(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        )
+    )
+
+    content = response.content.decode()
+    assert response.status_code == 200
+    assert "Latest run status: Failed" in content
+    assert "Retry analysis" in content
+    assert "Use “Retry analysis” after addressing the issue." in content
+
+
+@pytest.mark.django_db
+def test_project_page_detail_view_dedupes_when_active_run_exists(client, monkeypatch):
+    user = User.objects.create_user(
+        username="page-detail-dedupe-user",
+        email="page-detail-dedupe-user@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url="https://example.com",
+        name="Example",
+    )
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/page",
+        type_ai_guess="product page",
+    )
+
+    ProjectPageAnalysisRun.objects.create(
+        project=project,
+        project_page=page,
+        requested_by=user.profile,
+        status=ProjectPageAnalysisRun.Status.RUNNING,
+    )
+
+    monkeypatch.setattr(
+        user.profile.__class__,
+        "is_on_pro_plan",
+        property(lambda _self: True),
+    )
+
+    client.force_login(user)
+    response = client.post(
+        reverse(
+            "project_page_detail",
+            kwargs={"project_pk": project.id, "page_pk": page.id},
+        ),
+        data={"action": "run_seo_analysis"},
+        follow=True,
+    )
+
+    assert response.status_code == 200
+    assert (
+        ProjectPageAnalysisRun.objects.filter(
+            project_page=page,
+            status__in=[
+                ProjectPageAnalysisRun.Status.QUEUED,
+                ProjectPageAnalysisRun.Status.RUNNING,
+            ],
+        ).count()
+        == 1
+    )
+    assert "Analysis is already running for this page" in response.content.decode()
+
+
+@pytest.mark.django_db
+@override_settings(DETAIL_VIEW_SEO_ANALYSIS_ENABLED=False)
+def test_project_page_detail_view_disables_seo_module(client, monkeypatch):
+    user = User.objects.create_user("seo-flag-user", "seo-flag@example.com", "secret")
+    project = Project.objects.create(profile=user.profile, url="https://example.com", name="Example")
+    page = ProjectPage.objects.create(project=project, url="https://example.com/page")
+
+    monkeypatch.setattr(user.profile.__class__, "is_on_pro_plan", property(lambda _self: True))
+
+    client.force_login(user)
+    get_response = client.get(
+        reverse("project_page_detail", kwargs={"project_pk": project.id, "page_pk": page.id})
+    )
+    assert "SEO analysis is currently disabled by feature flag." in get_response.content.decode()
+
+    post_response = client.post(
+        reverse("project_page_detail", kwargs={"project_pk": project.id, "page_pk": page.id}),
+        data={"action": "run_seo_analysis"},
+        follow=True,
+    )
+    assert post_response.status_code == 200
+    assert "temporarily disabled by feature flag" in post_response.content.decode().lower()
+
+
+@pytest.mark.django_db
+@override_settings(DETAIL_VIEW_BACKLINK_DISCOVERY_ENABLED=False)
+def test_project_page_detail_view_disables_backlink_module(client, monkeypatch):
+    user = User.objects.create_user("backlink-flag-user", "backlink-flag@example.com", "secret")
+    project = Project.objects.create(profile=user.profile, url="https://example.com", name="Example")
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/page",
+        date_analyzed=timezone.now(),
+    )
+
+    monkeypatch.setattr(user.profile.__class__, "is_on_pro_plan", property(lambda _self: True))
+
+    client.force_login(user)
+    get_response = client.get(
+        reverse("project_page_detail", kwargs={"project_pk": project.id, "page_pk": page.id})
+    )
+    assert "Backlink discovery is currently disabled by feature flag." in get_response.content.decode()
+
+
+@pytest.mark.django_db
+@override_settings(DETAIL_VIEW_SEO_ANALYSIS_DAILY_LIMIT=1)
+def test_project_page_detail_view_enforces_daily_seo_quota(client, monkeypatch):
+    cache.clear()
+    user = User.objects.create_user("seo-quota-user", "seo-quota@example.com", "secret")
+    project = Project.objects.create(profile=user.profile, url="https://example.com", name="Example")
+    page = ProjectPage.objects.create(project=project, url="https://example.com/page")
+
+    monkeypatch.setattr(user.profile.__class__, "is_on_pro_plan", property(lambda _self: True))
+    monkeypatch.setattr("core.views.async_task", lambda *_args, **_kwargs: "task-id")
+
+    client.force_login(user)
+    first = client.post(
+        reverse("project_page_detail", kwargs={"project_pk": project.id, "page_pk": page.id}),
+        data={"action": "run_seo_analysis"},
+    )
+    second = client.post(
+        reverse("project_page_detail", kwargs={"project_pk": project.id, "page_pk": page.id}),
+        data={"action": "run_seo_analysis"},
+        follow=True,
+    )
+
+    assert first.status_code == 302
+    assert second.status_code == 200
+    assert ProjectPageAnalysisRun.objects.filter(project_page=page).count() == 1
+
+
+@pytest.mark.django_db
+def test_project_page_detail_view_renders_staff_debug_block(client, monkeypatch):
+    staff = User.objects.create_superuser("staff-debug", "staff-debug@example.com", "secret")
+    project = Project.objects.create(profile=staff.profile, url="https://example.com", name="Example")
+    page = ProjectPage.objects.create(project=project, url="https://example.com/page")
+
+    ProjectPageAnalysisRun.objects.create(
+        project=project,
+        project_page=page,
+        requested_by=staff.profile,
+        status=ProjectPageAnalysisRun.Status.FAILED,
+        failure_message="Exploded",
+        failure_details={"error_type": "TimeoutError", "context": "provider"},
+    )
+    cache.set(
+        f"project-page:{page.id}:backlink-prospects-debug-v1",
+        {"status": "failed", "reason": "provider_request_exception"},
+        timeout=300,
+    )
+
+    monkeypatch.setattr(staff.profile.__class__, "is_on_pro_plan", property(lambda _self: True))
+
+    client.force_login(staff)
+    response = client.get(
+        reverse("project_page_detail", kwargs={"project_pk": project.id, "page_pk": page.id})
+    )
+
+    content = response.content.decode()
+    assert response.status_code == 200
+    assert "Admin debug visibility" in content
+    assert "Recent failed SEO analysis runs" in content
+    assert "provider_request_exception" in content
+
+
+@pytest.mark.django_db
+def test_project_page_detail_view_tracks_open_and_opportunities_events(client, monkeypatch):
+    user = User.objects.create_superuser("telemetry-user", "telemetry-user@example.com", "secret")
+    project = Project.objects.create(profile=user.profile, url="https://example.com", name="Example")
+    page = ProjectPage.objects.create(
+        project=project,
+        url="https://example.com/page",
+        date_analyzed=timezone.now(),
+    )
+
+    monkeypatch.setattr(
+        "core.views.get_cached_backlink_prospects",
+        lambda _project_page_id: [
+            {
+                "url": "https://example.org/resources",
+                "domain": "example.org",
+                "title": "Resource",
+                "snippet": "x",
+                "topic": "seo",
+                "source": "exa",
+                "relevance_score": 0.8,
+                "contact_methods": [],
+            }
+        ],
+    )
+
+    tracked = []
+
+    def _fake_enqueue_track_event(**kwargs):
+        tracked.append(kwargs)
+
+    monkeypatch.setattr("core.views.enqueue_track_event", _fake_enqueue_track_event)
+
+    client.force_login(user)
+    response = client.get(
+        reverse("project_page_detail", kwargs={"project_pk": project.id, "page_pk": page.id})
+    )
+
+    assert response.status_code == 200
+    emitted_names = {event["event_name"] for event in tracked}
+    assert "detail_view_opened" in emitted_names
+    assert "opportunities_viewed" in emitted_names
+    assert all(event["properties"]["project_page_id"] == page.id for event in tracked)

@@ -2,286 +2,233 @@
 {% load webpack_loader static socialaccount %}
 
 {% block content %}
-<div class="isolate relative px-6 mt-10 lg:px-8">
-  <div class="mx-auto text-center">
-    <!-- Hero Section -->
-    <div class="relative bg-white">
-      <div class="px-6 py-10 mx-auto max-w-7xl">
-        <div class="mx-auto max-w-3xl text-center">
-          <h1 class="mb-4 text-4xl font-bold tracking-tight text-gray-900 sm:text-5xl">
-            Your Content Team <br/>
-            <span class="text-red-600">on Auto-Pilot</span>
-          </h1>
-          <div class="flex flex-wrap gap-y-2 gap-x-6 justify-center items-center mt-8 text-lg text-gray-700">
-            <div class="flex gap-x-2 items-center">
-              <svg class="flex-none w-5 h-5 text-green-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-              </svg>
-              <span class="whitespace-nowrap"><span class="font-bold">Automatic</span> content generation</span>
-            </div>
-            <div class="flex gap-x-2 items-center">
-              <svg class="flex-none w-5 h-5 text-green-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-              </svg>
-              <span class="whitespace-nowrap"><span class="font-bold">One-click</span> publishing</span>
-            </div>
-            <div class="flex gap-x-2 items-center">
-              <svg class="flex-none w-5 h-5 text-green-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-              </svg>
-              <span class="whitespace-nowrap">Optimized to <span class="font-bold">rank first</span></span>
-            </div>
-          </div>
-          <div class="flex flex-wrap gap-4 justify-center items-center mt-8">
-            <a href="{% url 'account_signup' %}" class="inline-flex gap-x-2 items-center px-6 py-3 text-base font-medium text-white bg-red-600 rounded-full shadow-sm hover:bg-red-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600">
-              <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
-                <path d="M11 3a1 1 0 10-2 0v1a1 1 0 102 0V3zM15.657 5.757a1 1 0 00-1.414-1.414l-.707.707a1 1 0 001.414 1.414l.707-.707zM18 10a1 1 0 01-1 1h-1a1 1 0 110-2h1a1 1 0 011 1zM5.05 6.464A1 1 0 106.464 5.05l-.707-.707a1 1 0 00-1.414 1.414l.707.707zM5 10a1 1 0 01-1 1H3a1 1 0 110-2h1a1 1 0 011 1zM8 16v-1h4v1a2 2 0 11-4 0zM12 14c.015-.34.208-.646.477-.859a4 4 0 10-4.954 0c.27.213.462.519.476.859h4.002z"/>
-              </svg>
-              <span>Start with 6 free articles</span>
-            </a>
-            <form method="post" action="{% provider_login_url 'google' %}">
-              {% csrf_token %}
-              <button type="submit" class="inline-flex gap-x-2 items-center px-6 py-3 text-base font-medium text-gray-700 bg-white rounded-full border-2 border-gray-300 shadow-sm hover:bg-gray-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-600">
-                <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                  <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                  <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-                  <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-                </svg>
-                <span>Sign up with Google</span>
-              </button>
-            </form>
-          </div>
-          <div class="flex justify-center mt-16">
-            <div class="w-full max-w-3xl p-2.5 bg-white/[0.08] rounded-lg shadow-[0_0_30px_rgba(220,38,38,0.5)]">
-              <iframe class="w-full rounded-lg aspect-video" src="https://www.youtube.com/embed/99KCMqVV6rQ?si=cBNrJhnqIW0QClVK" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+<div class="relative isolate overflow-hidden px-4 sm:px-6 lg:px-8">
+  <div class="pointer-events-none absolute inset-x-0 top-0 -z-10 h-[30rem] bg-[radial-gradient(circle_at_top,rgba(14,165,233,0.16),transparent_56%)]"></div>
+  <div class="pointer-events-none absolute -left-24 top-28 -z-10 h-80 w-80 rounded-full bg-red-500/10 blur-3xl"></div>
+  <div class="pointer-events-none absolute -right-20 top-44 -z-10 h-80 w-80 rounded-full bg-cyan-500/10 blur-3xl"></div>
 
-    <!-- Logo Cloud / Social Proof -->
-    <div class="py-10 bg-gradient-to-b from-white to-gray-50 sm:py-20">
-      <div class="px-6 mx-auto max-w-7xl lg:px-8">
-        <div class="mx-auto max-w-3xl text-center">
-          <div class="inline-flex gap-x-2 items-center px-4 py-2 mb-4 text-sm font-medium text-red-700 bg-red-50 rounded-full border border-red-200">
-            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
-              <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
+  <section class="mx-auto mt-4 max-w-7xl">
+    <div class="rounded-3xl border border-slate-200 bg-white/90 px-6 py-14 shadow-[0_20px_80px_rgba(15,23,42,0.10)] backdrop-blur-sm sm:px-10 lg:px-14">
+      <div class="mx-auto max-w-4xl text-center">
+        <div class="inline-flex items-center gap-x-2 rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-700">
+          <span class="inline-block h-2 w-2 rounded-full bg-emerald-500"></span>
+          Agent-powered SEO publishing system
+        </div>
+
+        <h1 class="mt-6 text-4xl font-semibold tracking-tight text-slate-900 sm:text-5xl lg:text-6xl">
+          Your Content Team <br/>
+          <span class="bg-gradient-to-r from-red-600 via-fuchsia-600 to-sky-600 bg-clip-text text-transparent">on Auto-Pilot</span>
+        </h1>
+
+        <div class="mt-8 flex flex-wrap items-center justify-center gap-x-6 gap-y-3 text-base text-slate-700 sm:text-lg">
+          <div class="flex items-center gap-x-2">
+            <svg class="h-5 w-5 flex-none text-emerald-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
             </svg>
-            <span>Trusted by Content Creators</span>
+            <span class="whitespace-nowrap"><span class="font-bold text-slate-900">Automatic</span> content generation</span>
           </div>
-          <h2 class="text-2xl font-bold tracking-tight leading-tight text-gray-900 sm:text-3xl">
-            Powering content creation for<br/>
-            <span class="text-red-600">top-tier newsletters and indie businesses</span>
-          </h2>
-        </div>
-        <div class="grid grid-cols-2 gap-6 mx-auto mt-12 max-w-lg sm:gap-8 sm:grid-cols-3 lg:max-w-6xl lg:grid-cols-4">
-            <div class="flex flex-col col-span-1 gap-y-4 items-center p-6 text-center bg-white rounded-xl border border-gray-200 shadow-sm transition-all duration-200 hover:shadow-md hover:border-red-200">
-              <a class="w-auto h-24" href="https://isitketo.org">
-                  <img
-                      class="pt-2"
-                      src="{% static 'vendors/images/isitketo.png' %}"
-                      alt="Is It Keto"
-                    >
-                </a>
-                <a href="https://isitketo.org" class="text-sm font-semibold text-gray-900 transition-colors hover:text-red-600">Is It Keto</a>
-            </div>
-            <div class="flex flex-col col-span-1 gap-y-4 items-center p-6 text-center bg-white rounded-xl border border-gray-200 shadow-sm transition-all duration-200 hover:shadow-md hover:border-red-200">
-                <a href="https://builtwithdjango.com">
-                    <img class="object-cover w-24 h-24 bg-gray-100 rounded-full" src="{% static 'vendors/images/bwd.png' %}" alt="Built with Django">
-                </a>
-                <a href="https://builtwithdjango.com" class="text-sm font-semibold text-gray-900 transition-colors hover:text-red-600">Built with Django</a>
-            </div>
-            <div class="flex flex-col col-span-1 gap-y-4 items-center p-6 text-center bg-white rounded-xl border border-gray-200 shadow-sm transition-all duration-200 hover:shadow-md hover:border-red-200">
-                <a href="https://gettjalerts.com">
-                    <img src="{% static 'vendors/images/gettjalerts.png' %}" alt="Tech Job Alerts">
-                </a>
-                <a href="https://gettjalerts.com" class="text-sm font-semibold text-gray-900 transition-colors hover:text-red-600">Tech Job Alerts</a>
-            </div>
-            <div class="flex flex-col col-span-1 gap-y-4 items-center p-6 text-center bg-white rounded-xl border border-gray-200 shadow-sm transition-all duration-200 hover:shadow-md hover:border-red-200">
-                <a href="https://porkalpine.org/">
-                    <div class="flex justify-center items-center w-24 h-24 bg-gray-100 rounded-full">
-                        <img
-                          class="p-1 w-16 h-16"
-                          src="{% static 'vendors/images/porkalpine.png' %}"
-                          alt="PorkAlpine"
-                        />
-                    </div>
-                </a>
-                <a href="https://porkalpine.org/" class="text-sm font-semibold text-gray-900 transition-colors hover:text-red-600">
-                  PorkAlpine
-                </a>
-            </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Features Section -->
-    <div class="px-6 py-12 mx-auto max-w-7xl sm:py-16">
-        <div class="mx-auto max-w-3xl text-center">
-            <h2 class="text-base font-medium leading-7 text-red-600">Complete Content Solution</h2>
-            <p class="mt-2 text-3xl font-bold tracking-tight text-gray-900 sm:text-4xl">Blog Content That Converts</p>
-            <p class="mt-4 text-lg leading-8 text-gray-600">
-                AI-powered content that ranks and converts
-            </p>
+          <div class="flex items-center gap-x-2">
+            <svg class="h-5 w-5 flex-none text-emerald-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+            </svg>
+            <span class="whitespace-nowrap"><span class="font-bold text-slate-900">One-click</span> publishing</span>
+          </div>
+          <div class="flex items-center gap-x-2">
+            <svg class="h-5 w-5 flex-none text-emerald-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+            </svg>
+            <span class="whitespace-nowrap">Optimized to <span class="font-bold text-slate-900">rank first</span></span>
+          </div>
         </div>
 
-        <div class="grid gap-8 mt-12 text-left md:grid-cols-2">
-            <!-- Feature 1: AI Blog Generation -->
-            <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm transition-colors hover:border-red-200">
-                <div class="flex gap-x-3 items-center mb-4">
-                    <div class="flex justify-center items-center w-10 h-10 bg-red-100 rounded-lg">
-                        <svg class="w-6 h-6 text-red-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
-                        </svg>
-                    </div>
-                    <h3 class="text-xl font-bold tracking-tight text-gray-900">AI Content Creation</h3>
-                </div>
-                <ul class="space-y-2 text-base text-gray-600">
-                    <li class="flex gap-x-2">
-                        <svg class="flex-none mt-1 w-5 h-5 text-red-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
-                        <span>SEO-optimized blog posts</span>
-                    </li>
-                    <li class="flex gap-x-2">
-                        <svg class="flex-none mt-1 w-5 h-5 text-red-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
-                        <span>Brand-matched tone</span>
-                    </li>
-                </ul>
-            </div>
-
-            <!-- Feature 2: Content Strategy -->
-            <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm transition-colors hover:border-red-200">
-                <div class="flex gap-x-3 items-center mb-4">
-                    <div class="flex justify-center items-center w-10 h-10 bg-red-100 rounded-lg">
-                        <svg class="w-6 h-6 text-red-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3m0 0l.5 1.5m-.5-1.5h-9.5m0 0l-.5 1.5M9 11.25v1.5M12 9v3.75m3-6v6" />
-                        </svg>
-                    </div>
-                    <h3 class="text-xl font-bold tracking-tight text-gray-900">Smart Strategy</h3>
-                </div>
-                <ul class="space-y-2 text-base text-gray-600">
-                    <li class="flex gap-x-2">
-                        <svg class="flex-none mt-1 w-5 h-5 text-red-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
-                        <span>Keyword research</span>
-                    </li>
-                    <li class="flex gap-x-2">
-                        <svg class="flex-none mt-1 w-5 h-5 text-red-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
-                        <span>Content scheduling</span>
-                    </li>
-                </ul>
-            </div>
-
-            <!-- Feature 3: SEO Optimization -->
-            <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm transition-colors hover:border-red-200">
-                <div class="flex gap-x-3 items-center mb-4">
-                    <div class="flex justify-center items-center w-10 h-10 bg-red-100 rounded-lg">
-                        <svg class="w-6 h-6 text-red-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
-                        </svg>
-                    </div>
-                    <h3 class="text-xl font-bold tracking-tight text-gray-900">SEO Optimized</h3>
-                </div>
-                <ul class="space-y-2 text-base text-gray-600">
-                    <li class="flex gap-x-2">
-                        <svg class="flex-none mt-1 w-5 h-5 text-red-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
-                        <span>Keyword optimization</span>
-                    </li>
-                    <li class="flex gap-x-2">
-                        <svg class="flex-none mt-1 w-5 h-5 text-red-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
-                        <span>Meta tags generation</span>
-                    </li>
-                </ul>
-            </div>
-
-            <!-- Feature 4: Efficiency & Scale -->
-            <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm transition-colors hover:border-red-200">
-                <div class="flex gap-x-3 items-center mb-4">
-                    <div class="flex justify-center items-center w-10 h-10 bg-red-100 rounded-lg">
-                        <svg class="w-6 h-6 text-red-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
-                        </svg>
-                    </div>
-                    <h3 class="text-xl font-bold tracking-tight text-gray-900">Scale Effortlessly</h3>
-                </div>
-                <ul class="space-y-2 text-base text-gray-600">
-                    <li class="flex gap-x-2">
-                        <svg class="flex-none mt-1 w-5 h-5 text-red-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
-                        <span>Multiple posts in minutes</span>
-                    </li>
-                    <li class="flex gap-x-2">
-                        <svg class="flex-none mt-1 w-5 h-5 text-red-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
-                        <span>Consistent quality</span>
-                    </li>
-                </ul>
-            </div>
+        <div class="mt-10 flex flex-wrap items-center justify-center gap-4">
+          <a href="{% url 'account_signup' %}" class="inline-flex items-center gap-x-2 rounded-full bg-slate-900 px-6 py-3 text-base font-semibold text-white shadow-lg shadow-slate-900/20 transition hover:bg-slate-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700">
+            <svg class="h-5 w-5" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+              <path d="M11 3a1 1 0 10-2 0v1a1 1 0 102 0V3zM15.657 5.757a1 1 0 00-1.414-1.414l-.707.707a1 1 0 001.414 1.414l.707-.707zM18 10a1 1 0 01-1 1h-1a1 1 0 110-2h1a1 1 0 011 1zM5.05 6.464A1 1 0 106.464 5.05l-.707-.707a1 1 0 00-1.414 1.414l.707.707zM5 10a1 1 0 01-1 1H3a1 1 0 110-2h1a1 1 0 011 1zM8 16v-1h4v1a2 2 0 11-4 0zM12 14c.015-.34.208-.646.477-.859a4 4 0 10-4.954 0c.27.213.462.519.476.859h4.002z"/>
+            </svg>
+            <span>Start with 6 free articles</span>
+          </a>
+          <form method="post" action="{% provider_login_url 'google' %}">
+            {% csrf_token %}
+            <button type="submit" class="inline-flex items-center gap-x-2 rounded-full border border-slate-300 bg-white px-6 py-3 text-base font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700">
+              <svg class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+                <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+                <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+                <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+              </svg>
+              <span>Sign up with Google</span>
+            </button>
+          </form>
         </div>
-    </div>
 
-    <!-- How It Works Section -->
-    <div class="px-6 py-12 bg-gray-50 sm:py-16">
-        <div class="mx-auto max-w-5xl">
-            <div class="text-center">
-                <h2 class="text-base font-medium leading-7 text-red-600">Simple Process</h2>
-                <p class="mt-2 text-3xl font-bold tracking-tight text-gray-900 sm:text-4xl">How It Works</p>
-                <p class="mt-4 text-lg leading-8 text-gray-600">
-                    From setup to published content in minutes
-                </p>
-            </div>
-            <div class="grid grid-cols-1 gap-6 mt-12 text-left sm:grid-cols-3">
-                <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm transition-colors hover:border-red-200">
-                    <div class="flex justify-center items-center mb-4 w-12 h-12 text-lg font-bold text-white bg-red-600 rounded-full">1</div>
-                    <h4 class="text-lg font-bold text-gray-900">Add Your Website</h4>
-                    <p class="mt-2 text-gray-600">Enter your URL and AI analyzes your niche</p>
-                </div>
-                <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm transition-colors hover:border-red-200">
-                    <div class="flex justify-center items-center mb-4 w-12 h-12 text-lg font-bold text-white bg-red-600 rounded-full">2</div>
-                    <h4 class="text-lg font-bold text-gray-900">Generate Content</h4>
-                    <p class="mt-2 text-gray-600">AI creates SEO-optimized blog posts</p>
-                </div>
-                <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm transition-colors hover:border-red-200">
-                    <div class="flex justify-center items-center mb-4 w-12 h-12 text-lg font-bold text-white bg-red-600 rounded-full">3</div>
-                    <h4 class="text-lg font-bold text-gray-900">Publish & Grow</h4>
-                    <p class="mt-2 text-gray-600">One-click publish and drive traffic</p>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- CTA Section -->
-    <div class="bg-white" id="contact-sales">
-      <div class="px-6 py-12 mx-auto max-w-7xl sm:py-16 lg:px-8">
-        <div class="overflow-hidden relative px-6 py-12 bg-gray-800 shadow-xl sm:rounded-lg sm:px-12 sm:py-16">
-          <div class="mx-auto max-w-2xl text-center">
-            <h2 class="text-3xl font-bold tracking-tight text-white sm:text-4xl">Ready to Transform Your Content Strategy?</h2>
-            <p class="mt-4 text-lg leading-8 text-gray-300">
-              Stop struggling with content creation and let AI generate engaging blog posts that drive results.
-            </p>
-            <div class="flex flex-wrap gap-4 justify-center items-center mt-8">
-              <a href="{% url 'account_signup' %}" class="inline-flex gap-x-2 items-center px-6 py-3 text-base font-medium text-white bg-red-600 rounded-full shadow-sm hover:bg-red-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600">
-                <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M11 3a1 1 0 10-2 0v1a1 1 0 102 0V3zM15.657 5.757a1 1 0 00-1.414-1.414l-.707.707a1 1 0 001.414 1.414l.707-.707zM18 10a1 1 0 01-1 1h-1a1 1 0 110-2h1a1 1 0 011 1zM5.05 6.464A1 1 0 106.464 5.05l-.707-.707a1 1 0 00-1.414 1.414l.707.707zM5 10a1 1 0 01-1 1H3a1 1 0 110-2h1a1 1 0 011 1zM8 16v-1h4v1a2 2 0 11-4 0zM12 14c.015-.34.208-.646.477-.859a4 4 0 10-4.954 0c.27.213.462.519.476.859h4.002z"/>
-                </svg>
-                <span>Start with 6 free articles</span>
-              </a>
-              <form method="post" action="{% provider_login_url 'google' %}">
-                {% csrf_token %}
-                <button type="submit" class="inline-flex gap-x-2 items-center px-6 py-3 text-base font-medium text-gray-700 bg-white rounded-full border-2 border-gray-300 shadow-sm hover:bg-gray-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-600">
-                  <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                    <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                    <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-                    <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-                  </svg>
-                  <span>Sign up with Google</span>
-                </button>
-              </form>
-            </div>
+        <div class="mt-14 rounded-2xl border border-slate-200 bg-slate-950/95 p-3 shadow-2xl shadow-slate-900/25">
+          <div class="rounded-xl border border-white/10 bg-slate-900/60 p-2">
+            <iframe class="aspect-video w-full rounded-lg" src="https://www.youtube.com/embed/99KCMqVV6rQ?si=cBNrJhnqIW0QClVK" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
           </div>
         </div>
       </div>
     </div>
-  </div>
+  </section>
+
+  <section class="mx-auto mt-14 max-w-7xl rounded-3xl border border-slate-200 bg-gradient-to-b from-white to-slate-50 px-6 py-12 shadow-sm sm:px-10 sm:py-14">
+    <div class="mx-auto max-w-3xl text-center">
+      <div class="inline-flex items-center gap-x-2 rounded-full border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700">
+        <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+          <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
+        </svg>
+        <span>Trusted by Content Creators</span>
+      </div>
+      <h2 class="mt-5 text-3xl font-semibold tracking-tight text-slate-900 sm:text-4xl">
+        Powering content creation for <br/>
+        <span class="text-red-600">top-tier newsletters and indie businesses</span>
+      </h2>
+    </div>
+
+    <div class="mx-auto mt-10 grid max-w-lg grid-cols-2 gap-6 sm:max-w-2xl sm:grid-cols-3 lg:max-w-6xl lg:grid-cols-4">
+      <div class="group flex flex-col items-center gap-y-4 rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-sky-200 hover:shadow-md">
+        <a class="h-24 w-auto" href="https://isitketo.org">
+          <img class="pt-2" src="{% static 'vendors/images/isitketo.png' %}" alt="Is It Keto">
+        </a>
+        <a href="https://isitketo.org" class="text-sm font-semibold text-slate-900 transition-colors group-hover:text-sky-700">Is It Keto</a>
+      </div>
+      <div class="group flex flex-col items-center gap-y-4 rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-sky-200 hover:shadow-md">
+        <a href="https://builtwithdjango.com">
+          <img class="h-24 w-24 rounded-full bg-slate-100 object-cover" src="{% static 'vendors/images/bwd.png' %}" alt="Built with Django">
+        </a>
+        <a href="https://builtwithdjango.com" class="text-sm font-semibold text-slate-900 transition-colors group-hover:text-sky-700">Built with Django</a>
+      </div>
+      <div class="group flex flex-col items-center gap-y-4 rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-sky-200 hover:shadow-md">
+        <a href="https://gettjalerts.com">
+          <img src="{% static 'vendors/images/gettjalerts.png' %}" alt="Tech Job Alerts">
+        </a>
+        <a href="https://gettjalerts.com" class="text-sm font-semibold text-slate-900 transition-colors group-hover:text-sky-700">Tech Job Alerts</a>
+      </div>
+      <div class="group flex flex-col items-center gap-y-4 rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-sky-200 hover:shadow-md">
+        <a href="https://porkalpine.org/">
+          <div class="flex h-24 w-24 items-center justify-center rounded-full bg-slate-100">
+            <img class="h-16 w-16 p-1" src="{% static 'vendors/images/porkalpine.png' %}" alt="PorkAlpine" />
+          </div>
+        </a>
+        <a href="https://porkalpine.org/" class="text-sm font-semibold text-slate-900 transition-colors group-hover:text-sky-700">PorkAlpine</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="mx-auto mt-14 max-w-7xl px-2 pb-2 sm:px-0">
+    <div class="mx-auto max-w-3xl text-center">
+      <h2 class="text-sm font-semibold uppercase tracking-[0.18em] text-red-600">Content that converts</h2>
+      <p class="mt-3 text-3xl font-semibold tracking-tight text-slate-900 sm:text-4xl">Everything you need to ship SEO content that drives signups</p>
+      <p class="mt-4 text-lg text-slate-600">TuxSEO combines research, writing, and publishing into one focused workflow for small teams.</p>
+    </div>
+
+    <div class="mt-10 grid gap-6 lg:grid-cols-12">
+      <article class="rounded-3xl border border-slate-200 bg-white p-7 shadow-sm lg:col-span-5">
+        <h3 class="text-2xl font-semibold tracking-tight text-slate-900">From raw website data to publish-ready posts</h3>
+        <p class="mt-3 text-base leading-7 text-slate-600">
+          Add your site once, and TuxSEO helps you discover opportunities, generate article drafts, and push content live without juggling multiple tools.
+        </p>
+
+        <ul class="mt-6 space-y-3 text-sm text-slate-700">
+          <li class="flex gap-x-2">
+            <svg class="mt-0.5 h-5 w-5 flex-none text-red-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
+            <span>Project setup pulls in your pages, topic context, and base content direction.</span>
+          </li>
+          <li class="flex gap-x-2">
+            <svg class="mt-0.5 h-5 w-5 flex-none text-red-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
+            <span>Generate SEO-focused or eye-catching post ideas and drafts from the same dashboard.</span>
+          </li>
+          <li class="flex gap-x-2">
+            <svg class="mt-0.5 h-5 w-5 flex-none text-red-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
+            <span>Publish in one click and track what went live in Publish History.</span>
+          </li>
+        </ul>
+      </article>
+
+      <div class="grid gap-4 sm:grid-cols-2 lg:col-span-7">
+        <article class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:border-sky-200 hover:shadow-md">
+          <p class="text-xs font-semibold uppercase tracking-[0.16em] text-red-600">Research layer</p>
+          <h3 class="mt-2 text-lg font-semibold text-slate-900">Find real opportunities faster</h3>
+          <p class="mt-2 text-sm text-slate-600">Use keyword, page, and competitor insights to prioritize content with clear search intent.</p>
+        </article>
+
+        <article class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:border-sky-200 hover:shadow-md">
+          <p class="text-xs font-semibold uppercase tracking-[0.16em] text-red-600">Writing layer</p>
+          <h3 class="mt-2 text-lg font-semibold text-slate-900">Drafts that match your brand</h3>
+          <p class="mt-2 text-sm text-slate-600">Generate structured posts with your project context, tone preferences, and SEO goals in mind.</p>
+        </article>
+
+        <article class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:border-sky-200 hover:shadow-md">
+          <p class="text-xs font-semibold uppercase tracking-[0.16em] text-red-600">Optimization layer</p>
+          <h3 class="mt-2 text-lg font-semibold text-slate-900">Built for on-page SEO basics</h3>
+          <p class="mt-2 text-sm text-slate-600">Get keyword-aware content plus support for metadata and internal link guidance.</p>
+        </article>
+
+        <article class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:border-sky-200 hover:shadow-md">
+          <p class="text-xs font-semibold uppercase tracking-[0.16em] text-red-600">Publishing layer</p>
+          <h3 class="mt-2 text-lg font-semibold text-slate-900">Ship consistently, not occasionally</h3>
+          <p class="mt-2 text-sm text-slate-600">Move from idea to published post in minutes, then monitor output in one place.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="mx-auto mt-14 max-w-7xl rounded-3xl border border-slate-200 bg-slate-50 px-6 py-12 sm:px-10 sm:py-14">
+    <div class="mx-auto max-w-5xl">
+      <div class="text-center">
+        <h2 class="text-sm font-semibold uppercase tracking-[0.18em] text-red-600">How it works</h2>
+        <p class="mt-3 text-3xl font-semibold tracking-tight text-slate-900 sm:text-4xl">One workflow for founders and AI agents</p>
+        <p class="mt-4 text-lg text-slate-600">Choose your path: click through the UI yourself, or hand the same flow to an agent via TuxSEO skill.md.</p>
+      </div>
+
+      <div class="mt-10 grid grid-cols-1 gap-6 text-left sm:grid-cols-3">
+        <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:border-sky-200 hover:shadow-md">
+          <div class="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-slate-900 text-lg font-semibold text-white">1</div>
+          <h4 class="text-lg font-semibold text-slate-900">Set up once</h4>
+          <p class="mt-2 text-slate-600">Humans add the project URL in the dashboard; agents can read your project context from the prompt template and skill file.</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:border-sky-200 hover:shadow-md">
+          <div class="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-slate-900 text-lg font-semibold text-white">2</div>
+          <h4 class="text-lg font-semibold text-slate-900">Generate with context</h4>
+          <p class="mt-2 text-slate-600">Use keyword and competitor insights to produce drafts manually, or let AI agents run the same SEO workflow end-to-end.</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:border-sky-200 hover:shadow-md">
+          <div class="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-slate-900 text-lg font-semibold text-white">3</div>
+          <h4 class="text-lg font-semibold text-slate-900">Ship and iterate</h4>
+          <p class="mt-2 text-slate-600">Publish from one place, monitor output in Publish History, and keep both your team and agents aligned on what went live.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="contact-sales" class="mx-auto mt-14 max-w-7xl pb-16">
+    <div class="overflow-hidden rounded-3xl border border-slate-800 bg-slate-950 px-6 py-12 shadow-2xl shadow-slate-900/30 sm:px-12 sm:py-16">
+      <div class="pointer-events-none absolute inset-x-0 mt-[-8rem] h-64 bg-[radial-gradient(circle,rgba(14,165,233,0.35),transparent_60%)]"></div>
+      <div class="relative mx-auto max-w-2xl text-center">
+        <h2 class="text-3xl font-semibold tracking-tight text-white sm:text-4xl">Ready to Transform Your Content Strategy?</h2>
+        <p class="mt-4 text-lg leading-8 text-slate-300">Stop struggling with content creation and let AI generate engaging blog posts that drive results.</p>
+        <div class="mt-8 flex flex-wrap items-center justify-center gap-4">
+          <a href="{% url 'account_signup' %}" class="inline-flex items-center gap-x-2 rounded-full bg-white px-6 py-3 text-base font-semibold text-slate-900 shadow-sm transition hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
+            <svg class="h-5 w-5" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+              <path d="M11 3a1 1 0 10-2 0v1a1 1 0 102 0V3zM15.657 5.757a1 1 0 00-1.414-1.414l-.707.707a1 1 0 001.414 1.414l.707-.707zM18 10a1 1 0 01-1 1h-1a1 1 0 110-2h1a1 1 0 011 1zM5.05 6.464A1 1 0 106.464 5.05l-.707-.707a1 1 0 00-1.414 1.414l.707.707zM5 10a1 1 0 01-1 1H3a1 1 0 110-2h1a1 1 0 011 1zM8 16v-1h4v1a2 2 0 11-4 0zM12 14c.015-.34.208-.646.477-.859a4 4 0 10-4.954 0c.27.213.462.519.476.859h4.002z"/>
+            </svg>
+            <span>Start with 6 free articles</span>
+          </a>
+          <form method="post" action="{% provider_login_url 'google' %}">
+            {% csrf_token %}
+            <button type="submit" class="inline-flex items-center gap-x-2 rounded-full border border-slate-600 bg-slate-900 px-6 py-3 text-base font-semibold text-white shadow-sm transition hover:bg-slate-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-400">
+              <svg class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+                <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+                <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+                <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+              </svg>
+              <span>Sign up with Google</span>
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </section>
 </div>
-
 {% endblock content %}

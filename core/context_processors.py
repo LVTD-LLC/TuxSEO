@@ -1,6 +1,7 @@
 from allauth.socialaccount.models import SocialApp
 from django.conf import settings
 
+from core.turnstile import get_turnstile_site_key
 from tuxseo.utils import get_tuxseo_logger
 
 logger = get_tuxseo_logger(__name__)
@@ -52,7 +53,7 @@ def turnstile_site_key(request):
     Returns the Cloudflare Turnstile site key if configured.
     Used to conditionally enable Turnstile CAPTCHA on forms.
     """
-    return {"turnstile_site_key": settings.CLOUDFLARE_TURNSTILE_SITEKEY}
+    return {"turnstile_site_key": get_turnstile_site_key()}
 
 
 def referrer_banner(request):

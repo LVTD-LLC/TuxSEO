@@ -1,0 +1,374 @@
+from datetime import timedelta
+
+import pytest
+from django.contrib.auth.models import User
+from django.urls import reverse
+from django.utils import timezone
+
+from core.models import (
+    AnalyticsFactDaily,
+    BlogPostTitleSuggestion,
+    Competitor,
+    GeneratedBlogPost,
+    Keyword,
+    OutcomeAttributionRollup,
+    Project,
+    ProjectIntegration,
+    ProjectKeyword,
+    ProjectPage,
+)
+
+
+def create_user_with_project(
+    username: str, project_url: str, project_name: str = "Project"
+) -> tuple:
+    user = User.objects.create_user(
+        username=username,
+        email=f"{username}@example.com",
+        password="secret",
+    )
+    project = Project.objects.create(
+        profile=user.profile,
+        url=project_url,
+        name=project_name,
+    )
+    return user, project
+
+
+@pytest.mark.django_db
+def test_project_redirect_points_to_project_home(client):
+    user, project = create_user_with_project(
+        username="project-home-redirect-user",
+        project_url="https://redirect-project.example.com",
+    )
+    client.force_login(user)
+
+    response = client.get(reverse("project_redirect", kwargs={"pk": project.id}))
+
+    assert response.status_code == 302
+    assert response.url == reverse("project_home", kwargs={"pk": project.id})
+
+
+@pytest.mark.django_db
+def test_project_home_view_returns_content_counts(client):
+    user, project = create_user_with_project(
+        username="project-home-counts-user",
+        project_url="https://counts-project.example.com",
+        project_name="Counts Project",
+    )
+    project.summary = "Project summary for home page."
+    project.save(update_fields=["summary"])
+
+    title_suggestion = BlogPostTitleSuggestion.objects.create(
+        project=project,
+        title="A strong SEO title",
+        description="Description",
+    )
+    GeneratedBlogPost.objects.create(
+        project=project,
+        title_suggestion=title_suggestion,
+        title="Generated post",
+        slug="generated-post",
+        tags="seo,content",
+        content="Generated content",
+        posted=True,
+    )
+    keyword = Keyword.objects.create(keyword_text="project home keyword")
+    ProjectKeyword.objects.create(project=project, keyword=keyword, use=True)
+    ProjectPage.objects.create(
+        project=project,
+        url="https://counts-project.example.com/features",
+        type_ai_guess="product page",
+    )
+    Competitor.objects.create(
+        project=project,
+        name="Competitor One",
+        url="https://competitor.example.com",
+        description="Competitor description",
+    )
+
+    client.force_login(user)
+    response = client.get(reverse("project_home", kwargs={"pk": project.id}))
+
+    assert response.status_code == 200
+    assert response.context["title_ideas_state"]["count"] == 1
+    assert response.context["keywords_state"]["count"] == 1
+    assert response.context["pages_state"]["count"] == 1
+    assert response.context["competitors_state"]["count"] == 1
+    assert response.context["generated_posts_count"] == 1
+    assert response.context["posted_posts_count"] == 1
+    assert response.context["has_loading_generation_state"] is False
+    assert response.context["has_empty_generation_state"] is False
+    assert "Project Home" in response.content.decode()
+    assert "Project summary for home page." in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_project_home_view_uses_loading_state_for_recent_project(client):
+    user, project = create_user_with_project(
+        username="project-home-loading-user",
+        project_url="https://loading-project.example.com",
+    )
+    client.force_login(user)
+
+    response = client.get(reverse("project_home", kwargs={"pk": project.id}))
+
+    assert response.status_code == 200
+    assert response.context["title_ideas_state"]["is_loading_state"] is True
+    assert response.context["keywords_state"]["is_loading_state"] is True
+    assert response.context["pages_state"]["is_loading_state"] is True
+    assert response.context["competitors_state"]["is_loading_state"] is True
+    assert response.context["is_summary_loading_state"] is True
+    assert response.context["has_loading_generation_state"] is True
+
+
+@pytest.mark.django_db
+def test_project_home_view_uses_empty_state_for_older_project(client):
+    user, project = create_user_with_project(
+        username="project-home-empty-user",
+        project_url="https://empty-project.example.com",
+    )
+    old_created_date = timezone.now() - timedelta(days=2)
+    Project.objects.filter(id=project.id).update(created_at=old_created_date)
+    project.refresh_from_db()
+
+    client.force_login(user)
+    response = client.get(reverse("project_home", kwargs={"pk": project.id}))
+
+    assert response.status_code == 200
+    assert response.context["title_ideas_state"]["is_empty_state"] is True
+    assert response.context["keywords_state"]["is_empty_state"] is True
+    assert response.context["pages_state"]["is_empty_state"] is True
+    assert response.context["competitors_state"]["is_empty_state"] is True
+    assert response.context["is_summary_empty_state"] is True
+    assert response.context["has_empty_generation_state"] is True
+
+
+@pytest.mark.django_db
+def test_project_home_view_blocks_access_to_other_users_project(client):
+    owner_user, project = create_user_with_project(
+        username="project-home-owner-user",
+        project_url="https://owner-project.example.com",
+    )
+    other_user = User.objects.create_user(
+        username="project-home-other-user",
+        email="project-home-other-user@example.com",
+        password="secret",
+    )
+
+    client.force_login(other_user)
+    response = client.get(reverse("project_home", kwargs={"pk": project.id}))
+
+    assert owner_user != other_user
+    assert response.status_code == 404
+
+
+@pytest.mark.django_db
+def test_project_home_view_renders_how_to_use_block_with_expected_links(client):
+    user, project = create_user_with_project(
+        username="project-home-how-to-user",
+        project_url="https://how-to-project.example.com",
+    )
+    client.force_login(user)
+
+    response = client.get(reverse("project_home", kwargs={"pk": project.id}))
+
+    assert response.status_code == 200
+    content = response.content.decode()
+    assert "How to use TuxSEO" in content
+    assert reverse("project_seo_posts", kwargs={"pk": project.id}) in content
+    assert reverse("project_keywords", kwargs={"pk": project.id}) in content
+    assert reverse("settings") in content
+    assert "/api/docs" in content
+
+
+@pytest.mark.django_db
+def test_project_home_view_renders_copyable_api_and_prompt_snippets(client):
+    user, project = create_user_with_project(
+        username="project-home-copy-snippets-user",
+        project_url="https://copy-snippets-project.example.com",
+    )
+    client.force_login(user)
+
+    response = client.get(reverse("project_home", kwargs={"pk": project.id}))
+
+    assert response.status_code == 200
+    content = response.content.decode()
+    assert "curl -X GET" in content
+    assert f"X-API-Key: {user.profile.key}" in content
+    assert "https://tuxseo.com/public-api/account" in content
+    assert "Security note: treat this key like a password." in content
+    assert "You are helping me operate TuxSEO for my project." in content
+    assert "First read the agent skill file: https://tuxseo.com/skill.md" in content
+    assert "TuxSEO API base URL: https://tuxseo.com/public-api" in content
+    assert f"TuxSEO API key: {user.profile.key}" in content
+    assert "Project URL:" not in content
+    assert "Goal:" not in content
+    assert f"X-API-Key: {user.profile.key}" in content
+    assert "Production rotation snippet" not in content
+    assert 'export TUXSEO_API_KEY="' not in content
+    assert "X-API-Key: $TUXSEO_API_KEY" not in content
+    assert "Need to rotate your production key?" in content
+    assert "Settings → API Access" in content
+    assert content.count('data-controller="copy"') >= 2
+    assert content.count("click->copy#copy") >= 2
+
+
+@pytest.mark.django_db
+def test_project_home_view_renders_reporting_snapshot_card(client):
+    user, project = create_user_with_project(
+        username="project-home-reporting-user",
+        project_url="https://reporting-home.example.com",
+    )
+    OutcomeAttributionRollup.objects.create(
+        project=project,
+        window_start=timezone.now().date(),
+        granularity="DAY",
+        dimension="content",
+        outcome_metric="blog_posts_published",
+        total_value=4,
+        event_count=4,
+    )
+
+    client.force_login(user)
+    response = client.get(reverse("project_home", kwargs={"pk": project.id}))
+
+    assert response.status_code == 200
+    assert "reporting_snapshot_state" in response.context
+    content = response.content.decode()
+    assert "AI Visibility + SEO Outcome Snapshot (30d)" in content
+    assert "Contribution split" in content
+    assert "Metric definitions" in content
+
+
+@pytest.mark.django_db
+def test_project_home_view_renders_analytics_section_empty_state(client):
+    user, project = create_user_with_project(
+        username="project-home-analytics-empty-user",
+        project_url="https://analytics-empty.example.com",
+    )
+    client.force_login(user)
+
+    response = client.get(reverse("project_home", kwargs={"pk": project.id}))
+
+    assert response.status_code == 200
+    assert "analytics_snapshot_state" in response.context
+    content = response.content.decode()
+    assert "Analytics summary" in content
+    assert "View detailed analytics" in content
+    assert "No analytics data synced yet." in content
+
+
+@pytest.mark.django_db
+def test_project_home_view_renders_analytics_metrics_and_opportunities(client):
+    user, project = create_user_with_project(
+        username="project-home-analytics-data-user",
+        project_url="https://analytics-data.example.com",
+    )
+
+    ProjectIntegration.objects.create(
+        project=project,
+        provider=ProjectIntegration.Provider.GOOGLE_ANALYTICS,
+        status=ProjectIntegration.Status.CONNECTED,
+    )
+    ProjectIntegration.objects.create(
+        project=project,
+        provider=ProjectIntegration.Provider.GOOGLE_SEARCH_CONSOLE,
+        status=ProjectIntegration.Status.CONNECTED,
+    )
+
+    today = timezone.now().date()
+
+    AnalyticsFactDaily.objects.create(
+        project=project,
+        provider=AnalyticsFactDaily.Provider.GA4,
+        metric_date=today,
+        dimension_scope=AnalyticsFactDaily.DimensionScope.PAGE,
+        page_url="https://analytics-data.example.com/page-a",
+        dimension_fingerprint="ga4-a",
+        clicks=10,
+        impressions=200,
+        sessions=80,
+        users=60,
+        engaged_sessions=50,
+        conversions=5,
+    )
+
+    AnalyticsFactDaily.objects.create(
+        project=project,
+        provider=AnalyticsFactDaily.Provider.GSC,
+        metric_date=today,
+        dimension_scope=AnalyticsFactDaily.DimensionScope.PAGE_QUERY,
+        page_url="https://analytics-data.example.com/pricing",
+        search_query="seo pricing",
+        dimension_fingerprint="gsc-opportunity",
+        clicks=5,
+        impressions=400,
+        ctr=0.012,
+        avg_position=11.2,
+    )
+    AnalyticsFactDaily.objects.create(
+        project=project,
+        provider=AnalyticsFactDaily.Provider.GSC,
+        metric_date=today - timedelta(days=1),
+        dimension_scope=AnalyticsFactDaily.DimensionScope.PAGE_QUERY,
+        page_url="https://analytics-data.example.com/pricing",
+        search_query="seo pricing",
+        dimension_fingerprint="gsc-opportunity-day-2",
+        clicks=2,
+        impressions=200,
+        ctr=0.01,
+        avg_position=10.6,
+    )
+
+    AnalyticsFactDaily.objects.create(
+        project=project,
+        provider=AnalyticsFactDaily.Provider.GSC,
+        metric_date=today - timedelta(days=8),
+        dimension_scope=AnalyticsFactDaily.DimensionScope.PAGE,
+        page_url="https://analytics-data.example.com/blog",
+        dimension_fingerprint="gsc-previous",
+        clicks=2,
+        impressions=100,
+        ctr=0.02,
+        avg_position=14.0,
+    )
+
+    AnalyticsFactDaily.objects.create(
+        project=project,
+        provider=AnalyticsFactDaily.Provider.GSC,
+        metric_date=today,
+        dimension_scope=AnalyticsFactDaily.DimensionScope.PAGE_QUERY,
+        page_url="https://analytics-data.example.com/features",
+        search_query="seo features",
+        dimension_fingerprint="gsc-excluded-high-ctr",
+        clicks=15,
+        impressions=120,
+        ctr=0.15,
+        avg_position=6.1,
+    )
+
+    client.force_login(user)
+    response = client.get(reverse("project_home", kwargs={"pk": project.id}))
+
+    assert response.status_code == 200
+    analytics_snapshot = response.context["analytics_snapshot_state"]
+    assert analytics_snapshot["has_data"] is True
+    assert analytics_snapshot["totals"]["clicks"] == 34
+    assert analytics_snapshot["totals"]["impressions"] == 1020
+    assert analytics_snapshot["totals"]["sessions"] == 80
+    assert analytics_snapshot["totals"]["users"] == 60
+    assert analytics_snapshot["totals"]["conversions"] == 5.0
+    assert analytics_snapshot["opportunities"]
+    assert analytics_snapshot["opportunities"][0]["target"] == "seo pricing"
+    assert analytics_snapshot["opportunities"][0]["impressions"] == 600
+
+    content = response.content.decode()
+    assert "Analytics summary" in content
+    assert "View detailed analytics" in content
+    assert "seo pricing" not in content
+    assert "GA4 Connected" in content
+    assert "GSC Connected" in content
+    assert "Plausible Not connected" in content
+    assert "Top opportunities" not in content
+    assert "Trend deltas (recent 7d vs prior 7d)" not in content

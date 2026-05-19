@@ -11,16 +11,27 @@ export default class extends Controller {
     this.keywordData = null;
     this.isLoading = false;
     this.originalClasses = this.element.className;
+    this.isPointerInsideElement = false;
+    this.isElementFocused = false;
+    this.escapeKeyListener = this.handleDocumentKeydown.bind(this);
+    this.windowMouseOutListener = this.handleWindowMouseOut.bind(this);
 
     // Store initial styling state
     this.initialInUse = this.element.classList.contains("text-green-700");
+
+    document.addEventListener("keydown", this.escapeKeyListener);
+    window.addEventListener("mouseout", this.windowMouseOutListener);
   }
 
   disconnect() {
+    document.removeEventListener("keydown", this.escapeKeyListener);
+    window.removeEventListener("mouseout", this.windowMouseOutListener);
     this.hideTooltip();
   }
 
   async mouseenter(event) {
+    this.isPointerInsideElement = true;
+
     // Prevent multiple simultaneous requests
     if (this.isLoading) return;
 
@@ -32,11 +43,71 @@ export default class extends Controller {
       await this.fetchKeywordData();
     }
 
+    if (!this.isTooltipActive()) {
+      this.hideTooltip();
+      return;
+    }
+
     // Update tooltip with actual data
     this.showDataTooltip(event);
   }
 
   mouseleave() {
+    this.isPointerInsideElement = false;
+    if (!this.isElementFocused) {
+      this.hideTooltip();
+    }
+  }
+
+  async focus(event) {
+    this.isElementFocused = true;
+
+    if (!this.keywordData) {
+      await this.fetchKeywordData();
+    }
+
+    if (!this.isTooltipActive()) {
+      this.hideTooltip();
+      return;
+    }
+
+    this.showDataTooltip(this.getElementPositionEvent(event));
+  }
+
+  blur() {
+    this.isElementFocused = false;
+    if (!this.isPointerInsideElement) {
+      this.hideTooltip();
+    }
+  }
+
+  async keydown(event) {
+    const isEnterKey = event.key === "Enter";
+    const isSpaceKey = event.key === " ";
+    const isEscapeKey = event.key === "Escape";
+
+    if (isEscapeKey) {
+      event.preventDefault();
+      this.hideTooltip();
+      this.element.blur();
+      return;
+    }
+
+    if (!isEnterKey && !isSpaceKey) return;
+
+    event.preventDefault();
+
+    if (!this.keywordData) {
+      await this.fetchKeywordData();
+    }
+
+    await this.handleClick(event);
+    this.hideTooltip();
+  }
+
+  handleDocumentKeydown(event) {
+    if (event.key !== "Escape") return;
+
     this.hideTooltip();
   }
 
@@ -51,6 +122,15 @@ export default class extends Controller {
     } else {
       // Toggle keyword usage
       await this.toggleKeywordUsage();
+    }
+  }
+
+  handleWindowMouseOut(event) {
+    if (event.relatedTarget) return;
+
+    this.isPointerInsideElement = false;
+    if (!this.isElementFocused) {
+      this.hideTooltip();
     }
   }
 
@@ -431,5 +511,24 @@ export default class extends Controller {
       }
     }
     return "";
+  }
+
+  isTooltipActive() {
+    return this.isPointerInsideElement || this.isElementFocused;
+  }
+
+  getElementPositionEvent(event) {
+    if (event && typeof event.pageX === "number" && typeof event.pageY === "number") {
+      return event;
+    }
+
+    const elementRect = this.element.getBoundingClientRect();
+    const elementCenterX = elementRect.left + (elementRect.width / 2) + window.scrollX;
+    const elementBottomY = elementRect.bottom + window.scrollY;
+
+    return {
+      pageX: elementCenterX,
+      pageY: elementBottomY
+    };
   }
 }

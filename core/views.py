@@ -1,30 +1,64 @@
+import secrets
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import markdown
+import requests
 import stripe
+from allauth.account import app_settings as account_app_settings
+from allauth.account.adapter import get_adapter
 from allauth.account.models import EmailAddress, EmailConfirmation
-from allauth.account.views import SignupView
+from allauth.account.views import ConfirmEmailView, SignupView
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.messages.views import SuccessMessageMixin
-from django.db.models import Count, Prefetch, Q
-from django.http import HttpResponse
-from django.shortcuts import redirect, render
+from django.core import signing
+from django.core.cache import cache
+from django.core.exceptions import ValidationError
+from django.db.models import Count, F, FloatField, Prefetch, Q, Sum
+from django.http import Http404, HttpResponse, HttpResponseRedirect
+from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse, reverse_lazy
+from django.utils import timezone
+from django.views import View
 from django.views.generic import DeleteView, DetailView, ListView, TemplateView, UpdateView
 from django_q.tasks import async_task
 from djstripe import models as djstripe_models
 from weasyprint import HTML
 
+from core.acquisition import sync_profile_attribution_from_request
+from core.analytics import ANALYTICS_EVENTS, enqueue_track_event
+from core.backlink_prospects import (
+    get_backlink_discovery_debug_state,
+    get_backlink_prospects_refresh_lock_key,
+    get_cached_backlink_prospects,
+)
+from core.detail_view_controls import (
+    MODULE_BACKLINK_DISCOVERY,
+    MODULE_SEO_ANALYSIS,
+    consume_action_rate_limit,
+    consume_cooldown,
+    consume_daily_quota,
+    get_detail_view_feature_flags,
+    is_module_enabled,
+    release_daily_quota,
+)
 from core.choices import BlogPostStatus, ContentType, Language, OGImageStyle, ProfileStates
-from core.forms import AutoSubmissionSettingForm, ProfileUpdateForm, ProjectScanForm
+from core.forms import (
+    AutoSubmissionSettingForm,
+    PlausibleIntegrationForm,
+    ProfileUpdateForm,
+    ProjectCustomPostTypeForm,
+    ProjectScanForm,
+)
 from core.models import (
+    AnalyticsFactDaily,
     AutoSubmissionSetting,
     BlogPost,
     Competitor,
@@ -33,7 +67,19 @@ from core.models import (
     Profile,
     ProfileStateTransition,
     Project,
+    ProjectCustomPostType,
+    ProjectEarnedLink,
+    ProjectIntegration,
+    ProjectPage,
+    ProjectPageAnalysisRun,
 )
+from core.outcome_attribution import get_project_reporting_snapshot
+from core.project_page_analysis_runs import (
+    RERUN_COOLDOWN_SECONDS,
+    get_latest_and_history,
+    start_or_reuse_run,
+)
+from core.seo_analysis import analyze_project_page_seo
 from core.tasks import (
     track_event,
     try_create_posthog_alias,
@@ -46,6 +92,102 @@ stripe.api_key = settings.STRIPE_SECRET_KEY
 logger = get_tuxseo_logger(__name__)
 
 User = get_user_model()
+
+
+def get_google_integrations_callback_url():
+    site_url = settings.SITE_URL.rstrip("/")
+    return f"{site_url}{reverse('project_integrations_google_callback')}"
+
+
+PRICE_SELECTION_RULES = {
+    "Pro - Monthly": {
+        "amount": 9900,
+        "env_var": "STRIPE_PRICE_ID_PRO_MONTHLY",
+    },
+    "Pro - Yearly": {
+        "amount": 99000,
+        "env_var": "STRIPE_PRICE_ID_PRO_YEARLY",
+    },
+}
+
+
+def _price_matches_rule(price, *, expected_amount=None):
+    if expected_amount is None:
+        return True
+    return getattr(price, "unit_amount", None) == expected_amount
+
+
+def _stripe_price_matches_rule(stripe_price, *, expected_amount=None):
+    if expected_amount is None:
+        return True
+    return stripe_price.get("unit_amount") == expected_amount
+
+
+def get_price_for_product_name(product_name):
+    """Get the canonical active Stripe price for a product name.
+
+    Selection order:
+    1) Explicit env override (STRIPE_PRICE_ID_PRO_MONTHLY / STRIPE_PRICE_ID_PRO_YEARLY)
+    2) dj-stripe active price matching canonical amount
+    3) Stripe API active price matching canonical amount (synced into dj-stripe)
+    4) Backward-compatible fallback to any active product price
+    """
+    rule = PRICE_SELECTION_RULES.get(product_name, {})
+    expected_amount = rule.get("amount")
+    env_var = rule.get("env_var")
+    explicit_price_id = getattr(settings, env_var, "") if env_var else ""
+
+    if explicit_price_id:
+        try:
+            return djstripe_models.Price.objects.select_related("product").get(
+                id=explicit_price_id,
+                livemode=settings.STRIPE_LIVE_MODE,
+                active=True,
+            )
+        except djstripe_models.Price.DoesNotExist:
+            stripe_price = stripe.Price.retrieve(explicit_price_id, expand=["product"])
+            synced_price = djstripe_models.Price.sync_from_stripe_data(stripe_price)
+            if (
+                synced_price.product.name == product_name
+                and synced_price.active
+                and _price_matches_rule(synced_price, expected_amount=expected_amount)
+            ):
+                return synced_price
+        except djstripe_models.Price.MultipleObjectsReturned:
+            pass
+
+    try:
+        return djstripe_models.Price.objects.select_related("product").get(
+            product__name=product_name,
+            livemode=settings.STRIPE_LIVE_MODE,
+            active=True,
+            unit_amount=expected_amount,
+        )
+    except (djstripe_models.Price.DoesNotExist, djstripe_models.Price.MultipleObjectsReturned):
+        pass
+
+    stripe_prices = stripe.Price.list(active=True, expand=["data.product"], limit=100)
+    fallback_match = None
+
+    for stripe_price in stripe_prices.auto_paging_iter():
+        stripe_product = stripe_price.get("product")
+        stripe_product_name = getattr(stripe_product, "name", None)
+
+        if stripe_product_name != product_name:
+            continue
+
+        if _stripe_price_matches_rule(stripe_price, expected_amount=expected_amount):
+            synced_price = djstripe_models.Price.sync_from_stripe_data(stripe_price)
+            return synced_price
+
+        if fallback_match is None:
+            fallback_match = stripe_price
+
+    if fallback_match is not None:
+        synced_price = djstripe_models.Price.sync_from_stripe_data(fallback_match)
+        return synced_price
+
+    raise djstripe_models.Price.DoesNotExist
 
 
 class LandingView(TemplateView):
@@ -160,11 +302,18 @@ class AdminPanelView(LoginRequiredMixin, TemplateView):
 class AccountSignupView(SignupView):
     template_name = "account/signup.html"
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["signup_started_event_name"] = ANALYTICS_EVENTS.SIGNUP_STARTED
+        return context
+
     def form_valid(self, form):
         response = super().form_valid(form)
 
         user = self.user
         profile = user.profile
+
+        sync_profile_attribution_from_request(profile=profile, request=self.request)
 
         if settings.POSTHOG_API_KEY:
             async_task(
@@ -178,7 +327,7 @@ class AccountSignupView(SignupView):
         async_task(
             track_event,
             profile_id=profile.id,
-            event_name="user_signed_up",
+            event_name=ANALYTICS_EVENTS.SIGNUP_COMPLETED,
             properties={
                 "$set": {
                     "email": profile.user.email,
@@ -195,6 +344,38 @@ class AccountSignupView(SignupView):
         success_url = super().get_success_url() or reverse("home")
         welcome_params = {"welcome": "true"}
         return f"{success_url}?{urlencode(welcome_params)}"
+
+
+class OnboardingFriendlyConfirmEmailView(ConfirmEmailView):
+    def get(self, *args, **kwargs):
+        confirmation_key = self.kwargs.get("key", "")
+        verified_email_address = self.get_verified_email_address_for_used_hmac_key(
+            confirmation_key=confirmation_key
+        )
+        if verified_email_address:
+            messages.info(self.request, "Your email is already verified.")
+            redirect_url = get_adapter(self.request).get_email_verification_redirect_url(
+                verified_email_address
+            )
+            return redirect(redirect_url)
+
+        return super().get(*args, **kwargs)
+
+    def get_verified_email_address_for_used_hmac_key(self, confirmation_key: str):
+        if not account_app_settings.EMAIL_CONFIRMATION_HMAC:
+            return None
+
+        max_age_seconds = 60 * 60 * 24 * account_app_settings.EMAIL_CONFIRMATION_EXPIRE_DAYS
+        try:
+            email_address_id = signing.loads(
+                confirmation_key,
+                max_age=max_age_seconds,
+                salt=account_app_settings.SALT,
+            )
+        except (signing.BadSignature, signing.SignatureExpired):
+            return None
+
+        return EmailAddress.objects.filter(id=email_address_id, verified=True).first()
 
 
 class UserSettingsView(LoginRequiredMixin, SuccessMessageMixin, UpdateView):
@@ -281,10 +462,13 @@ class PricingView(TemplateView):
             try:
                 profile = self.request.user.profile
                 context["has_pro_subscription"] = profile.has_product_or_subscription
+                context["current_product_name"] = profile.product_name
             except Profile.DoesNotExist:
                 context["has_pro_subscription"] = False
+                context["current_product_name"] = "Free"
         else:
             context["has_pro_subscription"] = False
+            context["current_product_name"] = "Free"
 
         context["early_bird_spots_left"] = 20 - number_of_subscribed_users - 1
 
@@ -297,6 +481,11 @@ class PrivacyPolicyView(TemplateView):
 
 class TermsOfServiceView(TemplateView):
     template_name = "pages/terms_of_service.html"
+
+
+def _build_billing_home_url() -> str:
+    """Return the canonical app home URL for Stripe return links."""
+    return f"{settings.SITE_URL.rstrip('/')}{reverse('home')}"
 
 
 @login_required
@@ -315,9 +504,7 @@ def create_checkout_session(request, product_name):
         return redirect(reverse("home"))
 
     try:
-        price = djstripe_models.Price.objects.select_related("product").get(
-            product__name=product_name, livemode=settings.STRIPE_LIVE_MODE
-        )
+        price = get_price_for_product_name(product_name)
     except djstripe_models.Price.DoesNotExist:
         logger.error(
             "[CreateCheckout] Price not found",
@@ -330,7 +517,7 @@ def create_checkout_session(request, product_name):
     # Get or create customer
     customer, _ = djstripe_models.Customer.get_or_create(subscriber=user)
 
-    if not profile.customer:
+    if not profile.customer and isinstance(customer, djstripe_models.Customer):
         profile.customer = customer
         profile.save(update_fields=["customer"])
 
@@ -355,11 +542,23 @@ def create_checkout_session(request, product_name):
         product_name=product_name,
     )
 
-    base_success_url = request.build_absolute_uri(reverse("home"))
-    base_cancel_url = request.build_absolute_uri(reverse("home"))
+    async_task(
+        track_event,
+        profile_id=profile.id,
+        event_name=ANALYTICS_EVENTS.CHECKOUT_STARTED,
+        properties={
+            "product_name": product_name,
+            "price_id": price.id,
+            "source": "create_checkout_session",
+        },
+        source_function="create_checkout_session",
+        group="Track Event",
+    )
 
-    success_url = f"{base_success_url}?{urlencode({'payment': 'success'})}"
-    cancel_url = f"{base_cancel_url}?{urlencode({'payment': 'cancelled'})}"
+    billing_home_url = _build_billing_home_url()
+
+    success_url = f"{billing_home_url}?{urlencode({'payment': 'success'})}"
+    cancel_url = f"{billing_home_url}?{urlencode({'payment': 'cancelled'})}"
 
     try:
         checkout_session = stripe.checkout.Session.create(
@@ -403,7 +602,9 @@ def create_checkout_session(request, product_name):
             checkout_session_id=checkout_session.id,
         )
 
-        return redirect(checkout_session.url, code=303)
+        response = HttpResponseRedirect(checkout_session.url)
+        response.status_code = 303
+        return response
 
     except stripe.error.StripeError as e:
         logger.error(
@@ -437,9 +638,7 @@ def upgrade_subscription(request, product_name):
         return redirect(reverse("home"))
 
     try:
-        new_price = djstripe_models.Price.objects.select_related("product").get(
-            product__name=product_name, livemode=settings.STRIPE_LIVE_MODE
-        )
+        new_price = get_price_for_product_name(product_name)
     except djstripe_models.Price.DoesNotExist:
         logger.error(
             "[UpgradeSubscription] Price not found",
@@ -577,7 +776,7 @@ def create_customer_portal_session(request):
 
     session = stripe.billing_portal.Session.create(
         customer=customer.id,
-        return_url=request.build_absolute_uri(reverse("home")),
+        return_url=_build_billing_home_url(),
     )
 
     return redirect(session.url, code=303)
@@ -597,6 +796,511 @@ class BlogPostView(DetailView):
     template_name = "blog/blog_post.html"
     context_object_name = "blog_post"
 
+    def get_queryset(self):
+        return BlogPost.objects.filter(status=BlogPostStatus.PUBLISHED).order_by(
+            "-created_at", "-id"
+        )
+
+    def get_object(self, queryset=None):
+        queryset = queryset or self.get_queryset()
+        slug = self.kwargs.get(self.slug_url_kwarg)
+
+        blog_post = queryset.filter(**{self.slug_field: slug}).first()
+        if blog_post is None:
+            raise Http404("No blog post found matching the query")
+
+        return blog_post
+
+
+class ProjectHomeView(LoginRequiredMixin, DetailView):
+    model = Project
+    template_name = "project/project_home.html"
+    context_object_name = "project"
+
+    loading_window_minutes = 20
+
+    def get_queryset(self):
+        return Project.objects.filter(profile=self.request.user.profile)
+
+    def get_content_state(self, item_count: int, is_project_recently_created: bool) -> dict:
+        is_loading_state = item_count == 0 and is_project_recently_created
+        is_empty_state = item_count == 0 and not is_project_recently_created
+        return {
+            "count": item_count,
+            "is_loading_state": is_loading_state,
+            "is_empty_state": is_empty_state,
+            "has_items": item_count > 0,
+        }
+
+    def get_reporting_snapshot_state(self, *, project: Project) -> dict:
+        window_end = timezone.now().date()
+        window_start = window_end - timedelta(days=29)
+        snapshot = get_project_reporting_snapshot(
+            project=project,
+            start_date=window_start,
+            end_date=window_end,
+        )
+
+        trend = snapshot["trend"]
+        latest = trend[-1] if trend else {
+            "seo_outcome_value": 0.0,
+            "ai_visibility_signal_value": 0.0,
+            "event_count": 0,
+        }
+
+        sparkline = []
+        max_value = max((item["seo_outcome_value"] for item in trend), default=0.0)
+        for item in trend[-14:]:
+            relative_height = int((item["seo_outcome_value"] / max_value) * 100) if max_value > 0 else 0
+            sparkline.append(
+                {
+                    "date": item["date"],
+                    "value": item["seo_outcome_value"],
+                    "height_pct": max(relative_height, 8) if item["seo_outcome_value"] > 0 else 6,
+                }
+            )
+
+        return {
+            "snapshot": snapshot,
+            "latest": latest,
+            "sparkline": sparkline,
+            "is_empty": snapshot["event_count"] == 0,
+        }
+
+    @staticmethod
+    def _safe_pct(numerator: float | int, denominator: float | int) -> float:
+        if not denominator:
+            return 0.0
+        return round((float(numerator) / float(denominator)) * 100, 2)
+
+    @staticmethod
+    def _safe_delta(recent: float | int, previous: float | int) -> float | None:
+        if not previous:
+            return 0.0 if not recent else None
+        return round(((float(recent) - float(previous)) / float(previous)) * 100, 2)
+
+    def get_analytics_snapshot_state(self, *, project: Project) -> dict:
+        today = timezone.now().date()
+        window_start = today - timedelta(days=29)
+
+        providers = [
+            {
+                "key": ProjectIntegration.Provider.GOOGLE_ANALYTICS,
+                "label": "GA4",
+                "integration_label": "Google Analytics",
+            },
+            {
+                "key": ProjectIntegration.Provider.GOOGLE_SEARCH_CONSOLE,
+                "label": "GSC",
+                "integration_label": "Google Search Console",
+            },
+            {
+                "key": ProjectIntegration.Provider.PLAUSIBLE,
+                "label": "Plausible",
+                "integration_label": "Plausible",
+            },
+        ]
+
+        connected_provider_keys = set(
+            ProjectIntegration.objects.filter(
+                project=project,
+                status=ProjectIntegration.Status.CONNECTED,
+            ).values_list("provider", flat=True)
+        )
+        for provider in providers:
+            provider["is_connected"] = provider["key"] in connected_provider_keys
+
+        facts_qs = AnalyticsFactDaily.objects.filter(
+            project=project,
+            metric_date__gte=window_start,
+            metric_date__lte=today,
+        )
+
+        totals = facts_qs.aggregate(
+            clicks=Sum("clicks"),
+            impressions=Sum("impressions"),
+            sessions=Sum("sessions"),
+            users=Sum("users"),
+            conversions=Sum("conversions"),
+            engaged_sessions=Sum("engaged_sessions"),
+        )
+
+        totals = {k: (v or 0) for k, v in totals.items()}
+
+        gsc_position_data = facts_qs.filter(
+            provider=AnalyticsFactDaily.Provider.GSC,
+            avg_position__isnull=False,
+            impressions__gt=0,
+        ).aggregate(
+            weighted_position_sum=Sum(
+                F("avg_position") * F("impressions"),
+                output_field=FloatField(),
+            ),
+            total_impressions=Sum("impressions"),
+        )
+        weighted_position_sum = float(gsc_position_data.get("weighted_position_sum") or 0)
+        total_impressions = float(gsc_position_data.get("total_impressions") or 0)
+        avg_position = round(weighted_position_sum / total_impressions, 2) if total_impressions else 0.0
+
+        recent_start = today - timedelta(days=6)
+        previous_start = recent_start - timedelta(days=7)
+        previous_end = recent_start - timedelta(days=1)
+
+        recent = facts_qs.filter(metric_date__gte=recent_start, metric_date__lte=today).aggregate(
+            clicks=Sum("clicks"),
+            sessions=Sum("sessions"),
+            conversions=Sum("conversions"),
+        )
+        previous = facts_qs.filter(
+            metric_date__gte=previous_start,
+            metric_date__lte=previous_end,
+        ).aggregate(
+            clicks=Sum("clicks"),
+            sessions=Sum("sessions"),
+            conversions=Sum("conversions"),
+        )
+
+        recent = {k: (v or 0) for k, v in recent.items()}
+        previous = {k: (v or 0) for k, v in previous.items()}
+
+        opportunities = []
+        opportunities_grouped = list(
+            facts_qs.filter(
+                provider=AnalyticsFactDaily.Provider.GSC,
+                dimension_scope__in=[
+                    AnalyticsFactDaily.DimensionScope.PAGE,
+                    AnalyticsFactDaily.DimensionScope.PAGE_QUERY,
+                ],
+                impressions__isnull=False,
+                impressions__gt=0,
+            )
+            .values("search_query", "page_url")
+            .annotate(
+                total_impressions=Sum("impressions"),
+                total_clicks=Sum("clicks"),
+            )
+        )
+
+        ranked_opportunities = []
+        for row in opportunities_grouped:
+            impressions = int(row.get("total_impressions") or 0)
+            if impressions < 100:
+                continue
+            clicks = float(row.get("total_clicks") or 0)
+            ctr_value = clicks / impressions if impressions else 0
+            if ctr_value > 0.04:
+                continue
+            ranked_opportunities.append(
+                {
+                    "target": row.get("search_query") or row.get("page_url") or "Untitled page",
+                    "impressions": impressions,
+                    "ctr_pct": round(ctr_value * 100, 2),
+                    "suggestion": "Improve title/meta match and add internal links from related pages.",
+                }
+            )
+
+        ranked_opportunities.sort(key=lambda item: (item["ctr_pct"], -item["impressions"]))
+        opportunities = ranked_opportunities[:3]
+
+        has_analytics_data = facts_qs.exists()
+
+        return {
+            "window_days": 30,
+            "providers": providers,
+            "has_data": has_analytics_data,
+            "totals": {
+                "clicks": int(totals["clicks"]),
+                "impressions": int(totals["impressions"]),
+                "sessions": int(totals["sessions"]),
+                "users": int(totals["users"]),
+                "conversions": float(totals["conversions"]),
+            },
+            "derived": {
+                "ctr_pct": self._safe_pct(totals["clicks"], totals["impressions"]),
+                "avg_position": avg_position,
+                "engagement_rate_pct": self._safe_pct(totals["engaged_sessions"], totals["sessions"]),
+                "conversion_rate_pct": self._safe_pct(totals["conversions"], totals["sessions"]),
+            },
+            "deltas": {
+                "clicks_pct": self._safe_delta(recent["clicks"], previous["clicks"]),
+                "sessions_pct": self._safe_delta(recent["sessions"], previous["sessions"]),
+                "conversions_pct": self._safe_delta(recent["conversions"], previous["conversions"]),
+            },
+            "opportunities": opportunities,
+        }
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        project = self.object
+
+        is_project_recently_created = (
+            project.created_at
+            >= timezone.now() - timedelta(minutes=self.loading_window_minutes)
+        )
+
+        title_ideas_state = self.get_content_state(
+            item_count=project.blog_post_title_suggestions.count(),
+            is_project_recently_created=is_project_recently_created,
+        )
+        keywords_state = self.get_content_state(
+            item_count=project.project_keywords.count(),
+            is_project_recently_created=is_project_recently_created,
+        )
+        pages_state = self.get_content_state(
+            item_count=project.project_pages.count(),
+            is_project_recently_created=is_project_recently_created,
+        )
+        competitors_state = self.get_content_state(
+            item_count=project.competitors.count(),
+            is_project_recently_created=is_project_recently_created,
+        )
+
+        has_project_summary = bool(project.summary.strip())
+        is_summary_loading_state = not has_project_summary and is_project_recently_created
+        is_summary_empty_state = not has_project_summary and not is_project_recently_created
+
+        has_loading_generation_state = any(
+            content_state["is_loading_state"]
+            for content_state in [title_ideas_state, keywords_state, pages_state, competitors_state]
+        )
+        has_empty_generation_state = all(
+            content_state["is_empty_state"]
+            for content_state in [title_ideas_state, keywords_state, pages_state, competitors_state]
+        )
+
+        context["title_ideas_state"] = title_ideas_state
+        context["keywords_state"] = keywords_state
+        context["pages_state"] = pages_state
+        context["competitors_state"] = competitors_state
+        context["generated_posts_count"] = project.generated_blog_posts.count()
+        context["posted_posts_count"] = project.generated_blog_posts.filter(posted=True).count()
+        context["is_summary_loading_state"] = is_summary_loading_state
+        context["is_summary_empty_state"] = is_summary_empty_state
+        context["has_loading_generation_state"] = has_loading_generation_state
+        context["has_empty_generation_state"] = has_empty_generation_state
+        context["reporting_snapshot_state"] = self.get_reporting_snapshot_state(project=project)
+        context["analytics_snapshot_state"] = self.get_analytics_snapshot_state(project=project)
+
+        return context
+
+
+class ProjectAnalyticsView(LoginRequiredMixin, DetailView):
+    model = Project
+    template_name = "project/project_analytics.html"
+    context_object_name = "project"
+
+    def get_queryset(self):
+        return Project.objects.filter(profile=self.request.user.profile)
+
+    @staticmethod
+    def _safe_pct(numerator: float | int, denominator: float | int) -> float:
+        if not denominator:
+            return 0.0
+        return round((float(numerator) / float(denominator)) * 100, 2)
+
+    @staticmethod
+    def _safe_delta(recent: float | int, previous: float | int) -> float | None:
+        if not previous:
+            return 0.0 if not recent else None
+        return round(((float(recent) - float(previous)) / float(previous)) * 100, 2)
+
+    def get_analytics_snapshot_state(self, *, project: Project) -> dict:
+        today = timezone.now().date()
+        window_start = today - timedelta(days=29)
+
+        providers = [
+            {
+                "key": ProjectIntegration.Provider.GOOGLE_ANALYTICS,
+                "label": "GA4",
+                "integration_label": "Google Analytics",
+            },
+            {
+                "key": ProjectIntegration.Provider.GOOGLE_SEARCH_CONSOLE,
+                "label": "GSC",
+                "integration_label": "Google Search Console",
+            },
+            {
+                "key": ProjectIntegration.Provider.PLAUSIBLE,
+                "label": "Plausible",
+                "integration_label": "Plausible",
+            },
+        ]
+
+        connected_provider_keys = set(
+            ProjectIntegration.objects.filter(
+                project=project,
+                status=ProjectIntegration.Status.CONNECTED,
+            ).values_list("provider", flat=True)
+        )
+        for provider in providers:
+            provider["is_connected"] = provider["key"] in connected_provider_keys
+
+        facts_qs = AnalyticsFactDaily.objects.filter(
+            project=project,
+            metric_date__gte=window_start,
+            metric_date__lte=today,
+        )
+
+        gsc_facts_qs = facts_qs.filter(provider=AnalyticsFactDaily.Provider.GSC)
+        ga4_facts_qs = facts_qs.filter(provider=AnalyticsFactDaily.Provider.GA4)
+        plausible_facts_qs = facts_qs.filter(provider=AnalyticsFactDaily.Provider.PLAUSIBLE)
+
+        clicks_source_qs = gsc_facts_qs if gsc_facts_qs.exists() else facts_qs
+        session_source_qs = (
+            ga4_facts_qs
+            if ga4_facts_qs.exists()
+            else plausible_facts_qs
+            if plausible_facts_qs.exists()
+            else facts_qs
+        )
+
+        clicks_totals = clicks_source_qs.aggregate(
+            clicks=Sum("clicks"),
+            impressions=Sum("impressions"),
+        )
+        session_totals = session_source_qs.aggregate(
+            sessions=Sum("sessions"),
+            users=Sum("users"),
+            conversions=Sum("conversions"),
+            engaged_sessions=Sum("engaged_sessions"),
+        )
+
+        totals = {
+            "clicks": clicks_totals.get("clicks") or 0,
+            "impressions": clicks_totals.get("impressions") or 0,
+            "sessions": session_totals.get("sessions") or 0,
+            "users": session_totals.get("users") or 0,
+            "conversions": session_totals.get("conversions") or 0,
+            "engaged_sessions": session_totals.get("engaged_sessions") or 0,
+        }
+
+        gsc_position_data = facts_qs.filter(
+            provider=AnalyticsFactDaily.Provider.GSC,
+            avg_position__isnull=False,
+            impressions__gt=0,
+        ).aggregate(
+            weighted_position_sum=Sum(
+                F("avg_position") * F("impressions"),
+                output_field=FloatField(),
+            ),
+            total_impressions=Sum("impressions"),
+        )
+        weighted_position_sum = float(gsc_position_data.get("weighted_position_sum") or 0)
+        total_impressions = float(gsc_position_data.get("total_impressions") or 0)
+        avg_position = round(weighted_position_sum / total_impressions, 2) if total_impressions else 0.0
+
+        recent_start = today - timedelta(days=6)
+        previous_start = recent_start - timedelta(days=7)
+        previous_end = recent_start - timedelta(days=1)
+
+        recent_clicks = clicks_source_qs.filter(
+            metric_date__gte=recent_start,
+            metric_date__lte=today,
+        ).aggregate(clicks=Sum("clicks"))
+        previous_clicks = clicks_source_qs.filter(
+            metric_date__gte=previous_start,
+            metric_date__lte=previous_end,
+        ).aggregate(clicks=Sum("clicks"))
+
+        recent_sessions = session_source_qs.filter(
+            metric_date__gte=recent_start,
+            metric_date__lte=today,
+        ).aggregate(
+            sessions=Sum("sessions"),
+            conversions=Sum("conversions"),
+        )
+        previous_sessions = session_source_qs.filter(
+            metric_date__gte=previous_start,
+            metric_date__lte=previous_end,
+        ).aggregate(
+            sessions=Sum("sessions"),
+            conversions=Sum("conversions"),
+        )
+
+        recent = {
+            "clicks": recent_clicks.get("clicks") or 0,
+            "sessions": recent_sessions.get("sessions") or 0,
+            "conversions": recent_sessions.get("conversions") or 0,
+        }
+        previous = {
+            "clicks": previous_clicks.get("clicks") or 0,
+            "sessions": previous_sessions.get("sessions") or 0,
+            "conversions": previous_sessions.get("conversions") or 0,
+        }
+
+        opportunities = []
+        opportunities_grouped = list(
+            facts_qs.filter(
+                provider=AnalyticsFactDaily.Provider.GSC,
+                dimension_scope__in=[
+                    AnalyticsFactDaily.DimensionScope.PAGE,
+                    AnalyticsFactDaily.DimensionScope.PAGE_QUERY,
+                ],
+                impressions__isnull=False,
+                impressions__gt=0,
+            )
+            .values("search_query", "page_url")
+            .annotate(
+                total_impressions=Sum("impressions"),
+                total_clicks=Sum("clicks"),
+            )
+        )
+
+        ranked_opportunities = []
+        for row in opportunities_grouped:
+            impressions = int(row.get("total_impressions") or 0)
+            if impressions < 100:
+                continue
+            clicks = float(row.get("total_clicks") or 0)
+            ctr_value = clicks / impressions if impressions else 0
+            if ctr_value > 0.04:
+                continue
+            ranked_opportunities.append(
+                {
+                    "target": row.get("search_query") or row.get("page_url") or "Untitled page",
+                    "impressions": impressions,
+                    "ctr_pct": round(ctr_value * 100, 2),
+                    "suggestion": "Improve title/meta match and add internal links from related pages.",
+                }
+            )
+
+        ranked_opportunities.sort(key=lambda item: (item["ctr_pct"], -item["impressions"]))
+        opportunities = ranked_opportunities[:3]
+
+        has_analytics_data = facts_qs.exists()
+        has_any_provider_connected = any(provider["is_connected"] for provider in providers)
+
+        return {
+            "window_days": 30,
+            "providers": providers,
+            "has_connected_provider": has_any_provider_connected,
+            "has_data": has_analytics_data,
+            "totals": {
+                "clicks": int(totals["clicks"]),
+                "impressions": int(totals["impressions"]),
+                "sessions": int(totals["sessions"]),
+                "users": int(totals["users"]),
+                "conversions": float(totals["conversions"]),
+            },
+            "derived": {
+                "ctr_pct": self._safe_pct(totals["clicks"], totals["impressions"]),
+                "avg_position": avg_position,
+                "engagement_rate_pct": self._safe_pct(totals["engaged_sessions"], totals["sessions"]),
+                "conversion_rate_pct": self._safe_pct(totals["conversions"], totals["sessions"]),
+            },
+            "deltas": {
+                "clicks_pct": self._safe_delta(recent["clicks"], previous["clicks"]),
+                "sessions_pct": self._safe_delta(recent["sessions"], previous["sessions"]),
+                "conversions_pct": self._safe_delta(recent["conversions"], previous["conversions"]),
+            },
+            "opportunities": opportunities,
+        }
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["analytics_snapshot_state"] = self.get_analytics_snapshot_state(project=self.object)
+        return context
+
 
 class ProjectEyeCatchingPostsView(LoginRequiredMixin, DetailView):
     model = Project
@@ -604,7 +1308,9 @@ class ProjectEyeCatchingPostsView(LoginRequiredMixin, DetailView):
     context_object_name = "project"
 
     def get_queryset(self):
-        return Project.objects.filter(profile=self.request.user.profile)
+        return Project.objects.prefetch_related("custom_post_types").filter(
+            profile=self.request.user.profile
+        )
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -612,7 +1318,8 @@ class ProjectEyeCatchingPostsView(LoginRequiredMixin, DetailView):
         profile = self.request.user.profile
 
         all_suggestions = project.blog_post_title_suggestions.filter(
-            content_type=ContentType.SHARING
+            content_type=ContentType.SHARING,
+            custom_post_type__isnull=True,
         ).prefetch_related("generated_blog_posts")
 
         project_keywords = project.get_keywords()
@@ -666,7 +1373,9 @@ class ProjectSEOPostsView(LoginRequiredMixin, DetailView):
     context_object_name = "project"
 
     def get_queryset(self):
-        return Project.objects.filter(profile=self.request.user.profile)
+        return Project.objects.prefetch_related("custom_post_types").filter(
+            profile=self.request.user.profile
+        )
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -674,7 +1383,8 @@ class ProjectSEOPostsView(LoginRequiredMixin, DetailView):
         profile = self.request.user.profile
 
         all_suggestions = project.blog_post_title_suggestions.filter(
-            content_type=ContentType.SEO
+            content_type=ContentType.SEO,
+            custom_post_type__isnull=True,
         ).prefetch_related("generated_blog_posts")
 
         project_keywords = project.get_keywords()
@@ -720,6 +1430,583 @@ class ProjectSEOPostsView(LoginRequiredMixin, DetailView):
         context["content_type_display"] = "SEO Optimized"
 
         return context
+
+
+class ProjectCustomPostTypePostsView(LoginRequiredMixin, DetailView):
+    model = Project
+    template_name = "project/project_custom_post_type_posts.html"
+    context_object_name = "project"
+
+    def get_queryset(self):
+        return Project.objects.prefetch_related("custom_post_types").filter(
+            profile=self.request.user.profile
+        )
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        project = self.object
+        profile = self.request.user.profile
+
+        custom_post_type = project.custom_post_types.filter(id=self.kwargs["post_type_pk"]).first()
+        if custom_post_type is None:
+            raise Http404("Custom post type not found")
+
+        all_suggestions = project.blog_post_title_suggestions.filter(
+            content_type=ContentType.SHARING,
+            custom_post_type=custom_post_type,
+        ).prefetch_related("generated_blog_posts")
+
+        project_keywords = project.get_keywords()
+
+        archived_suggestions = []
+        active_suggestions = []
+
+        for suggestion in all_suggestions:
+            suggestion.keywords_with_usage = []
+            if suggestion.target_keywords:
+                for keyword_text in suggestion.target_keywords:
+                    keyword_info = project_keywords.get(
+                        keyword_text.lower(),
+                        {"keyword": None, "in_use": False, "project_keyword_id": None},
+                    )
+                    suggestion.keywords_with_usage.append(
+                        {
+                            "text": keyword_text,
+                            "keyword": keyword_info["keyword"],
+                            "in_use": keyword_info["in_use"],
+                            "project_keyword_id": keyword_info["project_keyword_id"],
+                        }
+                    )
+
+            has_posted_blog_post = any(
+                blog_post.posted for blog_post in suggestion.generated_blog_posts.all()
+            )
+            if has_posted_blog_post:
+                continue
+
+            if suggestion.archived:
+                archived_suggestions.append(suggestion)
+            else:
+                active_suggestions.append(suggestion)
+
+        context["custom_post_type"] = custom_post_type
+        context["archived_suggestions"] = archived_suggestions
+        context["active_suggestions"] = active_suggestions
+        context["has_pro_subscription"] = profile.is_on_pro_plan
+        context["has_auto_submission_setting"] = AutoSubmissionSetting.objects.filter(
+            project=project
+        ).exists()
+        context["content_type"] = "SHARING"
+        context["content_type_display"] = custom_post_type.name
+
+        return context
+
+
+class ProjectCustomPostTypesView(LoginRequiredMixin, DetailView):
+    model = Project
+    template_name = "project/project_custom_post_types.html"
+    context_object_name = "project"
+
+    def get_queryset(self):
+        return Project.objects.prefetch_related("custom_post_types").filter(
+            profile=self.request.user.profile
+        )
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["create_form"] = kwargs.get("create_form") or ProjectCustomPostTypeForm()
+        context["custom_post_types"] = list(self.object.custom_post_types.all())
+        return context
+
+    def post(self, request, *args, **kwargs):
+        self.object = self.get_object()
+        create_form = ProjectCustomPostTypeForm(request.POST, request.FILES)
+
+        if create_form.is_valid():
+            custom_post_type = create_form.save(commit=False)
+            custom_post_type.project = self.object
+            try:
+                custom_post_type.save()
+            except ValidationError as error:
+                for field, messages_list in error.message_dict.items():
+                    target_field = field if field in create_form.fields else None
+                    for message in messages_list:
+                        create_form.add_error(target_field, message)
+                messages.error(request, "Could not create custom post type. Please check the form.")
+                context = self.get_context_data(create_form=create_form)
+                return self.render_to_response(context)
+
+            messages.success(request, f"Created custom post type '{custom_post_type.name}'.")
+            return redirect("project_custom_post_types", pk=self.object.pk)
+
+        messages.error(request, "Could not create custom post type. Please check the form.")
+        context = self.get_context_data(create_form=create_form)
+        return self.render_to_response(context)
+
+
+class ProjectCustomPostTypeEditView(LoginRequiredMixin, TemplateView):
+    template_name = "project/project_custom_post_type_edit.html"
+
+    def get_project(self):
+        if not hasattr(self, "_project"):
+            self._project = get_object_or_404(
+                Project,
+                pk=self.kwargs["pk"],
+                profile=self.request.user.profile,
+            )
+        return self._project
+
+    def get_custom_post_type(self):
+        if not hasattr(self, "_custom_post_type"):
+            self._custom_post_type = get_object_or_404(
+                ProjectCustomPostType,
+                pk=self.kwargs["post_type_pk"],
+                project=self.get_project(),
+            )
+        return self._custom_post_type
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        custom_post_type = self.get_custom_post_type()
+        context["project"] = self.get_project()
+        context["custom_post_type"] = custom_post_type
+        context["form"] = kwargs.get("form") or ProjectCustomPostTypeForm(instance=custom_post_type)
+        return context
+
+    def get(self, request, *args, **kwargs):
+        return self.render_to_response(self.get_context_data())
+
+    def post(self, request, *args, **kwargs):
+        form = ProjectCustomPostTypeForm(
+            request.POST,
+            request.FILES,
+            instance=self.get_custom_post_type(),
+        )
+        if form.is_valid():
+            try:
+                updated_custom_post_type = form.save()
+            except ValidationError as error:
+                for field, messages_list in error.message_dict.items():
+                    target_field = field if field in form.fields else None
+                    for message in messages_list:
+                        form.add_error(target_field, message)
+                messages.error(request, "Could not update custom post type. Please check the form.")
+                return self.render_to_response(self.get_context_data(form=form))
+
+            messages.success(
+                request,
+                f"Updated custom post type '{updated_custom_post_type.name}'.",
+            )
+            return redirect("project_custom_post_types", pk=self.get_project().pk)
+
+        messages.error(request, "Could not update custom post type. Please check the form.")
+        return self.render_to_response(self.get_context_data(form=form))
+
+
+class ProjectCustomPostTypeUpdateView(LoginRequiredMixin, View):
+    def post(self, request, pk, post_type_pk):
+        project = get_object_or_404(Project, pk=pk, profile=request.user.profile)
+        custom_post_type = get_object_or_404(ProjectCustomPostType, pk=post_type_pk, project=project)
+
+        form = ProjectCustomPostTypeForm(request.POST, request.FILES, instance=custom_post_type)
+        if form.is_valid():
+            try:
+                form.save()
+                messages.success(request, f"Updated custom post type '{custom_post_type.name}'.")
+            except ValidationError as error:
+                validation_messages = []
+                for field, messages_list in error.message_dict.items():
+                    joined_messages = ", ".join(messages_list)
+                    validation_messages.append(f"{field}: {joined_messages}")
+                messages.error(
+                    request,
+                    "Could not update custom post type. " + " ".join(validation_messages),
+                )
+        else:
+            messages.error(request, "Could not update custom post type. Please check the form.")
+            for field_name, field_errors in form.errors.items():
+                if field_name == "__all__":
+                    label = "Form"
+                else:
+                    label = form.fields[field_name].label or field_name.replace("_", " ").title()
+                for field_error in field_errors:
+                    messages.error(request, f"{label}: {field_error}")
+
+        return redirect("project_custom_post_types", pk=project.pk)
+
+
+class ProjectCustomPostTypeDeleteView(LoginRequiredMixin, View):
+    def post(self, request, pk, post_type_pk):
+        project = get_object_or_404(Project, pk=pk, profile=request.user.profile)
+        custom_post_type = get_object_or_404(ProjectCustomPostType, pk=post_type_pk, project=project)
+
+        if request.POST.get("confirm_delete") != "yes":
+            messages.error(request, "Delete not confirmed. Custom post type was not deleted.")
+            return redirect("project_custom_post_types", pk=project.pk)
+
+        active_dependency_count = custom_post_type.title_suggestions.filter(archived=False).count()
+        if active_dependency_count > 0:
+            messages.error(
+                request,
+                (
+                    f"Cannot delete '{custom_post_type.name}' because it is used by "
+                    f"{active_dependency_count} active idea(s). Archive those ideas first, then retry."
+                ),
+            )
+            return redirect("project_custom_post_types", pk=project.pk)
+
+        deleted_name = custom_post_type.name
+        custom_post_type.delete()
+        messages.success(request, f"Deleted custom post type '{deleted_name}'.")
+        return redirect("project_custom_post_types", pk=project.pk)
+
+
+class ProjectIntegrationsView(LoginRequiredMixin, DetailView):
+    model = Project
+    template_name = "project/project_integrations.html"
+    context_object_name = "project"
+
+    google_scope_map = {
+        ProjectIntegration.Provider.GOOGLE_ANALYTICS: [
+            "openid",
+            "email",
+            "profile",
+            "https://www.googleapis.com/auth/analytics.readonly",
+        ],
+        ProjectIntegration.Provider.GOOGLE_SEARCH_CONSOLE: [
+            "openid",
+            "email",
+            "profile",
+            "https://www.googleapis.com/auth/webmasters.readonly",
+        ],
+    }
+
+    def get_queryset(self):
+        return Project.objects.filter(profile=self.request.user.profile)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        project = self.object
+
+        integrations = {
+            integration.provider: integration for integration in project.integrations.all()
+        }
+
+        context["ga4_integration"] = integrations.get(
+            ProjectIntegration.Provider.GOOGLE_ANALYTICS
+        )
+        context["gsc_integration"] = integrations.get(
+            ProjectIntegration.Provider.GOOGLE_SEARCH_CONSOLE
+        )
+        context["plausible_integration"] = integrations.get(ProjectIntegration.Provider.PLAUSIBLE)
+
+        if "plausible_form" not in context:
+            plausible_integration = context["plausible_integration"]
+            initial = {}
+            if plausible_integration:
+                initial = {
+                    "site_id": plausible_integration.plausible_site_id,
+                    "api_key": plausible_integration.plausible_api_key,
+                    "base_url": plausible_integration.plausible_base_url,
+                }
+            context["plausible_form"] = PlausibleIntegrationForm(initial=initial)
+
+        return context
+
+    def post(self, request, *args, **kwargs):
+        self.object = self.get_object()
+        action = request.POST.get("action")
+
+        if action == "connect_google_analytics":
+            return self._start_google_oauth(ProjectIntegration.Provider.GOOGLE_ANALYTICS)
+
+        if action == "connect_google_search_console":
+            return self._start_google_oauth(ProjectIntegration.Provider.GOOGLE_SEARCH_CONSOLE)
+
+        if action == "disconnect_google_analytics":
+            self._disconnect_google_integration(ProjectIntegration.Provider.GOOGLE_ANALYTICS)
+            messages.success(request, "Google Analytics disconnected.")
+            return redirect("project_integrations", pk=self.object.pk)
+
+        if action == "disconnect_google_search_console":
+            self._disconnect_google_integration(ProjectIntegration.Provider.GOOGLE_SEARCH_CONSOLE)
+            messages.success(request, "Google Search Console disconnected.")
+            return redirect("project_integrations", pk=self.object.pk)
+
+        if action == "connect_plausible":
+            form = PlausibleIntegrationForm(request.POST)
+            if form.is_valid():
+                if self._connect_plausible(form.cleaned_data):
+                    messages.success(request, "Plausible connected.")
+                    return redirect("project_integrations", pk=self.object.pk)
+
+                messages.error(
+                    request,
+                    "Could not verify Plausible credentials. Check API key/site ID and retry.",
+                )
+            context = self.get_context_data()
+            context["plausible_form"] = form
+            return self.render_to_response(context)
+
+        if action == "disconnect_plausible":
+            self._disconnect_plausible()
+            messages.success(request, "Plausible disconnected.")
+            return redirect("project_integrations", pk=self.object.pk)
+
+        messages.error(request, "Unknown integration action.")
+        return redirect("project_integrations", pk=self.object.pk)
+
+    def _start_google_oauth(self, provider):
+        client_id = getattr(settings, "GOOGLE_CLIENT_ID", "")
+        client_secret = getattr(settings, "GOOGLE_CLIENT_SECRET", "")
+
+        if not client_id or not client_secret:
+            messages.error(
+                self.request,
+                "Google OAuth is not configured yet. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.",
+            )
+            return redirect("project_integrations", pk=self.object.pk)
+
+        nonce = secrets.token_urlsafe(24)
+        session_key = f"google_integration_oauth_state:{nonce}"
+        self.request.session[session_key] = {
+            "project_id": self.object.pk,
+            "provider": provider,
+        }
+        self.request.session.set_expiry(600)
+
+        callback_url = get_google_integrations_callback_url()
+        scope = self.google_scope_map[provider]
+
+        params = {
+            "client_id": client_id,
+            "redirect_uri": callback_url,
+            "response_type": "code",
+            "scope": " ".join(scope),
+            "access_type": "offline",
+            "include_granted_scopes": "true",
+            "prompt": "consent",
+            "state": nonce,
+        }
+
+        auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
+        return HttpResponseRedirect(auth_url)
+
+    def _disconnect_google_integration(self, provider):
+        integration, _ = ProjectIntegration.objects.get_or_create(
+            project=self.object,
+            provider=provider,
+        )
+        integration.status = ProjectIntegration.Status.DISCONNECTED
+        integration.access_token = ""
+        integration.refresh_token = ""
+        integration.scope = ""
+        integration.token_expires_at = None
+        integration.connected_at = None
+        integration.external_account_email = ""
+        integration.save()
+
+        async_task(
+            "core.tasks.track_event",
+            profile_id=self.object.profile_id,
+            event_name=ANALYTICS_EVENTS.INTEGRATION_DISCONNECTED,
+            properties={
+                "project_id": self.object.id,
+                "provider": provider,
+                "result_status": "succeeded",
+            },
+            source_function="ProjectIntegrationsView._disconnect_google_integration",
+            group="Track Event",
+        )
+
+    def _connect_plausible(self, cleaned_data):
+        base_url = cleaned_data["base_url"]
+        site_id = cleaned_data["site_id"]
+        api_key = cleaned_data["api_key"]
+
+        verify_url = f"{base_url}/api/v1/stats/aggregate"
+        try:
+            response = requests.get(
+                verify_url,
+                params={
+                    "site_id": site_id,
+                    "period": "7d",
+                    "metrics": "visitors",
+                },
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=15,
+            )
+        except requests.RequestException:
+            return False
+
+        if response.status_code != 200:
+            return False
+
+        integration, _ = ProjectIntegration.objects.get_or_create(
+            project=self.object,
+            provider=ProjectIntegration.Provider.PLAUSIBLE,
+        )
+        integration.status = ProjectIntegration.Status.CONNECTED
+        integration.connected_at = timezone.now()
+        integration.plausible_api_key = api_key
+        integration.plausible_site_id = site_id
+        integration.plausible_base_url = base_url
+        integration.save()
+
+        async_task(
+            "core.tasks.track_event",
+            profile_id=self.object.profile_id,
+            event_name=ANALYTICS_EVENTS.INTEGRATION_CONNECTED,
+            properties={
+                "project_id": self.object.id,
+                "provider": ProjectIntegration.Provider.PLAUSIBLE,
+                "result_status": "succeeded",
+            },
+            source_function="ProjectIntegrationsView._connect_plausible",
+            group="Track Event",
+        )
+        return True
+
+    def _disconnect_plausible(self):
+        integration, _ = ProjectIntegration.objects.get_or_create(
+            project=self.object,
+            provider=ProjectIntegration.Provider.PLAUSIBLE,
+        )
+        integration.status = ProjectIntegration.Status.DISCONNECTED
+        integration.connected_at = None
+        integration.plausible_api_key = ""
+        integration.plausible_site_id = ""
+        integration.plausible_base_url = "https://plausible.io"
+        integration.save()
+
+        async_task(
+            "core.tasks.track_event",
+            profile_id=self.object.profile_id,
+            event_name=ANALYTICS_EVENTS.INTEGRATION_DISCONNECTED,
+            properties={
+                "project_id": self.object.id,
+                "provider": ProjectIntegration.Provider.PLAUSIBLE,
+                "result_status": "succeeded",
+            },
+            source_function="ProjectIntegrationsView._disconnect_plausible",
+            group="Track Event",
+        )
+
+
+class ProjectIntegrationsGoogleCallbackView(LoginRequiredMixin, View):
+    def get(self, request, *args, **kwargs):
+        state = request.GET.get("state", "")
+        oauth_error = request.GET.get("error")
+        session_key = f"google_integration_oauth_state:{state}"
+
+        oauth_state = request.session.pop(session_key, None)
+        if not state or not oauth_state:
+            messages.error(request, "Google integration session expired. Please retry.")
+            return redirect("home")
+
+        project = Project.objects.filter(
+            pk=oauth_state["project_id"],
+            profile=request.user.profile,
+        ).first()
+        if not project:
+            raise Http404("Project not found")
+
+        if oauth_error:
+            messages.error(request, f"Google connection cancelled: {oauth_error}.")
+            return redirect("project_integrations", pk=project.pk)
+
+        code = request.GET.get("code")
+        if not code:
+            messages.error(request, "Google did not return an authorization code.")
+            return redirect("project_integrations", pk=project.pk)
+
+        token_response = self._exchange_google_code_for_token(
+            request=request,
+            code=code,
+        )
+        if not token_response:
+            messages.error(request, "Could not complete Google OAuth token exchange.")
+            return redirect("project_integrations", pk=project.pk)
+
+        provider = oauth_state["provider"]
+        self._save_google_integration(project=project, provider=provider, token_response=token_response)
+
+        provider_label = dict(ProjectIntegration.Provider.choices).get(provider, "Google integration")
+        messages.success(request, f"{provider_label} connected.")
+        return redirect("project_integrations", pk=project.pk)
+
+    def _exchange_google_code_for_token(self, request, code):
+        callback_url = get_google_integrations_callback_url()
+        try:
+            response = requests.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "code": code,
+                    "client_id": settings.GOOGLE_CLIENT_ID,
+                    "client_secret": settings.GOOGLE_CLIENT_SECRET,
+                    "redirect_uri": callback_url,
+                    "grant_type": "authorization_code",
+                },
+                timeout=15,
+            )
+            response.raise_for_status()
+            token_response = response.json()
+            if not token_response.get("access_token"):
+                return None
+            return token_response
+        except (requests.RequestException, ValueError):
+            logger.exception("[ProjectIntegrationsGoogleCallbackView] Google token exchange failed")
+            return None
+
+    def _fetch_google_email(self, access_token):
+        try:
+            response = requests.get(
+                "https://openidconnect.googleapis.com/v1/userinfo",
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=10,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            return payload.get("email", "")
+        except (requests.RequestException, ValueError):
+            return ""
+
+    def _save_google_integration(self, *, project, provider, token_response):
+        integration, _ = ProjectIntegration.objects.get_or_create(
+            project=project,
+            provider=provider,
+        )
+
+        access_token = token_response.get("access_token", "")
+        refresh_token = token_response.get("refresh_token", "")
+        expires_in = token_response.get("expires_in")
+        scope = token_response.get("scope", "")
+
+        integration.status = ProjectIntegration.Status.CONNECTED
+        integration.access_token = access_token
+        if refresh_token:
+            integration.refresh_token = refresh_token
+        integration.scope = scope
+        integration.connected_at = timezone.now()
+        integration.external_account_email = self._fetch_google_email(access_token)
+
+        if expires_in:
+            integration.token_expires_at = timezone.now() + timedelta(seconds=int(expires_in))
+
+        integration.save()
+
+        async_task(
+            "core.tasks.track_event",
+            profile_id=project.profile_id,
+            event_name=ANALYTICS_EVENTS.INTEGRATION_CONNECTED,
+            properties={
+                "project_id": project.id,
+                "provider": provider,
+                "result_status": "succeeded",
+            },
+            source_function="ProjectIntegrationsGoogleCallbackView._save_google_integration",
+            group="Track Event",
+        )
 
 
 class ProjectSettingsView(LoginRequiredMixin, DetailView):
@@ -841,7 +2128,6 @@ class ProjectPagesView(LoginRequiredMixin, DetailView):
         return Project.objects.filter(profile=self.request.user.profile)
 
     def get_context_data(self, **kwargs):
-        from urllib.parse import urlparse
         from django.core.paginator import Paginator
 
         context = super().get_context_data(**kwargs)
@@ -885,6 +2171,575 @@ class ProjectPagesView(LoginRequiredMixin, DetailView):
         context["ai_pages_count"] = ai_pages_count
         context["sitemap_pages_count"] = sitemap_pages_count
         context["unanalyzed_pages_count"] = total_pages_count - analyzed_pages_count
+
+        return context
+
+
+class ProjectPageDetailView(LoginRequiredMixin, DetailView):
+    model = ProjectPage
+    template_name = "project/project_page_detail.html"
+    context_object_name = "project_page"
+    pk_url_kwarg = "page_pk"
+
+    def get_queryset(self):
+        return ProjectPage.objects.select_related("project").filter(
+            project__profile=self.request.user.profile,
+            project_id=self.kwargs["project_pk"],
+        )
+
+    def _enqueue_backlink_refresh(self, *, project_page):
+        lock_key = get_backlink_prospects_refresh_lock_key(project_page.id)
+        if not cache.add(lock_key, True, timeout=5 * 60):
+            return False, "already_running"
+
+        try:
+            async_task(
+                "core.tasks.refresh_backlink_prospects_cache",
+                project_page.id,
+                group="backlink_prospects",
+            )
+        except Exception as error:
+            cache.delete(lock_key)
+            logger.warning(
+                "[BacklinkProspects] Failed to enqueue async refresh",
+                project_page_id=project_page.id,
+                project_id=project_page.project_id,
+                error=str(error),
+                exc_info=True,
+            )
+            return False, "enqueue_failed"
+
+        return True, "queued"
+
+    def _prepare_backlink_candidates(self, candidates, *, sort_mode, has_contact_only=False):
+        prepared_candidates = []
+        for candidate in candidates or []:
+            contact_methods = candidate.get("contact_methods") or []
+            actionable_methods = [
+                method
+                for method in contact_methods
+                if method.get("status") in {"found", "low_confidence"} and method.get("value")
+            ]
+            found_methods = [method for method in actionable_methods if method.get("status") == "found"]
+            high_confidence_methods = [
+                method for method in actionable_methods if method.get("confidence") == "high"
+            ]
+
+            parsed_discovered_at = None
+            discovered_at_raw = candidate.get("discovered_at")
+            if isinstance(discovered_at_raw, str) and discovered_at_raw:
+                try:
+                    parsed_discovered_at = datetime.fromisoformat(
+                        discovered_at_raw.replace("Z", "+00:00")
+                    )
+                except ValueError:
+                    parsed_discovered_at = None
+
+            url_lower = str(candidate.get("url") or "").lower()
+            title_lower = str(candidate.get("title") or "").lower()
+            opportunity_type = "Editorial mention"
+            opportunity_signature = f"{title_lower} {url_lower}"
+            if any(
+                keyword in opportunity_signature
+                for keyword in ["write for us", "guest post", "contributor"]
+            ):
+                opportunity_type = "Guest post pitch"
+            elif any(
+                keyword in opportunity_signature
+                for keyword in ["resources", "directory", "roundup", "best "]
+            ):
+                opportunity_type = "Resource inclusion"
+
+            explanation = candidate.get("explanation")
+            if not isinstance(explanation, dict):
+                explanation = {}
+
+            prepared_candidate = {
+                **candidate,
+                "contact_methods": contact_methods,
+                "has_contact_methods": bool(actionable_methods),
+                "found_contact_count": len(found_methods),
+                "high_confidence_contact_count": len(high_confidence_methods),
+                "opportunity_type": opportunity_type,
+                "relevance_reason": (
+                    explanation.get("summary")
+                    or "Topical and authority signals indicate this is a relevant outreach target."
+                ),
+                "discovered_at": parsed_discovered_at,
+                "discovered_at_timestamp": parsed_discovered_at.timestamp() if parsed_discovered_at else 0,
+            }
+            prepared_candidates.append(prepared_candidate)
+
+        if has_contact_only:
+            prepared_candidates = [
+                candidate for candidate in prepared_candidates if candidate["has_contact_methods"]
+            ]
+
+        if sort_mode == "newest":
+            prepared_candidates.sort(
+                key=lambda candidate: (
+                    candidate.get("discovered_at_timestamp", 0),
+                    candidate.get("relevance_score", 0),
+                ),
+                reverse=True,
+            )
+        elif sort_mode == "has_contact":
+            prepared_candidates.sort(
+                key=lambda candidate: (
+                    candidate.get("has_contact_methods", False),
+                    candidate.get("found_contact_count", 0),
+                    candidate.get("relevance_score", 0),
+                ),
+                reverse=True,
+            )
+        else:
+            prepared_candidates.sort(
+                key=lambda candidate: candidate.get("relevance_score", 0),
+                reverse=True,
+            )
+
+        return prepared_candidates
+
+    def post(self, request, *args, **kwargs):
+        self.object = self.get_object()
+        if not request.user.profile.is_on_pro_plan:
+            return HttpResponse(status=403)
+
+        action = request.POST.get("action")
+        if action not in {"run_seo_analysis", "run_backlink_refresh"}:
+            messages.error(request, "Unknown action.")
+            return redirect(
+                reverse(
+                    "project_page_detail",
+                    kwargs={
+                        "project_pk": self.object.project_id,
+                        "page_pk": self.object.id,
+                    },
+                )
+            )
+
+        rate_limit_result = consume_action_rate_limit(
+            profile_id=request.user.profile.id,
+            action=action,
+        )
+        if not rate_limit_result.allowed:
+            messages.info(
+                request,
+                "Too many requests in a short window. Please wait a minute and retry.",
+            )
+            return redirect(
+                reverse(
+                    "project_page_detail",
+                    kwargs={
+                        "project_pk": self.object.project_id,
+                        "page_pk": self.object.id,
+                    },
+                )
+            )
+
+        if action == "run_seo_analysis":
+            if not is_module_enabled(MODULE_SEO_ANALYSIS):
+                messages.info(
+                    request,
+                    "SEO analysis is temporarily disabled by feature flag.",
+                )
+                return redirect(
+                    reverse(
+                        "project_page_detail",
+                        kwargs={
+                            "project_pk": self.object.project_id,
+                            "page_pk": self.object.id,
+                        },
+                    )
+                )
+
+            start_result = start_or_reuse_run(
+                project_page=self.object,
+                requested_by=request.user.profile,
+                trigger=ProjectPageAnalysisRun.Trigger.MANUAL,
+            )
+
+            if not start_result.created:
+                if start_result.reason == "active_lock":
+                    messages.info(
+                        request,
+                        "Analysis is already running for this page. Please wait for it to complete.",
+                    )
+                elif start_result.reason == "cooldown":
+                    messages.info(
+                        request,
+                        (
+                            "Analysis was just run. Please wait "
+                            f"{RERUN_COOLDOWN_SECONDS} seconds before rerunning."
+                        ),
+                    )
+                else:
+                    messages.error(
+                        request,
+                        "We couldn't refresh analysis. Please try again in a minute.",
+                    )
+            else:
+                quota_result = consume_daily_quota(
+                    profile_id=request.user.profile.id,
+                    module=MODULE_SEO_ANALYSIS,
+                    limit=int(getattr(settings, "DETAIL_VIEW_SEO_ANALYSIS_DAILY_LIMIT", 20)),
+                )
+                if not quota_result.allowed:
+                    start_result.run.delete()
+                    messages.info(
+                        request,
+                        "You've reached today's SEO analysis run limit. Please try again tomorrow.",
+                    )
+                    return redirect(
+                        reverse(
+                            "project_page_detail",
+                            kwargs={
+                                "project_pk": self.object.project_id,
+                                "page_pk": self.object.id,
+                            },
+                        )
+                    )
+
+                async_task(
+                    "core.tasks.execute_project_page_analysis_run",
+                    start_result.run.id,
+                    group="project_page_analysis_runs",
+                )
+                enqueue_track_event(
+                    profile_id=request.user.profile.id,
+                    event_name=ANALYTICS_EVENTS.SEO_ANALYSIS_RUN_STARTED,
+                    properties={
+                        "project_id": self.object.project_id,
+                        "project_page_id": self.object.id,
+                        "run_id": start_result.run.id,
+                        "trigger": ProjectPageAnalysisRun.Trigger.MANUAL,
+                        "result_status": "queued",
+                    },
+                    source_function="ProjectPageDetailView.post",
+                )
+                messages.success(
+                    request,
+                    "Analysis rerun queued. Refresh in a few moments to see updated results.",
+                )
+
+        elif action == "run_backlink_refresh":
+            if not is_module_enabled(MODULE_BACKLINK_DISCOVERY):
+                messages.info(
+                    request,
+                    "Backlink discovery is temporarily disabled by feature flag.",
+                )
+                return redirect(
+                    reverse(
+                        "project_page_detail",
+                        kwargs={
+                            "project_pk": self.object.project_id,
+                            "page_pk": self.object.id,
+                        },
+                    )
+                )
+
+            cooldown_result = consume_cooldown(
+                profile_id=request.user.profile.id,
+                module=MODULE_BACKLINK_DISCOVERY,
+                page_id=self.object.id,
+                cooldown_seconds=int(
+                    getattr(settings, "DETAIL_VIEW_BACKLINK_DISCOVERY_COOLDOWN_SECONDS", 45)
+                ),
+            )
+            if not cooldown_result.allowed:
+                messages.info(
+                    request,
+                    "Backlink discovery was just run. Please wait before retrying.",
+                )
+                return redirect(
+                    reverse(
+                        "project_page_detail",
+                        kwargs={
+                            "project_pk": self.object.project_id,
+                            "page_pk": self.object.id,
+                        },
+                    )
+                )
+
+            if not self.object.date_analyzed:
+                messages.info(
+                    request,
+                    "Run SEO analysis first so backlink discovery has current page context.",
+                )
+            else:
+                if cache.get(get_backlink_prospects_refresh_lock_key(self.object.id)):
+                    messages.info(
+                        request,
+                        "Backlink discovery is already running for this page.",
+                    )
+                    return redirect(
+                        reverse(
+                            "project_page_detail",
+                            kwargs={
+                                "project_pk": self.object.project_id,
+                                "page_pk": self.object.id,
+                            },
+                        )
+                    )
+
+                quota_result = consume_daily_quota(
+                    profile_id=request.user.profile.id,
+                    module=MODULE_BACKLINK_DISCOVERY,
+                    limit=int(
+                        getattr(settings, "DETAIL_VIEW_BACKLINK_DISCOVERY_DAILY_LIMIT", 12)
+                    ),
+                )
+                if not quota_result.allowed:
+                    messages.info(
+                        request,
+                        "You've reached today's backlink discovery run limit. Please try again tomorrow.",
+                    )
+                    return redirect(
+                        reverse(
+                            "project_page_detail",
+                            kwargs={
+                                "project_pk": self.object.project_id,
+                                "page_pk": self.object.id,
+                            },
+                        )
+                    )
+
+                queued, reason = self._enqueue_backlink_refresh(project_page=self.object)
+                if queued:
+                    enqueue_track_event(
+                        profile_id=request.user.profile.id,
+                        event_name=ANALYTICS_EVENTS.BACKLINK_DISCOVERY_STARTED,
+                        properties={
+                            "project_id": self.object.project_id,
+                            "project_page_id": self.object.id,
+                            "trigger": "manual",
+                            "result_status": "queued",
+                        },
+                        source_function="ProjectPageDetailView.post",
+                    )
+                    messages.success(
+                        request,
+                        "Backlink discovery queued. Existing opportunities stay visible while we refresh.",
+                    )
+                elif reason == "already_running":
+                    release_daily_quota(
+                        profile_id=request.user.profile.id,
+                        module=MODULE_BACKLINK_DISCOVERY,
+                    )
+                    messages.info(
+                        request,
+                        "Backlink discovery is already running for this page.",
+                    )
+                else:
+                    release_daily_quota(
+                        profile_id=request.user.profile.id,
+                        module=MODULE_BACKLINK_DISCOVERY,
+                    )
+                    messages.error(
+                        request,
+                        "We couldn't start backlink discovery right now. Please retry in a minute.",
+                    )
+
+        return redirect(
+            reverse(
+                "project_page_detail",
+                kwargs={
+                    "project_pk": self.object.project_id,
+                    "page_pk": self.object.id,
+                },
+            )
+        )
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        project_page = self.object
+        profile = self.request.user.profile
+        feature_flags = get_detail_view_feature_flags()
+        simulated_state = ""
+        if self.request.user.is_staff:
+            simulated_state = self.request.GET.get("state", "").lower()
+
+        page_parsed_url = urlparse(project_page.url)
+
+        context["project"] = project_page.project
+        context["has_pro_subscription"] = profile.is_on_pro_plan
+        context["is_gated"] = not profile.is_on_pro_plan
+        context["project_page_path"] = page_parsed_url.path or "/"
+        context["project_page_domain"] = page_parsed_url.netloc
+        context["state"] = simulated_state
+        context["detail_view_feature_flags"] = feature_flags
+        latest_run, run_history = get_latest_and_history(project_page=project_page)
+        latest_successful_run = project_page.get_latest_successful_analysis_run()
+
+        seo_analysis = None
+        if latest_successful_run and latest_successful_run.analysis_payload:
+            seo_analysis = latest_successful_run.analysis_payload
+        elif project_page.date_analyzed and any(
+            [
+                project_page.title,
+                project_page.description,
+                project_page.markdown_content,
+                project_page.summary,
+            ]
+        ):
+            # Backward compatibility for pages analyzed before run persistence existed.
+            seo_analysis = analyze_project_page_seo(project_page)
+
+        context["analysis_source_label"] = project_page.get_source_display()
+        context["analysis_last_run_at"] = (
+            latest_successful_run.finished_at
+            if latest_successful_run
+            else project_page.date_analyzed
+        )
+        context["latest_analysis_run"] = latest_run
+        context["analysis_run_history"] = run_history
+
+        overview_state = "ready" if project_page.date_analyzed else "loading"
+        if not feature_flags[MODULE_SEO_ANALYSIS]:
+            seo_state = "disabled"
+        elif seo_analysis:
+            seo_state = "ready"
+        elif latest_run and latest_run.status == ProjectPageAnalysisRun.Status.FAILED:
+            seo_state = "error"
+        else:
+            seo_state = "loading"
+        backlink_state = "disabled" if not feature_flags[MODULE_BACKLINK_DISCOVERY] else "empty"
+        backlink_candidates = []
+        backlink_refresh_in_progress = False
+        backlink_sort = self.request.GET.get("backlink_sort", "relevance")
+        if backlink_sort not in {"relevance", "has_contact", "newest"}:
+            backlink_sort = "relevance"
+        backlink_has_contact_only = self.request.GET.get("backlink_has_contact") == "1"
+
+        if simulated_state in {"loading", "empty", "error"}:
+            overview_state = simulated_state
+            seo_state = simulated_state
+            backlink_state = simulated_state
+        elif (
+            feature_flags[MODULE_BACKLINK_DISCOVERY]
+            and profile.is_on_pro_plan
+            and project_page.date_analyzed
+        ):
+            lock_key = get_backlink_prospects_refresh_lock_key(project_page.id)
+            backlink_refresh_in_progress = bool(cache.get(lock_key))
+
+            cached_candidates = get_cached_backlink_prospects(project_page.id)
+            if cached_candidates is not None:
+                prepared_unfiltered_candidates = self._prepare_backlink_candidates(
+                    cached_candidates,
+                    sort_mode=backlink_sort,
+                    has_contact_only=False,
+                )
+                backlink_candidates = (
+                    [
+                        candidate
+                        for candidate in prepared_unfiltered_candidates
+                        if candidate.get("has_contact_methods")
+                    ]
+                    if backlink_has_contact_only
+                    else prepared_unfiltered_candidates
+                )
+
+                if backlink_candidates:
+                    backlink_state = "ready"
+                elif backlink_has_contact_only and prepared_unfiltered_candidates:
+                    backlink_state = "filtered_empty"
+                else:
+                    backlink_state = "empty"
+            else:
+                if not backlink_refresh_in_progress:
+                    queued, _reason = self._enqueue_backlink_refresh(project_page=project_page)
+                    backlink_refresh_in_progress = queued
+                    if not queued:
+                        backlink_state = "error"
+                backlink_state = backlink_state if backlink_state == "error" else "loading"
+
+        context["overview_state"] = overview_state
+        context["seo_state"] = seo_state
+        context["backlink_state"] = backlink_state
+        context["backlink_candidates"] = backlink_candidates
+        context["backlink_candidates_count"] = len(backlink_candidates)
+        context["backlink_refresh_in_progress"] = backlink_refresh_in_progress
+        context["backlink_sort"] = backlink_sort
+        context["backlink_has_contact_only"] = backlink_has_contact_only
+        context["seo_analysis"] = seo_analysis
+
+        if profile.is_on_pro_plan:
+            enqueue_track_event(
+                profile_id=profile.id,
+                event_name=ANALYTICS_EVENTS.DETAIL_VIEW_OPENED,
+                properties={
+                    "project_id": project_page.project_id,
+                    "project_page_id": project_page.id,
+                    "seo_state": seo_state,
+                    "backlink_state": backlink_state,
+                    "result_status": "succeeded",
+                },
+                source_function="ProjectPageDetailView.get_context_data",
+            )
+            if backlink_state == "ready":
+                enqueue_track_event(
+                    profile_id=profile.id,
+                    event_name=ANALYTICS_EVENTS.OPPORTUNITIES_VIEWED,
+                    properties={
+                        "project_id": project_page.project_id,
+                        "project_page_id": project_page.id,
+                        "opportunities_count": len(backlink_candidates),
+                        "sort_mode": backlink_sort,
+                        "has_contact_only": backlink_has_contact_only,
+                        "result_status": "succeeded",
+                    },
+                    source_function="ProjectPageDetailView.get_context_data",
+                )
+
+        if self.request.user.is_staff:
+            context["backlink_debug_state"] = get_backlink_discovery_debug_state(project_page.id)
+            context["failed_analysis_debug_runs"] = list(
+                project_page.analysis_runs.filter(status=ProjectPageAnalysisRun.Status.FAILED)
+                .order_by("-created_at")[:5]
+                .values(
+                    "id",
+                    "created_at",
+                    "finished_at",
+                    "failure_message",
+                    "failure_details",
+                )
+            )
+
+        return context
+
+    def render_to_response(self, context, **response_kwargs):
+        response_kwargs.setdefault("status", 403 if context.get("is_gated") else 200)
+        return super().render_to_response(context, **response_kwargs)
+
+
+class ProjectEarnedLinksView(LoginRequiredMixin, DetailView):
+    model = Project
+    template_name = "project/project_earned_links.html"
+    context_object_name = "project"
+
+    def get_queryset(self):
+        return Project.objects.filter(profile=self.request.user.profile)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        project = self.object
+
+        earned_links = list(
+            ProjectEarnedLink.objects.filter(target_project=project)
+            .select_related(
+                "source_project",
+                "source_generated_blog_post",
+                "target_page",
+            )
+            .order_by("-last_seen_at", "-created_at")
+        )
+
+        context["earned_links"] = earned_links
+        context["total_earned_links_count"] = len(earned_links)
+        context["unique_source_projects_count"] = len(
+            {link.source_project_id for link in earned_links}
+        )
 
         return context
 
@@ -1067,7 +2922,7 @@ class ProjectDeleteView(LoginRequiredMixin, SuccessMessageMixin, DeleteView):
         async_task(
             track_event,
             profile_id=self.request.user.profile.id,
-            event_name="project_deleted",
+            event_name=ANALYTICS_EVENTS.PROJECT_DELETED,
             properties={
                 "project_id": self.object.id,
                 "project_name": project_name,
@@ -1112,3 +2967,13 @@ def changelog_view(request):
     }
 
     return render(request, "pages/changelog.html", context)
+
+
+def skill_markdown_view(request):
+    """Serve the canonical agent skill markdown file at /skill.md."""
+    skill_file = Path(settings.BASE_DIR) / "skill.md"
+
+    with open(skill_file, encoding="utf-8") as file:
+        skill_content = file.read()
+
+    return HttpResponse(skill_content, content_type="text/markdown; charset=utf-8")

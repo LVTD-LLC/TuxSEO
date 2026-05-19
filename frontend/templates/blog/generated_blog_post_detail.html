@@ -288,7 +288,7 @@
       </div>
 
       <div class="max-w-none prose prose-gray">
-        <div class="p-4 font-mono text-sm whitespace-pre-wrap bg-gray-50 rounded-md border border-gray-200">{{ generated_post.content }}</div>
+        {{ generated_post.content|markdown }}
       </div>
     </div>
 </div>

@@ -22,7 +22,6 @@
             action="{% url 'account_signup' %}"
             {% if turnstile_site_key %}
             data-controller="turnstile"
-            data-action="input->turnstile#renderWidget"
             data-turnstile-site-key-value="{{ turnstile_site_key }}"
             {% endif %}>
         {% csrf_token %}
@@ -31,24 +30,14 @@
         <input type="hidden" name="remember" value="true" />
         <div class="-space-y-px rounded-md shadow-sm">
           <div>
-            {{ form.username.errors | safe }}
-            <label for="username" class="sr-only">Username</label>
-            {% render_field form.username placeholder="Username" id="username" name="username" type="text" autocomplete="username" required=True class="block relative px-3 py-2 w-full placeholder-gray-500 text-gray-900 rounded-none rounded-t-md border border-gray-300 appearance-none focus:outline-none focus:ring-gray-500 focus:border-gray-500 focus:z-10 sm:text-sm" %}
-          </div>
-          <div>
             {{ form.email.errors | safe }}
-            <label for="email" class="sr-only">Username</label>
-            {% render_field form.email id="email" name="email" placeholder="Email" type="email" autocomplete="email" required="True" class="block relative px-3 py-2 w-full placeholder-gray-500 text-gray-900 rounded-none border border-gray-300 appearance-none focus:outline-none focus:ring-gray-500 focus:border-gray-500 focus:z-10 sm:text-sm" %}
+            <label for="email" class="sr-only">Email</label>
+            {% render_field form.email id="email" name="email" placeholder="Email" type="email" autocomplete="email" required="True" class="block relative px-3 py-2 w-full placeholder-gray-500 text-gray-900 rounded-none rounded-t-md border border-gray-300 appearance-none focus:outline-none focus:ring-gray-500 focus:border-gray-500 focus:z-10 sm:text-sm" %}
           </div>
           <div>
             {{ form.password1.errors | safe }}
             <label for="password1" class="sr-only">Password</label>
-            {% render_field form.password1 id="password1" name="password1" placeholder="Password" type="password" autocomplete="current-password" required="True" class="block relative px-3 py-2 w-full placeholder-gray-500 text-gray-900 rounded-none border border-gray-300 appearance-none focus:outline-none focus:ring-gray-500 focus:border-gray-500 focus:z-10 sm:text-sm" %}
-          </div>
-          <div>
-            {{ form.password2.errors | safe }}
-            <label for="password2" class="sr-only">Password</label>
-            {% render_field form.password2 id="password2" name="password2" type="password" autocomplete="current-password" required="True" class="block relative px-3 py-2 w-full placeholder-gray-500 text-gray-900 rounded-none rounded-b-md border border-gray-300 appearance-none focus:outline-none focus:ring-gray-500 focus:border-gray-500 focus:z-10 sm:text-sm" placeholder="Cofirm Password" %}
+            {% render_field form.password1 id="password1" name="password1" placeholder="Password" type="password" autocomplete="new-password" required="True" class="block relative px-3 py-2 w-full placeholder-gray-500 text-gray-900 rounded-none rounded-b-md border border-gray-300 appearance-none focus:outline-none focus:ring-gray-500 focus:border-gray-500 focus:z-10 sm:text-sm" %}
           </div>
         </div>
 
@@ -58,6 +47,8 @@
 
         {% if turnstile_site_key %}
         <div data-turnstile-target="container" class="w-full"></div>
+        <input type="hidden" name="cf-turnstile-response" data-turnstile-target="tokenInput" value="" />
+        <p data-turnstile-target="status" class="hidden mt-2 text-sm text-red-600" aria-live="polite"></p>
         {% endif %}
 
         <div>
@@ -121,3 +112,32 @@
     </div>
   </div>
 {% endblock content %}
+
+{% block schema %}
+{{ block.super }}
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    const form = document.getElementById("signup_form");
+    if (!form || typeof window.posthog === "undefined") {
+      return;
+    }
+
+    const eventName = "{{ signup_started_event_name|escapejs }}";
+    let hasTrackedSignupStart = false;
+
+    const trackSignupStarted = (trigger) => {
+      if (hasTrackedSignupStart) {
+        return;
+      }
+      hasTrackedSignupStart = true;
+      window.posthog.capture(eventName, {
+        trigger,
+        path: window.location.pathname,
+      });
+    };
+
+    form.addEventListener("focusin", () => trackSignupStarted("form_focus"), { once: true });
+    form.addEventListener("submit", () => trackSignupStarted("form_submit"));
+  });
+</script>
+{% endblock schema %}

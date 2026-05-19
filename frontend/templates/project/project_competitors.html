@@ -57,7 +57,7 @@
           <h3 class="text-sm font-medium text-yellow-800">Competitor Limit Reached</h3>
           <p class="mt-1 text-sm text-yellow-700">
             You have reached the maximum of {{ competitor_limit }} competitors for the free plan.
-            <a href="{% url 'pricing' %}" class="font-semibold underline hover:text-yellow-900">Upgrade to Pro</a> to add unlimited competitors.
+            <a href="{% url 'user_upgrade_checkout_session' product_name='Pro - Monthly' %}" class="font-semibold underline hover:text-yellow-900">Upgrade to Pro</a> to add unlimited competitors.
           </p>
         </div>
       </div>
@@ -75,7 +75,7 @@
           <h3 class="text-sm font-medium text-yellow-800">Competitor Post Generation Limit Reached</h3>
           <p class="mt-1 text-sm text-yellow-700">
             You have generated {{ number_of_competitor_posts_generated }}/{{ competitor_posts_limit }} competitor comparison posts for the free plan.
-            <a href="{% url 'pricing' %}" class="font-semibold underline hover:text-yellow-900">Upgrade to Pro</a> to generate unlimited competitor posts.
+            <a href="{% url 'user_upgrade_checkout_session' product_name='Pro - Monthly' %}" class="font-semibold underline hover:text-yellow-900">Upgrade to Pro</a> to generate unlimited competitor posts.
           </p>
         </div>
       </div>
@@ -222,7 +222,8 @@
                 <tr class="transition-colors hover:bg-gray-50"
                     data-controller="competitor-vs-post"
                     data-competitor-vs-post-competitor-id-value="{{ competitor.id }}"
-                    data-competitor-vs-post-project-id-value="{{ project.id }}">
+                    data-competitor-vs-post-project-id-value="{{ project.id }}"
+                    data-competitor-vs-post-generation-in-progress-value="{% if competitor.is_blog_post_generation_in_progress %}true{% else %}false{% endif %}">
                   <td class="px-6 py-4">
                     <div class="text-sm font-medium text-gray-900">
                       {{ competitor.name }}
@@ -259,6 +260,17 @@
                         </svg>
                         View Post
                       </a>
+                    {% elif competitor.is_blog_post_generation_in_progress %}
+                      <button
+                        disabled
+                        class="inline-flex items-center px-3 py-1.5 text-xs font-medium text-white bg-gray-900 rounded-md border border-gray-900 opacity-75 cursor-not-allowed"
+                        title="Competitor comparison post generation is in progress">
+                        <svg class="mr-1.5 w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                        </svg>
+                        Generating...
+                      </button>
                     {% else %}
                       {% if can_generate_competitor_posts %}
                         <button

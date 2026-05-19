@@ -17,9 +17,14 @@ export default class extends Controller {
     "reachableIndicator",
     "unreachableIndicator",
     "unreachableMessage",
-    "projectLink",
     "projectError",
     "projectErrorMessage",
+    "confirmNameInput",
+    "confirmSummaryInput",
+    "confirmDescriptionInput",
+    "confirmError",
+    "confirmErrorMessage",
+    "confirmButton",
   ];
 
   connect() {
@@ -80,6 +85,16 @@ export default class extends Controller {
   hideProjectError() {
     this.projectErrorTarget.classList.add("hidden");
     this.projectErrorMessageTarget.textContent = "";
+  }
+
+  showConfirmError(message) {
+    this.confirmErrorMessageTarget.textContent = message;
+    this.confirmErrorTarget.classList.remove("hidden");
+  }
+
+  hideConfirmError() {
+    this.confirmErrorTarget.classList.add("hidden");
+    this.confirmErrorMessageTarget.textContent = "";
   }
 
   async checkUrlReachability(url_value) {
@@ -178,27 +193,69 @@ export default class extends Controller {
 
       console.log("Project created successfully", { projectId: this.createdProjectId, data });
 
-      if (this.createdProjectId && this.hasProjectLinkTarget) {
-        const project_url = `/project/${this.createdProjectId}/posts/seo-optimized/`;
-        console.log("Setting project link href to", project_url);
-        this.projectLinkTarget.href = project_url;
-      } else {
-        console.warn("Cannot set project link", {
-          hasProjectId: !!this.createdProjectId,
-          hasProjectLinkTarget: this.hasProjectLinkTarget
-        });
-      }
+      this.confirmNameInputTarget.value = data.name || "";
+      this.confirmSummaryInputTarget.value = data.summary || "";
+      this.confirmDescriptionInputTarget.value = data.description || "";
+      this.hideConfirmError();
 
       setTimeout(() => {
         console.log("Moving to step 3");
         this.goToStep(3);
-      }, 1500);
+      }, 1200);
 
     } catch (error) {
       console.error("Error creating project:", error);
       this.showProjectError("There was an unexpected error creating your project. Please try again.");
       this.continueButtonTarget.disabled = false;
       this.goToStep(1);
+    }
+  }
+
+  async confirmProjectDetails() {
+    if (!this.createdProjectId) {
+      this.showConfirmError("Project not found. Please try creating it again.");
+      this.goToStep(1);
+      return;
+    }
+
+    const name = this.confirmNameInputTarget.value.trim();
+    const summary = this.confirmSummaryInputTarget.value.trim();
+    const description = this.confirmDescriptionInputTarget.value.trim();
+
+    if (!name) {
+      this.showConfirmError("Project name is required.");
+      return;
+    }
+
+    this.confirmButtonTarget.disabled = true;
+    this.hideConfirmError();
+
+    try {
+      const csrf_token = document.querySelector("[name=csrfmiddlewaretoken]").value;
+
+      const response = await fetch(`/api/projects/${this.createdProjectId}/confirm-onboarding`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrf_token,
+        },
+        body: JSON.stringify({ name, summary, description }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to save project details");
+      }
+
+      const data = await response.json();
+      if (data.status === "error") {
+        throw new Error(data.message || "Failed to save project details");
+      }
+
+      window.location.assign(`/project/${this.createdProjectId}/home/`);
+    } catch (error) {
+      console.error("Error saving onboarding confirmation:", error);
+      this.showConfirmError(error.message || "Could not save project details. Please try again.");
+      this.confirmButtonTarget.disabled = false;
     }
   }
 
@@ -237,6 +294,9 @@ export default class extends Controller {
       this.step3Target.classList.add("flex");
       this.step3IndicatorTarget.classList.remove("bg-gray-300", "border-gray-300", "w-4");
       this.step3IndicatorTarget.classList.add("bg-gray-800", "border-gray-800", "w-6");
+      if (this.hasConfirmButtonTarget) {
+        this.confirmButtonTarget.disabled = false;
+      }
     }
   }
 

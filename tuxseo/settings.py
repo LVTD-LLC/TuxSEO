@@ -26,6 +26,12 @@ from sentry_sdk.integrations.redis import RedisIntegration
 from structlog_sentry import SentryProcessor
 
 from tuxseo.logging_utils import scrubbing_callback
+from tuxseo.posthog_logs import (
+    PostHogLogsEmitter,
+    PostHogLogsProcessor,
+    ensure_exception_fields,
+    redact_event,
+)
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -42,6 +48,24 @@ ENVIRONMENT = env("ENVIRONMENT")
 SENTRY_DSN = env("SENTRY_DSN", default="")
 
 LOGFIRE_TOKEN = env("LOGFIRE_TOKEN", default="")
+
+POSTHOG_API_KEY = env("POSTHOG_API_KEY", default="")
+POSTHOG_INGEST_HOST = env("POSTHOG_INGEST_HOST", default="https://us.i.posthog.com")
+POSTHOG_LOGS_ENABLED = env.bool("POSTHOG_LOGS_ENABLED", default=ENVIRONMENT == "prod")
+POSTHOG_LOGS_ENDPOINT = env(
+    "POSTHOG_LOGS_ENDPOINT",
+    default=f"{POSTHOG_INGEST_HOST.rstrip('/')}/v1/logs",
+)
+POSTHOG_LOGS_BATCH_MAX_QUEUE_SIZE = env.int("POSTHOG_LOGS_BATCH_MAX_QUEUE_SIZE", default=2048)
+POSTHOG_LOGS_BATCH_MAX_EXPORT_BATCH_SIZE = env.int(
+    "POSTHOG_LOGS_BATCH_MAX_EXPORT_BATCH_SIZE", default=256
+)
+POSTHOG_LOGS_BATCH_SCHEDULE_DELAY_MILLIS = env.int(
+    "POSTHOG_LOGS_BATCH_SCHEDULE_DELAY_MILLIS", default=4000
+)
+POSTHOG_LOGS_BATCH_EXPORT_TIMEOUT_MILLIS = env.int(
+    "POSTHOG_LOGS_BATCH_EXPORT_TIMEOUT_MILLIS", default=30000
+)
 
 if LOGFIRE_TOKEN != "":
     logfire.configure(
@@ -92,6 +116,7 @@ INSTALLED_APPS = [
     "mjml",
     "core.apps.CoreConfig",
     "docs.apps.DocsConfig",
+    "steering.apps.SteeringConfig",
 ]
 
 MIDDLEWARE = [
@@ -101,6 +126,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "tuxseo.middleware.RequestLogContextMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "allauth.account.middleware.AccountMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
@@ -261,11 +287,14 @@ LOGIN_REDIRECT_URL = "home"
 ACCOUNT_LOGOUT_REDIRECT_URL = "landing"
 
 ACCOUNT_USER_MODEL_USERNAME_FIELD = "username"
-ACCOUNT_AUTHENTICATION_METHOD = "username"
-ACCOUNT_USERNAME_REQUIRED = True
+ACCOUNT_AUTHENTICATION_METHOD = "email"
+ACCOUNT_USERNAME_REQUIRED = False
 ACCOUNT_EMAIL_REQUIRED = True
+ACCOUNT_SIGNUP_PASSWORD_ENTER_TWICE = False
 ACCOUNT_UNIQUE_EMAIL = True
 ACCOUNT_SESSION_REMEMBER = True
+ACCOUNT_CONFIRM_EMAIL_ON_GET = True
+ALLOW_SIGNUPS = env.bool("ALLOW_SIGNUPS", default=True)
 ACCOUNT_ADAPTER = "core.adapters.CustomAccountAdapter"
 ACCOUNT_FORMS = {
     "signup": "core.forms.CustomSignUpForm",
@@ -337,6 +366,23 @@ REDIS_PASSWORD = env("REDIS_PASSWORD", default="")
 REDIS_DB = env("REDIS_DB", default="0")
 REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
 
+USE_REDIS_CACHE = env.bool("USE_REDIS_CACHE", default=ENVIRONMENT != "dev")
+
+if USE_REDIS_CACHE:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": REDIS_URL,
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "tuxseo-local-cache",
+        }
+    }
+
 Q_CLUSTER = {
     "name": "tuxseo-q",
     "timeout": 3600,  # 1 hour
@@ -346,6 +392,17 @@ Q_CLUSTER = {
     "redis": REDIS_URL,
     "error_reporter": {},
 }
+
+SITEMAP_SYNC_INTERVAL_HOURS = max(1, env.int("SITEMAP_SYNC_INTERVAL_HOURS", default=6))
+SITEMAP_SYNC_SCHEDULER_ENABLED = env.bool("SITEMAP_SYNC_SCHEDULER_ENABLED", default=True)
+SITEMAP_SYNC_TIMEOUT_SECONDS = max(5, env.int("SITEMAP_SYNC_TIMEOUT_SECONDS", default=30))
+SITEMAP_SYNC_MAX_RETRIES = max(1, env.int("SITEMAP_SYNC_MAX_RETRIES", default=3))
+SITEMAP_SYNC_RETRY_BACKOFF_SECONDS = max(
+    0.1, env.float("SITEMAP_SYNC_RETRY_BACKOFF_SECONDS", default=1.0)
+)
+SITEMAP_SYNC_MAX_INDEX_DEPTH = max(0, env.int("SITEMAP_SYNC_MAX_INDEX_DEPTH", default=2))
+SITEMAP_SYNC_MAX_CHILD_SITEMAPS = max(1, env.int("SITEMAP_SYNC_MAX_CHILD_SITEMAPS", default=50))
+SITEMAP_SYNC_LOCK_TTL_SECONDS = max(60, env.int("SITEMAP_SYNC_LOCK_TTL_SECONDS", default=3600))
 
 
 def extract_from_record(logger, name, event_dict):
@@ -441,6 +498,18 @@ LOGGING = {
     },
 }
 
+posthog_logs_emitter = PostHogLogsEmitter(
+    enabled=POSTHOG_LOGS_ENABLED,
+    endpoint=POSTHOG_LOGS_ENDPOINT,
+    api_key=POSTHOG_API_KEY,
+    service_name="tuxseo-backend",
+    environment=ENVIRONMENT,
+    batch_max_queue_size=POSTHOG_LOGS_BATCH_MAX_QUEUE_SIZE,
+    batch_max_export_batch_size=POSTHOG_LOGS_BATCH_MAX_EXPORT_BATCH_SIZE,
+    batch_schedule_delay_millis=POSTHOG_LOGS_BATCH_SCHEDULE_DELAY_MILLIS,
+    batch_export_timeout_millis=POSTHOG_LOGS_BATCH_EXPORT_TIMEOUT_MILLIS,
+)
+
 structlog_processors = [
     structlog.contextvars.merge_contextvars,
     structlog.stdlib.filter_by_level,
@@ -449,8 +518,13 @@ structlog_processors = [
     structlog.stdlib.add_log_level,
     structlog.stdlib.PositionalArgumentsFormatter(),
     structlog.processors.StackInfoRenderer(),
-    # structlog.processors.format_exc_info,
+    structlog.processors.format_exc_info,
+    ensure_exception_fields,
+    redact_event,
 ]
+
+if posthog_logs_emitter.enabled:
+    structlog_processors.append(PostHogLogsProcessor(posthog_logs_emitter))
 
 if SENTRY_DSN:
     structlog_processors.append(
@@ -506,11 +580,21 @@ if SENTRY_DSN and ENVIRONMENT == "prod":
         include_local_variables=True,
     )
 
-POSTHOG_API_KEY = env("POSTHOG_API_KEY", default="")
 BUTTONDOWN_API_KEY = env("BUTTONDOWN_API_KEY", default="")
+
+TWENTY_CRM_BASE_URL = env("TWENTY_CRM_BASE_URL", default="")
+TWENTY_CRM_API_KEY = env(
+    "TWENTY_CRM_API_KEY",
+    default=env("TWENTY_TUXSEO_API_KEY", default=env("TWENTY_API_KEY", default="")),
+)
+TWENTY_SIGNUP_SYNC_ENABLED = env.bool("TWENTY_SIGNUP_SYNC_ENABLED", default=False)
+TWENTY_SIGNUP_SYNC_TIMEOUT_SECONDS = env.int("TWENTY_SIGNUP_SYNC_TIMEOUT_SECONDS", default=20)
+TWENTY_SIGNUP_SYNC_MAX_RETRIES = env.int("TWENTY_SIGNUP_SYNC_MAX_RETRIES", default=3)
 
 STRIPE_LIVE_SECRET_KEY = env("STRIPE_LIVE_SECRET_KEY", default="")
 STRIPE_TEST_SECRET_KEY = env("STRIPE_TEST_SECRET_KEY", default="")
+STRIPE_PRICE_ID_PRO_MONTHLY = env("STRIPE_PRICE_ID_PRO_MONTHLY", default="")
+STRIPE_PRICE_ID_PRO_YEARLY = env("STRIPE_PRICE_ID_PRO_YEARLY", default="")
 
 STRIPE_LIVE_MODE = False
 STRIPE_SECRET_KEY = STRIPE_TEST_SECRET_KEY
@@ -527,6 +611,37 @@ GEMINI_API_KEY = env("GEMINI_API_KEY")
 PERPLEXITY_API_KEY = env("PERPLEXITY_API_KEY")
 
 KEYWORDS_EVERYWHERE_API_KEY = env("KEYWORDS_EVERYWHERE_API_KEY")
+EXA_API_KEY = env("EXA_API_KEY", default="")
+BACKLINK_PROSPECTS_CONFIG = {
+    "ENRICH_FETCH_TIMEOUT_SECONDS": max(
+        1,
+        env.int("BACKLINK_PROSPECTS_ENRICH_FETCH_TIMEOUT_SECONDS", default=5),
+    ),
+    "ENRICH_TOTAL_BUDGET_SECONDS": max(
+        1,
+        env.int("BACKLINK_PROSPECTS_ENRICH_TOTAL_BUDGET_SECONDS", default=20),
+    ),
+    "EXA_REQUEST_TIMEOUT_SECONDS": max(
+        2,
+        env.int("BACKLINK_PROSPECTS_EXA_REQUEST_TIMEOUT_SECONDS", default=20),
+    ),
+    "PROVIDER_MAX_RETRIES": max(
+        0,
+        env.int("BACKLINK_PROSPECTS_PROVIDER_MAX_RETRIES", default=2),
+    ),
+    "PROVIDER_RETRY_BACKOFF_SECONDS": max(
+        0,
+        env.float("BACKLINK_PROSPECTS_PROVIDER_RETRY_BACKOFF_SECONDS", default=0.75),
+    ),
+    "PROVIDER_RETRY_BACKOFF_MAX_SECONDS": max(
+        1,
+        env.float("BACKLINK_PROSPECTS_PROVIDER_RETRY_BACKOFF_MAX_SECONDS", default=8.0),
+    ),
+}
+EXTERNAL_AUTHORITY_LINK_TARGET = max(
+    1,
+    min(3, env.int("EXTERNAL_AUTHORITY_LINK_TARGET", default=2)),
+)
 
 # GPT-Researcher Configuration
 OPENAI_API_KEY = env("OPENAI_API_KEY", default="")
@@ -542,6 +657,46 @@ MJML_HTTPSERVERS = [
 
 CLOUDFLARE_TURNSTILE_SITEKEY = env("CLOUDFLARE_TURNSTILE_SITEKEY", default="")
 CLOUDFLARE_TURNSTILE_SECRET_KEY = env("CLOUDFLARE_TURNSTILE_SECRET_KEY", default="")
+
+REQUIRE_VERIFIED_EMAIL_FOR_EXPENSIVE_ACTIONS = env.bool(
+    "REQUIRE_VERIFIED_EMAIL_FOR_EXPENSIVE_ACTIONS", default=True
+)
+
+# Detail View paid feature controls
+DETAIL_VIEW_SEO_ANALYSIS_ENABLED = env.bool("DETAIL_VIEW_SEO_ANALYSIS_ENABLED", default=True)
+DETAIL_VIEW_BACKLINK_DISCOVERY_ENABLED = env.bool(
+    "DETAIL_VIEW_BACKLINK_DISCOVERY_ENABLED", default=True
+)
+DETAIL_VIEW_CONTACT_ENRICHMENT_ENABLED = env.bool(
+    "DETAIL_VIEW_CONTACT_ENRICHMENT_ENABLED", default=True
+)
+DETAIL_VIEW_SEO_ANALYSIS_DAILY_LIMIT = env.int("DETAIL_VIEW_SEO_ANALYSIS_DAILY_LIMIT", default=20)
+DETAIL_VIEW_BACKLINK_DISCOVERY_DAILY_LIMIT = env.int(
+    "DETAIL_VIEW_BACKLINK_DISCOVERY_DAILY_LIMIT", default=12
+)
+DETAIL_VIEW_BACKLINK_DISCOVERY_COOLDOWN_SECONDS = env.int(
+    "DETAIL_VIEW_BACKLINK_DISCOVERY_COOLDOWN_SECONDS", default=45
+)
+DETAIL_VIEW_ACTION_RATE_LIMIT_ATTEMPTS = env.int(
+    "DETAIL_VIEW_ACTION_RATE_LIMIT_ATTEMPTS", default=6
+)
+DETAIL_VIEW_ACTION_RATE_LIMIT_WINDOW_SECONDS = env.int(
+    "DETAIL_VIEW_ACTION_RATE_LIMIT_WINDOW_SECONDS", default=60
+)
+
+SIGNUP_RATE_LIMIT_ATTEMPTS_PER_IP = env.int("SIGNUP_RATE_LIMIT_ATTEMPTS_PER_IP", default=8)
+SIGNUP_RATE_LIMIT_WINDOW_SECONDS = env.int("SIGNUP_RATE_LIMIT_WINDOW_SECONDS", default=3600)
+SIGNUP_DISPOSABLE_EMAIL_DOMAIN_BLOCKLIST = env.list(
+    "SIGNUP_DISPOSABLE_EMAIL_DOMAIN_BLOCKLIST",
+    default=[
+        "10minutemail.com",
+        "guerrillamail.com",
+        "mailinator.com",
+        "temp-mail.org",
+        "tempmail.com",
+        "yopmail.com",
+    ],
+)
 
 REPLICATE_API_TOKEN = env("REPLICATE_API_TOKEN", default="")
 

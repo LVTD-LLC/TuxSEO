@@ -1,9 +1,12 @@
 import re
 import uuid
+from urllib.parse import urlencode
 
 from allauth.account.adapter import DefaultAccountAdapter
 from allauth.socialaccount.adapter import DefaultSocialAccountAdapter
+from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.urls import reverse
 from django_q.tasks import async_task
 
 from core.choices import EmailType
@@ -18,6 +21,28 @@ class CustomAccountAdapter(DefaultAccountAdapter):
     """
     Custom adapter to track email confirmations and welcome emails.
     """
+
+    def _generate_unique_username_from_email(self, email):
+        base_username = re.sub(r"[^\w]", "", (email or "").split("@")[0])
+        if not base_username:
+            base_username = f"user{uuid.uuid4().hex[:8]}"
+
+        username = base_username
+        counter = 1
+        while User.objects.filter(username=username).exists():
+            username = f"{base_username}{counter}"
+            counter += 1
+
+        return username
+
+    def populate_username(self, request, user):
+        """Ensure username exists even when signup form does not request it."""
+        if not user.username:
+            user.username = self._generate_unique_username_from_email(user.email)
+
+    def is_open_for_signup(self, request):
+        """Allow operators to pause new registrations without affecting existing users."""
+        return settings.ALLOW_SIGNUPS and super().is_open_for_signup(request)
 
     def send_confirmation_mail(self, request, emailconfirmation, signup):
         """
@@ -65,12 +90,27 @@ class CustomAccountAdapter(DefaultAccountAdapter):
             )
             raise
 
+    def get_email_verification_redirect_url(self, email_address):
+        profile = getattr(email_address.user, "profile", None)
+        has_no_projects = bool(profile and not profile.projects.exists())
+
+        query_parameters = {"email_confirmed": "true"}
+        if has_no_projects:
+            query_parameters["welcome"] = "true"
+
+        home_url = reverse("home")
+        return f"{home_url}?{urlencode(query_parameters)}"
+
 
 class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
     """
     Custom adapter to automatically generate usernames from email addresses
     during social authentication signup, bypassing the username selection page.
     """
+
+    def is_open_for_signup(self, request, sociallogin):
+        """Mirror email signup gating for social-account auto-signups."""
+        return settings.ALLOW_SIGNUPS and super().is_open_for_signup(request, sociallogin)
 
     def populate_user(self, request, sociallogin, data):
         """

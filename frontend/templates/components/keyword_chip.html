@@ -3,6 +3,9 @@
       data-controller="keyword-hover"
       data-keyword-hover-text-value="{{ keyword }}"
       data-keyword-hover-project-id-value="{{ project_id }}"
-      data-action="mouseenter->keyword-hover#mouseenter mouseleave->keyword-hover#mouseleave click->keyword-hover#handleClick">
+      data-action="mouseenter->keyword-hover#mouseenter mouseleave->keyword-hover#mouseleave focus->keyword-hover#focus blur->keyword-hover#blur keydown->keyword-hover#keydown click->keyword-hover#handleClick"
+      tabindex="0"
+      role="button"
+      aria-label="Keyword {{ keyword }}">
   {{ keyword }}
 </span>

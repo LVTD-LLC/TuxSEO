@@ -1,0 +1,322 @@
+{% extends "base_project.html" %}
+
+{% block project_content %}
+  <div class="space-y-6">
+    <section class="overflow-hidden p-6 bg-white rounded-lg border border-gray-200 shadow-sm">
+      <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 class="text-xl font-semibold text-gray-900">Project Home</h2>
+          <p class="mt-1 text-sm text-gray-500">Overview of project setup and generated content.</p>
+        </div>
+        {% if has_loading_generation_state %}
+          <span class="inline-flex items-center px-3 py-1 text-xs font-semibold text-amber-800 bg-amber-100 rounded-full">
+            Generation in progress
+          </span>
+        {% elif has_empty_generation_state %}
+          <span class="inline-flex items-center px-3 py-1 text-xs font-semibold text-gray-700 bg-gray-100 rounded-full">
+            No generated content yet
+          </span>
+        {% else %}
+          <span class="inline-flex items-center px-3 py-1 text-xs font-semibold text-green-800 bg-green-100 rounded-full">
+            Content available
+          </span>
+        {% endif %}
+      </div>
+
+      <div class="mt-6">
+        <h3 class="text-sm font-semibold tracking-wide text-gray-700 uppercase">Summary</h3>
+        {% if project.summary %}
+          <p class="mt-2 text-sm leading-relaxed text-gray-700">{{ project.summary }}</p>
+        {% elif is_summary_loading_state %}
+          <div class="flex gap-2 items-center mt-3 text-sm text-amber-700">
+            <svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+            </svg>
+            <span>Summary is still being generated.</span>
+          </div>
+        {% else %}
+          <p class="mt-2 text-sm text-gray-500">No summary is available for this project yet.</p>
+        {% endif %}
+      </div>
+    </section>
+
+    <section class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+      <article class="p-5 bg-white rounded-lg border border-gray-200 shadow-sm md:col-span-2 xl:col-span-3">
+        <h3 class="text-base font-semibold text-gray-900">How to use TuxSEO</h3>
+        <p class="mt-1 text-sm text-gray-600">
+          Use the core workflow below to go from ideas to published content quickly.
+        </p>
+
+        <div class="grid grid-cols-1 gap-3 mt-4 sm:grid-cols-3">
+          <a
+            href="{% url 'project_seo_posts' project.id %}"
+            class="inline-flex justify-center items-center px-4 py-2 text-sm font-medium text-gray-700 bg-gray-50 rounded-md border border-gray-200 hover:bg-gray-100"
+          >
+            Title Ideas
+          </a>
+          <a
+            href="{% url 'project_seo_posts' project.id %}"
+            class="inline-flex justify-center items-center px-4 py-2 text-sm font-medium text-gray-700 bg-gray-50 rounded-md border border-gray-200 hover:bg-gray-100"
+          >
+            Generate Posts
+          </a>
+          <a
+            href="{% url 'project_keywords' project.id %}"
+            class="inline-flex justify-center items-center px-4 py-2 text-sm font-medium text-gray-700 bg-gray-50 rounded-md border border-gray-200 hover:bg-gray-100"
+          >
+            Keywords
+          </a>
+        </div>
+
+        <div class="pt-5 mt-5 border-t border-gray-200">
+          <h4 class="text-sm font-semibold tracking-wide text-gray-700 uppercase">API Quickstart</h4>
+          <p class="mt-2 text-sm text-gray-600">
+            Your API key is pre-filled below from your account so you can run one command immediately.
+            You can manage or regenerate it in
+            <a href="{% url 'settings' %}" class="font-medium text-gray-800 underline">Settings</a>.
+            Full docs:
+            <a href="/api/docs" class="font-medium text-gray-800 underline">Public API docs</a>.
+          </p>
+          <p class="mt-2 text-xs font-medium text-amber-700">
+            Security note: treat this key like a password. Never paste it in public chats, screenshots, or client-side code.
+          </p>
+
+          <div class="mt-4" data-controller="copy">
+            <label class="block mb-2 text-xs font-semibold tracking-wide text-gray-600 uppercase">Account curl example</label>
+            <textarea
+              readonly
+              rows="5"
+              data-copy-target="source"
+              class="block px-3 py-2 w-full text-xs font-mono text-gray-800 bg-gray-50 rounded-md border border-gray-300"
+            >curl -X GET "https://tuxseo.com/public-api/account" \
+  -H "X-API-Key: {{ request.user.profile.key }}" \
+  -H "Accept: application/json"</textarea>
+            <button
+              type="button"
+              data-copy-target="button"
+              data-action="click->copy#copy"
+              class="inline-flex items-center px-3 py-1.5 mt-2 text-xs font-medium text-white bg-pink-600 rounded-md hover:bg-pink-700"
+            >
+              Copy
+            </button>
+          </div>
+
+          <div class="mt-4" data-controller="copy">
+            <label class="block mb-2 text-xs font-semibold tracking-wide text-gray-600 uppercase">Prompt template for AI agents</label>
+            <textarea
+              readonly
+              rows="9"
+              data-copy-target="source"
+              class="block px-3 py-2 w-full text-xs font-mono text-gray-800 bg-gray-50 rounded-md border border-gray-300"
+            >You are helping me operate TuxSEO for my project.
+First read the agent skill file: https://tuxseo.com/skill.md
+TuxSEO API base URL: https://tuxseo.com/public-api
+TuxSEO API key: {{ request.user.profile.key }}</textarea>
+            <button
+              type="button"
+              data-copy-target="button"
+              data-action="click->copy#copy"
+              class="inline-flex items-center px-3 py-1.5 mt-2 text-xs font-medium text-white bg-pink-600 rounded-md hover:bg-pink-700"
+            >
+              Copy
+            </button>
+          </div>
+
+          <p class="mt-4 text-xs text-gray-600">
+            Need to rotate your production key? Regenerate it in
+            <a href="{% url 'settings' %}" class="font-medium text-gray-800 underline">Settings → API Access</a>,
+            then update your app's secret manager before redeploying.
+          </p>
+        </div>
+      </article>
+
+      <article class="p-5 bg-white rounded-lg border border-gray-200 shadow-sm md:col-span-2 xl:col-span-3">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h3 class="text-base font-semibold text-gray-900">Analytics summary</h3>
+            <p class="mt-1 text-sm text-gray-600">High-level snapshot only. Use the Analytics page for detailed charts, tables, and filters.</p>
+          </div>
+          <a
+            href="{% url 'project_analytics' project.id %}"
+            class="inline-flex items-center px-3 py-1.5 text-sm font-medium text-white bg-gray-900 rounded-md hover:bg-gray-800"
+          >
+            View detailed analytics
+          </a>
+        </div>
+
+        <div class="grid grid-cols-1 gap-3 mt-4 sm:grid-cols-3">
+          <div class="p-3 rounded-md border border-gray-200 bg-gray-50">
+            <p class="text-xs font-semibold tracking-wide text-gray-600 uppercase">Clicks (30d)</p>
+            <p class="mt-1 text-xl font-semibold text-gray-900">{{ analytics_snapshot_state.totals.clicks }}</p>
+          </div>
+          <div class="p-3 rounded-md border border-gray-200 bg-gray-50">
+            <p class="text-xs font-semibold tracking-wide text-gray-600 uppercase">Sessions (30d)</p>
+            <p class="mt-1 text-xl font-semibold text-gray-900">{{ analytics_snapshot_state.totals.sessions }}</p>
+          </div>
+          <div class="p-3 rounded-md border border-gray-200 bg-gray-50">
+            <p class="text-xs font-semibold tracking-wide text-gray-600 uppercase">Conversion rate</p>
+            <p class="mt-1 text-xl font-semibold text-gray-900">{{ analytics_snapshot_state.derived.conversion_rate_pct|floatformat:2 }}%</p>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap gap-2 mt-4">
+          {% for provider in analytics_snapshot_state.providers %}
+            <span class="inline-flex items-center px-2.5 py-1 text-xs font-medium rounded-full {% if provider.is_connected %}text-green-800 bg-green-100{% else %}text-gray-700 bg-gray-100{% endif %}">
+              {{ provider.label }} {% if provider.is_connected %}Connected{% else %}Not connected{% endif %}
+            </span>
+          {% endfor %}
+        </div>
+
+        {% if not analytics_snapshot_state.has_data %}
+          <p class="mt-3 text-sm text-gray-600">No analytics data synced yet. Connect integrations and run sync to populate detailed analytics.</p>
+        {% endif %}
+      </article>
+
+      <article class="p-5 bg-white rounded-lg border border-gray-200 shadow-sm md:col-span-2 xl:col-span-3">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h3 class="text-base font-semibold text-gray-900">AI Visibility + SEO Outcome Snapshot (30d)</h3>
+            <p class="mt-1 text-sm text-gray-600">
+              Aggregated from outcome attribution events for client-ready reporting and exports.
+            </p>
+          </div>
+          <span class="inline-flex items-center px-2.5 py-1 text-xs font-medium rounded-full
+            {% if reporting_snapshot_state.snapshot.confidence.label == "high" %}
+              text-green-800 bg-green-100
+            {% elif reporting_snapshot_state.snapshot.confidence.label == "medium" %}
+              text-amber-800 bg-amber-100
+            {% else %}
+              text-gray-700 bg-gray-100
+            {% endif %}
+          ">
+            Confidence: {{ reporting_snapshot_state.snapshot.confidence.label|title }}
+          </span>
+        </div>
+
+        <div class="grid grid-cols-1 gap-4 mt-4 md:grid-cols-3">
+          <div class="p-3 rounded-md border border-gray-200 bg-gray-50">
+            <p class="text-xs font-semibold tracking-wide text-gray-600 uppercase">AI visibility signal</p>
+            <p class="mt-1 text-2xl font-semibold text-gray-900">{{ reporting_snapshot_state.snapshot.ai_visibility.signal_value|floatformat:0 }}</p>
+            <p class="mt-1 text-xs text-gray-600">Events: {{ reporting_snapshot_state.snapshot.ai_visibility.event_count }}</p>
+          </div>
+          <div class="p-3 rounded-md border border-gray-200 bg-gray-50">
+            <p class="text-xs font-semibold tracking-wide text-gray-600 uppercase">SEO outcome value</p>
+            <p class="mt-1 text-2xl font-semibold text-gray-900">{{ reporting_snapshot_state.snapshot.seo_outcomes.total_value|floatformat:0 }}</p>
+            <p class="mt-1 text-xs text-gray-600">Events: {{ reporting_snapshot_state.snapshot.seo_outcomes.event_count }}</p>
+          </div>
+          <div class="p-3 rounded-md border border-gray-200 bg-gray-50">
+            <p class="text-xs font-semibold tracking-wide text-gray-600 uppercase">Coverage</p>
+            <p class="mt-1 text-2xl font-semibold text-gray-900">{{ reporting_snapshot_state.snapshot.coverage.ratio|floatformat:2 }}</p>
+            <p class="mt-1 text-xs text-gray-600">Status: {{ reporting_snapshot_state.snapshot.coverage.status|title }}</p>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 gap-4 mt-4 lg:grid-cols-2">
+          <div>
+            <p class="text-xs font-semibold tracking-wide text-gray-600 uppercase">Outcome trend (14d)</p>
+            <div class="flex gap-1 items-end h-20 mt-2">
+              {% for point in reporting_snapshot_state.sparkline %}
+                <div class="flex-1 rounded-sm bg-pink-300"
+                     style="height: {{ point.height_pct }}%;"
+                     title="{{ point.date }}: {{ point.value|floatformat:2 }}">
+                </div>
+              {% endfor %}
+            </div>
+          </div>
+          <div>
+            <p class="text-xs font-semibold tracking-wide text-gray-600 uppercase">Contribution split</p>
+            <ul class="mt-2 space-y-1 text-sm text-gray-700">
+              {% for item in reporting_snapshot_state.snapshot.contribution_split %}
+                <li class="flex justify-between">
+                  <span class="capitalize">{{ item.dimension }}</span>
+                  <span>{{ item.share_pct|floatformat:1 }}%</span>
+                </li>
+              {% empty %}
+                <li class="text-xs text-gray-500">No attribution events yet in selected window.</li>
+              {% endfor %}
+            </ul>
+          </div>
+        </div>
+
+        <details class="mt-4">
+          <summary class="text-xs font-semibold tracking-wide text-gray-600 uppercase cursor-pointer">Metric definitions</summary>
+          <ul class="mt-2 space-y-2">
+            {% for metric in reporting_snapshot_state.snapshot.metric_definitions %}
+              <li class="text-xs text-gray-600">
+                <span class="font-semibold text-gray-800">{{ metric.label }}</span> — {{ metric.tooltip }}
+                <span class="block mt-0.5 text-gray-500">Source events: {{ metric.source_events|join:", " }}</span>
+              </li>
+            {% endfor %}
+          </ul>
+        </details>
+
+        <p class="mt-4 text-xs text-amber-700">
+          {{ reporting_snapshot_state.snapshot.coverage.note }}
+          {% if reporting_snapshot_state.snapshot.coverage.missing_metrics %}
+            Missing metrics: {{ reporting_snapshot_state.snapshot.coverage.missing_metrics|join:", " }}.
+          {% endif %}
+        </p>
+      </article>
+
+      <article class="p-5 bg-white rounded-lg border border-gray-200 shadow-sm">
+        <p class="text-sm font-medium text-gray-500">Title Ideas</p>
+        <p class="mt-2 text-3xl font-semibold text-gray-900">{{ title_ideas_state.count }}</p>
+        {% if title_ideas_state.is_loading_state %}
+          <p class="mt-2 text-xs text-amber-700">Generating title suggestions...</p>
+        {% elif title_ideas_state.is_empty_state %}
+          <p class="mt-2 text-xs text-gray-500">No title suggestions generated yet.</p>
+        {% else %}
+          <p class="mt-2 text-xs text-green-700">Title suggestions are ready.</p>
+        {% endif %}
+      </article>
+
+      <article class="p-5 bg-white rounded-lg border border-gray-200 shadow-sm">
+        <p class="text-sm font-medium text-gray-500">Keywords</p>
+        <p class="mt-2 text-3xl font-semibold text-gray-900">{{ keywords_state.count }}</p>
+        {% if keywords_state.is_loading_state %}
+          <p class="mt-2 text-xs text-amber-700">Extracting keywords...</p>
+        {% elif keywords_state.is_empty_state %}
+          <p class="mt-2 text-xs text-gray-500">No keywords found yet.</p>
+        {% else %}
+          <p class="mt-2 text-xs text-green-700">Keywords are available.</p>
+        {% endif %}
+      </article>
+
+      <article class="p-5 bg-white rounded-lg border border-gray-200 shadow-sm">
+        <p class="text-sm font-medium text-gray-500">Pages</p>
+        <p class="mt-2 text-3xl font-semibold text-gray-900">{{ pages_state.count }}</p>
+        {% if pages_state.is_loading_state %}
+          <p class="mt-2 text-xs text-amber-700">Discovering pages...</p>
+        {% elif pages_state.is_empty_state %}
+          <p class="mt-2 text-xs text-gray-500">No project pages discovered yet.</p>
+        {% else %}
+          <p class="mt-2 text-xs text-green-700">Project pages are available.</p>
+        {% endif %}
+      </article>
+
+      <article class="p-5 bg-white rounded-lg border border-gray-200 shadow-sm">
+        <p class="text-sm font-medium text-gray-500">Competitors</p>
+        <p class="mt-2 text-3xl font-semibold text-gray-900">{{ competitors_state.count }}</p>
+        {% if competitors_state.is_loading_state %}
+          <p class="mt-2 text-xs text-amber-700">Discovering competitors...</p>
+        {% elif competitors_state.is_empty_state %}
+          <p class="mt-2 text-xs text-gray-500">No competitors found yet.</p>
+        {% else %}
+          <p class="mt-2 text-xs text-green-700">Competitor data is available.</p>
+        {% endif %}
+      </article>
+
+      <article class="p-5 bg-white rounded-lg border border-gray-200 shadow-sm">
+        <p class="text-sm font-medium text-gray-500">Generated Posts</p>
+        <p class="mt-2 text-3xl font-semibold text-gray-900">{{ generated_posts_count }}</p>
+        <p class="mt-2 text-xs text-gray-500">Created from title suggestions.</p>
+      </article>
+
+      <article class="p-5 bg-white rounded-lg border border-gray-200 shadow-sm">
+        <p class="text-sm font-medium text-gray-500">Posted Posts</p>
+        <p class="mt-2 text-3xl font-semibold text-gray-900">{{ posted_posts_count }}</p>
+        <p class="mt-2 text-xs text-gray-500">Successfully published.</p>
+      </article>
+    </section>
+  </div>
+{% endblock project_content %}

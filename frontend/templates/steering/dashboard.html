@@ -1,0 +1,18 @@
+{% extends "base_app.html" %}
+
+{% block content %}
+<div class="mb-8">
+  <h1 class="text-2xl font-semibold">Steering Dashboard</h1>
+  <p class="text-sm text-gray-500">Project: <strong>{{ project.display_name }}</strong> ({{ project.key }})</p>
+  <p class="text-sm text-gray-500">Milestone 1 shell: scorecard and growth-decision panels will hydrate in Milestones 2-4.</p>
+</div>
+
+<div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+  {% for section in sections %}
+  <section class="rounded border border-gray-200 p-4 shadow-sm">
+    <h2 class="text-base font-medium">{{ section }}</h2>
+    <p class="mt-2 text-sm text-gray-500">Pending data wiring.</p>
+  </section>
+  {% endfor %}
+</div>
+{% endblock content %}

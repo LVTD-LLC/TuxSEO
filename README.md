@@ -123,6 +123,164 @@ All the information on how to run, develop and update your new application can b
 2. Run `make serve`
 3. Run `make restart-worker` just in case, it sometimes has troubles connecting to REDIS on first deployment.
 
+### CI pre-PR runbook (required before opening a PR)
+
+Run the same pytest command as CI locally:
+
+```bash
+make test-ci
+```
+
+What this does:
+- Boots local Postgres/Redis services used by tests.
+- Runs `pytest` with the same strict flags as CI (`--strict-config --strict-markers`).
+- Pins `PYTHONHASHSEED=0` for deterministic hash ordering.
+
+If this fails, fix locally before pushing.
+
+### PostHog Logs (structured backend observability)
+
+TuxSEO can ship structured backend logs to **PostHog Logs** over OTLP HTTP.
+
+- Web request logs include correlation IDs (`request_id`, `trace_id`) via middleware.
+- Background and AI generation jobs bind `task_id`/`job_id` so failures can be traced end-to-end.
+- A redaction layer strips common secrets/tokens and emails before shipping.
+- Export is async + batched to avoid adding request latency.
+
+Quick setup:
+
+1. Set `POSTHOG_API_KEY`.
+2. Set `POSTHOG_LOGS_ENABLED=true` in production.
+3. Optionally override `POSTHOG_LOGS_ENDPOINT` (default: `https://us.i.posthog.com/v1/logs`).
+
+See `docs/posthog-logs.md` for full configuration and field-level behavior.
+
+### PostHog LLM analytics (PydanticAI flows)
+
+TuxSEO emits `$ai_generation` events from key PydanticAI generation flows via `run_agent_synchronously(...)`.
+
+- Includes model, latency, token usage (when available), flow path, and failure context.
+- Designed for PostHog LLM analytics views to compare performance/cost by feature path.
+
+See `docs/posthog-llm-analytics.md` for event schema and verification steps.
+
+### Product analytics event taxonomy (PostHog)
+
+TuxSEO maintains a canonical event taxonomy and coverage matrix for funnel-safe product analytics:
+
+- `docs/event-taxonomy.md`
+- `docs/posthog-event-coverage-matrix.md`
+
+`core/analytics/event_taxonomy.json` is the source of truth for canonical event names + required properties.
+
+### PostHog dashboard pack (ops + funnel + LLM + paid attribution)
+
+The first-pass operational + product + LLM + paid acquisition dashboard set is documented (with live links) in:
+
+- `docs/posthog-dashboards.md`
+
+Use `scripts/posthog_dashboard_bootstrap.py` to create/update all dashboard tiles idempotently.
+
+### Paid acquisition attribution foundation (Meta/Google/Reddit/X)
+
+TuxSEO now persists first-touch/latest-touch attribution and enriches server-side conversion events with normalized acquisition fields.
+
+- canonical schema + guardrails: `docs/acquisition-attribution-v1.md`
+- source of truth for event names: `core/analytics/event_taxonomy.json`
+
+### Analytics ingestion jobs (GA4, GSC, Plausible)
+
+TuxSEO now ships background ingestion for connected analytics providers:
+- Google Analytics 4 (GA4)
+- Google Search Console (GSC)
+- Plausible
+
+Implementation highlights:
+- Incremental sync cursor per `(project, provider, source_account_ref)` with a rolling lookback window.
+- Raw source snapshots (`AnalyticsSourceSnapshot`) + normalized daily facts (`AnalyticsFactDaily`).
+- Idempotent upsert semantics for safe retries.
+- Provider-aware retry/backoff behavior with observable cursor status and sanitized errors.
+- Missing/disconnected integrations are skipped without failing the whole scheduling run.
+- Project Home includes an **Analytics (GA4/GSC/Plausible)** section that surfaces:
+  - connected-source status badges
+  - 30-day KPI rollups (clicks, impressions, sessions, users, conversions)
+  - derived rates (CTR, engagement, conversion) and avg GSC position
+  - trend deltas (recent 7d vs prior 7d)
+  - top low-CTR/high-impression opportunities with actionable on-page SEO suggestions
+
+Scheduled entrypoint:
+- `core.scheduled_tasks.schedule_project_analytics_syncs`
+
+Worker task entrypoint:
+- `core.tasks.sync_project_integration_analytics(project_id, provider)`
+
+### Periodic sitemap sync for “Your Pages”
+
+TuxSEO now auto-refreshes sitemap-backed project pages on a configurable schedule.
+
+- batch entrypoint: `core.tasks.sync_all_projects_with_sitemaps`
+- single-project sync: `core.tasks.parse_sitemap_and_save_urls(project_id)`
+- manual trigger endpoint (session auth): `POST /api/project/{project_id}/sitemap/sync-now/`
+
+Behavior:
+- only projects with a valid sitemap URL are eligible
+- per-project lock prevents overlapping syncs
+- supports both `urlset` sitemap XML and sitemap index files
+- upserts discovered URLs and marks missing sitemap URLs as stale instead of deleting
+- logs per-project counters: discovered, added, updated, stale, failed
+
+Key env settings:
+- `SITEMAP_SYNC_SCHEDULER_ENABLED` (default `true`)
+- `SITEMAP_SYNC_INTERVAL_HOURS` (default `6`)
+- `SITEMAP_SYNC_TIMEOUT_SECONDS`, `SITEMAP_SYNC_MAX_RETRIES`, `SITEMAP_SYNC_RETRY_BACKOFF_SECONDS`
+- `USE_REDIS_CACHE` (enable shared Redis cache for cross-worker sync locks)
+
+### Custom post types for blog idea generation
+
+Projects can now define reusable **custom post types** under the Posts sidebar:
+- open **Posts → Manage Types** (or click the `+` action next to Posts)
+- create a type with:
+  - a unique, clean name (validated per project)
+  - prompt guidance (required, max length enforced)
+- each custom type appears directly in Posts navigation
+- selecting a custom type opens a dedicated generation page that applies its guidance automatically to both:
+  - title suggestion generation
+  - full article generation from those suggestions
+- built-in post types continue to use the default generation behavior unchanged
+
+### Deterministic content quality evaluation
+
+Run the deterministic rubric evaluation locally:
+
+```bash
+make test-content-quality
+```
+
+This executes `core/tests/test_content_quality_evaluation.py`, scores `good`/`medium`/`bad` fixtures with fixed rubric weights, and writes `artifacts/content-quality-report.json`.
+
+Safe baseline update procedure:
+
+1. Run `make test-content-quality` and confirm the change is expected.
+2. Review the generated `artifacts/content-quality-report.json` score deltas.
+3. Re-run with explicit baseline update mode:
+```bash
+UPDATE_CONTENT_QUALITY_BASELINE=1 make test-content-quality
+```
+4. Commit `core/tests/fixtures/content_quality_baseline.json` together with the scoring logic change.
+
+## Internal API (BlogPost CRUD)
+
+Internal blog post management endpoints are available under `/api/internal/blog-posts` and are protected by the **superuser API key** query param (`?api_key=...`).
+
+- `POST /api/blog-posts/submit` — create (existing endpoint, kept for compatibility)
+- `GET /api/internal/blog-posts` — list
+- `GET /api/internal/blog-posts/{id}` — retrieve
+- `PUT /api/internal/blog-posts/{id}` — full update
+- `PATCH /api/internal/blog-posts/{id}` — partial update
+- `DELETE /api/internal/blog-posts/{id}` — delete
+
+Non-superuser or missing API keys are rejected with unauthorized responses.
+
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=rasulkireev/tuxseo&type=Date)](https://www.star-history.com/#rasulkireev/tuxseo&Date)

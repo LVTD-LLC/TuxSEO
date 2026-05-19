@@ -1,18 +1,21 @@
+import re
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
+from urllib.parse import urlparse
 from urllib.request import urlopen
 
-import posthog
 import replicate
 import requests
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
+from django.core.validators import FileExtensionValidator, MaxLengthValidator
 from django.db import models, transaction
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.text import slugify
 from django_q.tasks import async_task
-from gpt_researcher import GPTResearcher
 from pgvector.django import HnswIndex, VectorField
 
 from core.agents import (
@@ -22,12 +25,14 @@ from core.agents import (
     create_extract_competitors_data_agent,
     create_extract_links_agent,
     create_find_competitors_agent,
+    create_generate_blog_post_content_agent,
     create_insert_links_agent,
     create_populate_competitor_details_agent,
     create_summarize_page_agent,
     create_title_suggestions_agent,
 )
 from core.agents.schemas import (
+    BlogPostGenerationContext,
     CompetitorAnalysisContext,
     CompetitorDetails,
     GeneratedBlogPostSchema,
@@ -38,12 +43,17 @@ from core.agents.schemas import (
     TitleSuggestionContext,
     WebPageContent,
 )
+from core.acquisition import sync_project_attribution_from_profile
+from core.analytics import ANALYTICS_EVENTS
 from core.base_models import BaseModel
 from core.choices import (
     BlogPostStatus,
     Category,
+    CompetitorPostGenerationStatus,
     ContentType,
     EmailType,
+    ExecutionJobOperation,
+    ExecutionJobStatus,
     KeywordDataSource,
     Language,
     OGImageStyle,
@@ -56,13 +66,13 @@ from core.choices import (
 from core.utils import (
     generate_random_key,
     get_jina_embedding,
+    get_external_authority_link_candidates,
     get_markdown_content,
     get_og_image_prompt,
     get_relevant_external_pages_for_blog_post,
     get_relevant_pages_for_blog_post,
     process_generated_blog_content,
     run_agent_synchronously,
-    run_gptr_synchronously,
 )
 from tuxseo.utils import get_tuxseo_logger
 
@@ -71,7 +81,7 @@ logger = get_tuxseo_logger(__name__)
 
 class Profile(BaseModel):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
-    key = models.CharField(max_length=10, unique=True, default=generate_random_key)
+    key = models.CharField(max_length=64, unique=True, default=generate_random_key)
     experimental_features = models.BooleanField(default=False)
 
     subscription = models.ForeignKey(
@@ -105,6 +115,8 @@ class Profile(BaseModel):
         default=ProfileStates.STRANGER,
         help_text="The current state of the user's profile",
     )
+    first_touch_attribution = models.JSONField(default=dict, blank=True)
+    latest_touch_attribution = models.JSONField(default=dict, blank=True)
 
     def __str__(self):
         return f"{self.user.username}"
@@ -326,6 +338,7 @@ class Profile(BaseModel):
         return not self.reached_competitor_posts_limit
 
     def get_or_create_project(self, url: str, source: str = None) -> "Project":
+        existing_project_count = self.projects.count()
         project, created = Project.objects.get_or_create(profile=self, url=url)
 
         project_metadata = {
@@ -335,15 +348,31 @@ class Profile(BaseModel):
             "project_id": project.id,
             "project_name": project.name,
             "project_url": url,
+            "result_status": "succeeded",
         }
 
+        sync_project_attribution_from_profile(project=project, profile=self)
+
         if created:
-            if settings.POSTHOG_API_KEY:
-                posthog.capture(
-                    self.user.email,
-                    event="project_created",
+            async_task(
+                "core.tasks.track_event",
+                profile_id=self.id,
+                event_name=ANALYTICS_EVENTS.PROJECT_CREATE_SUCCEEDED,
+                properties=project_metadata,
+                source_function="Profile.get_or_create_project",
+                group="Track Event",
+            )
+
+            if existing_project_count == 0:
+                async_task(
+                    "core.tasks.track_event",
+                    profile_id=self.id,
+                    event_name=ANALYTICS_EVENTS.ONBOARDING_COMPLETED,
                     properties=project_metadata,
+                    source_function="Profile.get_or_create_project",
+                    group="Track Event",
                 )
+
             logger.info("[Get or Create Project] Project created", **project_metadata)
         else:
             logger.info("[Get or Create Project] Got existing project", **project_metadata)
@@ -387,10 +416,12 @@ class Project(BaseModel):
     profile = models.ForeignKey(
         Profile, null=True, blank=True, on_delete=models.CASCADE, related_name="projects"
     )
-    url = models.URLField(max_length=200, unique=True)
+    url = models.URLField(max_length=200)
     name = models.CharField(max_length=255)
     type = models.CharField(max_length=50, choices=ProjectType.choices, default=ProjectType.SAAS)
     summary = models.TextField(blank=True)
+    first_touch_attribution = models.JSONField(default=dict, blank=True)
+    latest_touch_attribution = models.JSONField(default=dict, blank=True)
 
     # Agent Settings
     enable_automatic_post_submission = models.BooleanField(default=False)
@@ -575,7 +606,12 @@ class Project(BaseModel):
         return True
 
     def generate_title_suggestions(
-        self, content_type=ContentType.SHARING, num_titles=3, user_prompt="", model=None
+        self,
+        content_type=ContentType.SHARING,
+        num_titles=3,
+        user_prompt="",
+        custom_post_type_prompt="",
+        model=None,
     ):
         agent = create_title_suggestions_agent(content_type=content_type, model=model)
 
@@ -583,6 +619,7 @@ class Project(BaseModel):
             project_details=self.project_details,
             num_titles=num_titles,
             user_prompt=user_prompt,
+            custom_post_type_prompt=custom_post_type_prompt,
             liked_suggestions=[suggestion.title for suggestion in self.liked_title_suggestions],
             disliked_suggestions=[
                 suggestion.title for suggestion in self.disliked_title_suggestions
@@ -725,6 +762,81 @@ class Project(BaseModel):
             }
         return project_keywords
 
+    class Meta:
+        unique_together = ("profile", "url")
+
+
+
+
+class ProjectCustomPostType(BaseModel):
+    logo_max_file_size_bytes = 2 * 1024 * 1024
+    logo_allowed_content_types = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="custom_post_types",
+    )
+    name = models.CharField(max_length=80)
+    normalized_name = models.CharField(max_length=80, editable=False)
+    prompt_guidance = models.TextField(validators=[MaxLengthValidator(1200)])
+    logo = models.ImageField(
+        upload_to="custom_post_type_logos/",
+        blank=True,
+        validators=[FileExtensionValidator(allowed_extensions=["png", "jpg", "jpeg", "webp", "gif"])],
+    )
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "normalized_name"],
+                name="project_custom_post_type_unique_normalized_name",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.project.name}: {self.name}"
+
+    @staticmethod
+    def normalize_name(name: str) -> str:
+        return " ".join((name or "").split()).strip().lower()
+
+    def clean(self):
+        self.name = " ".join((self.name or "").split()).strip()
+        self.normalized_name = self.normalize_name(self.name)
+
+        if not self.name:
+            raise ValidationError({"name": "Name cannot be empty."})
+
+        if len(self.name) < 2:
+            raise ValidationError({"name": "Name must be at least 2 characters long."})
+
+        if not re.match(r"^[A-Za-z0-9][A-Za-z0-9\s\-/&()]*$", self.name):
+            raise ValidationError({
+                "name": "Use only letters, numbers, spaces, and - / & ( ) characters.",
+            })
+
+        prompt_guidance = (self.prompt_guidance or "").strip()
+        if not prompt_guidance:
+            raise ValidationError({"prompt_guidance": "Prompt guidance cannot be empty."})
+
+        if len(prompt_guidance) > 1200:
+            raise ValidationError({"prompt_guidance": "Prompt guidance must be 1200 characters or less."})
+
+        self.prompt_guidance = prompt_guidance
+
+        if self.logo:
+            logo_file_size = getattr(self.logo, "size", 0) or 0
+            if logo_file_size > self.logo_max_file_size_bytes:
+                raise ValidationError({
+                    "logo": "Logo must be 2MB or smaller.",
+                })
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
 
 class BlogPostTitleSuggestion(BaseModel):
     project = models.ForeignKey(
@@ -733,6 +845,14 @@ class BlogPostTitleSuggestion(BaseModel):
         blank=True,
         on_delete=models.CASCADE,
         related_name="blog_post_title_suggestions",
+    )
+
+    custom_post_type = models.ForeignKey(
+        "ProjectCustomPostType",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="title_suggestions",
     )
 
     title = models.CharField(max_length=255)
@@ -785,14 +905,21 @@ class BlogPostTitleSuggestion(BaseModel):
         )
 
     def get_internal_links(self, max_pages=2):
-        # Get pages to insert into the blog post
         manually_selected_project_pages = list(self.project.project_pages.filter(always_use=True))
         relevant_project_pages = list(
             get_relevant_pages_for_blog_post(
                 self.project, self.suggested_meta_description, max_pages=max_pages
             )
         )
-        return manually_selected_project_pages + relevant_project_pages
+
+        all_internal_project_pages = manually_selected_project_pages + relevant_project_pages
+        unique_pages_by_url = {}
+
+        for project_page in all_internal_project_pages:
+            if project_page.url not in unique_pages_by_url:
+                unique_pages_by_url[project_page.url] = project_page
+
+        return list(unique_pages_by_url.values())
 
     def get_blog_post_keywords(self):
         project_keywords = list(
@@ -804,72 +931,335 @@ class BlogPostTitleSuggestion(BaseModel):
 
         return keywords_to_use
 
+    def get_external_authority_links(self, max_links: int | None = None):
+        target_links = max_links or getattr(settings, "EXTERNAL_AUTHORITY_LINK_TARGET", 2)
+        target_links = max(1, min(3, int(target_links)))
+        if not self.suggested_meta_description:
+            return []
+
+        authority_links = get_external_authority_link_candidates(
+            meta_description=self.suggested_meta_description,
+            max_links=target_links,
+        )
+
+        # Fallback to internal relevance retrieval when Exa is unavailable or sparse.
+        if len(authority_links) < target_links:
+            existing_urls = {link["url"] for link in authority_links}
+            try:
+                fallback_pages = get_relevant_external_pages_for_blog_post(
+                    meta_description=self.suggested_meta_description,
+                    exclude_project=self.project,
+                    max_pages=target_links,
+                )
+            except Exception as error:
+                logger.warning(
+                    "[ExternalAuthorityLinks] Fallback retrieval failed",
+                    title_suggestion_id=self.id,
+                    error=str(error),
+                )
+                fallback_pages = []
+
+            for page in fallback_pages:
+                if page.url in existing_urls:
+                    continue
+                authority_links.append(
+                    {
+                        "url": page.url,
+                        "title": page.title,
+                        "description": page.description,
+                        "summary": page.summary,
+                        "link_source": "external",
+                    }
+                )
+                existing_urls.add(page.url)
+                if len(authority_links) >= target_links:
+                    break
+
+        return authority_links[:target_links]
+
+    def get_blog_post_generation_context(self, content_type=ContentType.SHARING):
+        internal_project_pages = self.get_internal_links()
+        external_authority_links = self.get_external_authority_links()
+
+        project_page_contexts = [
+            ProjectPageContext(
+                url=page.url,
+                title=page.title,
+                description=page.description,
+                summary=page.summary,
+                always_use=page.always_use,
+                link_source="internal",
+            )
+            for page in internal_project_pages
+        ]
+
+        existing_urls = {page_context.url for page_context in project_page_contexts}
+        for link in external_authority_links:
+            if link["url"] in existing_urls:
+                continue
+            project_page_contexts.append(
+                ProjectPageContext(
+                    url=link["url"],
+                    title=link["title"],
+                    description=link["description"],
+                    summary=link["summary"],
+                    always_use=False,
+                    link_source="external",
+                )
+            )
+
+        return BlogPostGenerationContext(
+            project_details=self.project.project_details,
+            title_suggestion=self.title_suggestion_schema,
+            project_keywords=self.get_blog_post_keywords(),
+            project_pages=project_page_contexts,
+            content_type=content_type,
+            custom_post_type_prompt=(
+                (self.custom_post_type.prompt_guidance or "").strip()
+                if self.custom_post_type
+                else ""
+            ),
+        )
+
+    @staticmethod
+    def contains_placeholder_language(blog_post_content: str) -> bool:
+        import re
+
+        placeholder_patterns = [
+            r"insert\s+(an?\s+)?(image|screenshot|link|video|chart|graphic)\s+(here|below|above)",
+            r"(image|screenshot|link)\s+suggestion",
+            r"\[(image|screenshot|link|placeholder|todo|tbd)\]",
+            r"\b(todo|tbd|to be added|coming soon)\b",
+        ]
+
+        return any(
+            re.search(pattern, blog_post_content, re.IGNORECASE)
+            for pattern in placeholder_patterns
+        )
+
+    @staticmethod
+    def has_incomplete_ending(blog_post_content: str) -> bool:
+        import re
+
+        normalized_content = (blog_post_content or "").strip()
+
+        if not normalized_content:
+            return True
+
+        non_empty_lines = [line.strip() for line in normalized_content.splitlines() if line.strip()]
+        if not non_empty_lines:
+            return True
+
+        last_line = non_empty_lines[-1]
+
+        if re.search(r"[:;,\-(\[]$", last_line) or last_line.endswith("..."):
+            return True
+
+        if re.search(r"\b(and|or|but|because|with|to|for|in|on|at|of|the|a|an)$", last_line.lower()):
+            return True
+
+        has_complete_sentence_ending = (
+            re.search(r"[.!?](?:[\"'\)\]]+)?$", last_line) is not None
+        )
+
+        return not has_complete_sentence_ending
+
+    def _get_generation_target_keywords(self) -> list[str]:
+        return [keyword for keyword in self.get_blog_post_keywords() if keyword and keyword.strip()]
+
+    @staticmethod
+    def contains_forced_keyword_markdown(
+        blog_post_content: str, target_keywords: list[str]
+    ) -> tuple[bool, str]:
+        import re
+
+        if not blog_post_content:
+            return False, ""
+
+        for raw_keyword in target_keywords:
+            normalized_keyword = (raw_keyword or "").strip()
+            if not normalized_keyword:
+                continue
+
+            escaped_keyword = re.escape(normalized_keyword)
+            forced_format_patterns = [
+                rf"`{escaped_keyword}`",
+                rf"\*\*{escaped_keyword}\*\*",
+                rf"__{escaped_keyword}__",
+                rf"\*{escaped_keyword}\*",
+                rf"_{escaped_keyword}_",
+            ]
+
+            if any(
+                re.search(pattern, blog_post_content, re.IGNORECASE)
+                for pattern in forced_format_patterns
+            ):
+                return (
+                    True,
+                    f"Target keyword '{normalized_keyword}' is wrapped in markdown emphasis/code. Keep it in plain prose.",
+                )
+
+        return False, ""
+
+    @staticmethod
+    def has_any_target_keyword_usage(blog_post_content: str, target_keywords: list[str]) -> bool:
+        normalized_content = (blog_post_content or "").lower()
+        if not normalized_content:
+            return False
+
+        return any(
+            normalized_keyword in normalized_content
+            for normalized_keyword in [
+                (keyword or "").strip().lower() for keyword in target_keywords if keyword and keyword.strip()
+            ]
+        )
+
+    def validate_generated_blog_post_content(self, blog_post_content: str):
+        normalized_content = (blog_post_content or "").strip()
+
+        if not normalized_content:
+            return False, "Generated content is empty."
+
+        if self.contains_placeholder_language(normalized_content):
+            return False, "Generated content includes placeholder language."
+
+        if self.has_incomplete_ending(normalized_content):
+            return False, "Generated content appears to be cut off before completion."
+
+        target_keywords = self._get_generation_target_keywords()
+        if target_keywords and not self.has_any_target_keyword_usage(normalized_content, target_keywords):
+            return False, "Generated content must naturally include at least one selected target keyword."
+
+        has_forced_keyword_markdown, keyword_markdown_error = self.contains_forced_keyword_markdown(
+            normalized_content,
+            target_keywords,
+        )
+        if has_forced_keyword_markdown:
+            return False, keyword_markdown_error
+
+        return True, ""
+
+    def build_content_generation_prompt(self, previous_validation_error: str = "") -> str:
+        target_keywords = self._get_generation_target_keywords()
+        prompt_lines = [
+            "Generate a complete, publication-ready blog post from the provided context.",
+            "Return all required schema fields: description, slug, tags, and content.",
+            "The content must be fully written and final.",
+            "Never include placeholders or editorial notes (for example: insert image here, add screenshot, add link, [IMAGE], [LINK], TODO, or TBD).",  # noqa: E501
+            "Do not include a References section.",
+            "Finish with a complete conclusion and end on a complete sentence.",
+        ]
+
+        if target_keywords:
+            prompt_lines.extend(
+                [
+                    f"Target keywords to use naturally when relevant: {', '.join(target_keywords)}.",
+                    "Integrate keywords as normal prose inside sentences and headings.",
+                    "Never wrap target keywords in backticks, bold, italics, or other forced markdown emphasis.",
+                    "Avoid keyword stuffing and keep readability natural.",
+                ]
+            )
+
+        if previous_validation_error:
+            prompt_lines.append(
+                f"Previous draft failed validation: {previous_validation_error} Regenerate and fully fix this issue."  # noqa: E501
+            )
+
+        return "\n".join(prompt_lines)
+
+    def generate_content_with_custom_flow(self, content_type=ContentType.SHARING):
+        content_generation_agent = create_generate_blog_post_content_agent(
+            content_type=content_type
+        )
+        blog_post_generation_context = self.get_blog_post_generation_context(content_type)
+
+        maximum_generation_attempts = 3
+        latest_validation_error = ""
+
+        for generation_attempt_number in range(1, maximum_generation_attempts + 1):
+            generation_prompt = self.build_content_generation_prompt(
+                previous_validation_error=latest_validation_error
+            )
+            generation_result = run_agent_synchronously(
+                content_generation_agent,
+                generation_prompt,
+                deps=blog_post_generation_context,
+                function_name="generate_content_with_custom_flow",
+                model_name="BlogPostTitleSuggestion",
+            )
+
+            generated_blog_post_schema = generation_result.output
+            is_content_valid, validation_error = self.validate_generated_blog_post_content(
+                generated_blog_post_schema.content
+            )
+
+            if is_content_valid:
+                return generated_blog_post_schema
+
+            latest_validation_error = validation_error
+
+            logger.warning(
+                "[Generate Content Custom Flow] Generated content failed validation",
+                title_suggestion_id=self.id,
+                project_id=self.project.id,
+                generation_attempt_number=generation_attempt_number,
+                maximum_generation_attempts=maximum_generation_attempts,
+                validation_error=validation_error,
+            )
+
+        raise ValueError(
+            "Failed to generate a complete blog post without placeholders after multiple attempts."  # noqa: E501
+        )
+
     def generate_content(self, content_type=ContentType.SHARING):
-        # query defines the research question researcher will analyze
-        # custom_prompt controls how the research findings are presented
-
-        # Suggestion Instructions
-        query = "Write a post from the following suggestion:\n"
-        query += f"{self.title_suggestion_string_for_ai}\n\n"
-
-        # Get keywords to use in the blog post
-        project_keywords = list(
-            self.project.project_keywords.filter(use=True).select_related("keyword")
-        )
-        project_keyword_texts = [keyword.keyword.keyword_text for keyword in project_keywords]
-        post_suggestion_keywords = self.target_keywords or []
-        keywords_to_use = list(set(project_keyword_texts + post_suggestion_keywords))
-        newline_separator = "\n"
-        keywords_list = newline_separator.join([f"- {keyword}" for keyword in keywords_to_use])
-        query += "The following keywords should be used (organically) in the blog post:\n"
-        query += keywords_list
-        query += "\n\n"
-
-        query += "Quick reminder. You are writing a blog post for this company."
-        query += self.project.project_desctiption_string_for_ai
-        query += ". Make it look good, as the best solution for anyone reading the post."
-        query += "\n\n"
-
-        # # Writing Instructions
-        # query += GENERATE_CONTENT_SYSTEM_PROMPTS[content_type]
-        # query += "\n"
-        query += GeneratedBlogPost.blog_post_structure_rules()
-
-        agent = GPTResearcher(
-            query,
-            report_type="deep",
-            tone="Simple (written for young readers, using basic vocabulary and clear explanations)",  # noqa: E501
-            report_format="markdown",
+        generated_blog_post_schema = self.generate_content_with_custom_flow(
+            content_type=content_type
         )
 
-        result = run_gptr_synchronously(agent)
+        generated_content = (generated_blog_post_schema.content or "").strip()
+        if not generated_content:
+            raise ValueError("Generated blog post content is empty.")
 
-        # Create blog post with raw content first
-        slug = slugify(self.title)
-        tags = ", ".join(self.target_keywords) if self.target_keywords else ""
+        default_tags = ", ".join(self.target_keywords) if self.target_keywords else ""
+        generated_tags = (
+            generated_blog_post_schema.tags.strip()
+            if generated_blog_post_schema.tags
+            else default_tags
+        )
+        generated_description = (
+            generated_blog_post_schema.description.strip()
+            if generated_blog_post_schema.description
+            else self.suggested_meta_description
+        )
+
+        generated_slug_source = generated_blog_post_schema.slug or self.title
+        generated_slug = slugify(generated_slug_source) or slugify(self.title)
 
         blog_post = GeneratedBlogPost.objects.create(
             project=self.project,
             title_suggestion=self,
-            title=self.title,  # Temporary title, will be updated after processing
-            description=self.suggested_meta_description,
-            slug=slug,
-            tags=tags,
-            content=result,  # Raw content from GPTResearcher
+            title=self.title,
+            description=generated_description,
+            slug=generated_slug,
+            tags=generated_tags,
+            content=generated_content,
+        )
+        blog_post.create_workflow_audit_event(
+            checkpoint="CONTENT",
+            event_type="CONTENT_GENERATED",
+            actor_profile=self.project.profile,
+            decision=GeneratedBlogPost.ApprovalStatus.PENDING,
         )
 
-        # Insert links into the blog post content
         blog_post.insert_links_into_post()
 
-        # Process content after link insertion (extract title, clean up sections)
         blog_post_title, blog_post_content = process_generated_blog_content(
-            generated_content=blog_post.content,  # Use content after link insertion
+            generated_content=blog_post.content,
             fallback_title=self.title,
             title_suggestion_id=self.id,
             project_id=self.project.id,
         )
 
-        # Update blog post with processed content and extracted title
         blog_post.title = blog_post_title
         blog_post.slug = slugify(blog_post_title)
         blog_post.content = blog_post_content
@@ -880,6 +1270,31 @@ class BlogPostTitleSuggestion(BaseModel):
                 "core.tasks.generate_og_image_for_blog_post",
                 blog_post.id,
                 group="Generate OG Image",
+            )
+
+        if GeneratedBlogPost.objects.filter(project__profile=self.project.profile).count() == 1:
+            first_content_properties = {
+                "project_id": self.project_id,
+                "blog_post_id": blog_post.id,
+                "title_suggestion_id": self.id,
+                "content_type": content_type,
+            }
+
+            async_task(
+                "core.tasks.track_event",
+                profile_id=self.project.profile.id,
+                event_name=ANALYTICS_EVENTS.FIRST_BLOG_GENERATED,
+                properties=first_content_properties,
+                source_function="BlogPostTitleSuggestion.generate_content",
+                group="Track Event",
+            )
+            async_task(
+                "core.tasks.track_event",
+                profile_id=self.project.profile.id,
+                event_name=ANALYTICS_EVENTS.FIRST_CONTENT_GENERATED,
+                properties=first_content_properties,
+                source_function="BlogPostTitleSuggestion.generate_content",
+                group="Track Event",
             )
 
         return blog_post
@@ -938,11 +1353,110 @@ class GeneratedBlogPost(BaseModel):
     icon = models.ImageField(upload_to="generated_blog_post_icons/", blank=True)
     image = models.ImageField(upload_to="generated_blog_post_images/", blank=True)
 
+    class ApprovalStatus(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        APPROVED = "APPROVED", "Approved"
+        REJECTED = "REJECTED", "Rejected"
+        CHANGES_REQUESTED = "CHANGES_REQUESTED", "Changes Requested"
+
     posted = models.BooleanField(default=False)
     date_posted = models.DateTimeField(null=True, blank=True)
+    publish_approval_status = models.CharField(
+        max_length=32,
+        choices=ApprovalStatus.choices,
+        default=ApprovalStatus.PENDING,
+    )
+    external_links_approval_status = models.CharField(
+        max_length=32,
+        choices=ApprovalStatus.choices,
+        default=ApprovalStatus.PENDING,
+    )
+    publish_review_reason = models.TextField(blank=True, default="")
+    external_links_review_reason = models.TextField(blank=True, default="")
+    publish_reviewed_at = models.DateTimeField(null=True, blank=True)
+    external_links_reviewed_at = models.DateTimeField(null=True, blank=True)
+    publish_reviewed_by = models.ForeignKey(
+        "Profile",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="approved_publish_blog_posts",
+    )
+    external_links_reviewed_by = models.ForeignKey(
+        "Profile",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="approved_external_links_blog_posts",
+    )
 
     def __str__(self):
         return f"{self.project.name}: {self.title}"
+
+    def create_workflow_audit_event(
+        self,
+        *,
+        checkpoint: str,
+        event_type: str,
+        actor_profile=None,
+        decision: str = "",
+        reason: str = "",
+        metadata: dict | None = None,
+    ):
+        return BlogPostWorkflowAuditLog.objects.create(
+            project=self.project,
+            generated_blog_post=self,
+            checkpoint=checkpoint,
+            event_type=event_type,
+            actor_profile=actor_profile,
+            decision=decision,
+            reason=reason,
+            metadata=metadata or {},
+        )
+
+    def apply_approval_decision(self, *, checkpoint: str, decision: str, actor_profile, reason: str = ""):
+        now = timezone.now()
+        status_map = {
+            "approve": self.ApprovalStatus.APPROVED,
+            "reject": self.ApprovalStatus.REJECTED,
+            "request_changes": self.ApprovalStatus.CHANGES_REQUESTED,
+        }
+        new_status = status_map[decision]
+
+        if checkpoint == "publish":
+            self.publish_approval_status = new_status
+            self.publish_review_reason = reason or ""
+            self.publish_reviewed_at = now
+            self.publish_reviewed_by = actor_profile
+            self.save(
+                update_fields=[
+                    "publish_approval_status",
+                    "publish_review_reason",
+                    "publish_reviewed_at",
+                    "publish_reviewed_by",
+                ]
+            )
+        else:
+            self.external_links_approval_status = new_status
+            self.external_links_review_reason = reason or ""
+            self.external_links_reviewed_at = now
+            self.external_links_reviewed_by = actor_profile
+            self.save(
+                update_fields=[
+                    "external_links_approval_status",
+                    "external_links_review_reason",
+                    "external_links_reviewed_at",
+                    "external_links_reviewed_by",
+                ]
+            )
+
+        self.create_workflow_audit_event(
+            checkpoint=checkpoint.upper(),
+            event_type="REVIEW_DECISION",
+            actor_profile=actor_profile,
+            decision=new_status,
+            reason=reason or "",
+        )
 
     @classmethod
     def blog_post_structure_rules(cls):
@@ -1128,6 +1642,339 @@ class GeneratedBlogPost(BaseModel):
             )
             return False, f"Unexpected error: {str(error)}"
 
+    @staticmethod
+    def _dedupe_pages_by_url(pages):
+        unique_pages_by_url = {}
+        for page in pages:
+            if page.url not in unique_pages_by_url:
+                unique_pages_by_url[page.url] = page
+        return list(unique_pages_by_url.values())
+
+    @staticmethod
+    def _dedupe_external_pages_by_project(external_pages):
+        """Keep at most one page per external project to diversify outbound links."""
+        unique_pages_by_project = {}
+
+        for page in external_pages:
+            project_id = page.project_id
+            if project_id not in unique_pages_by_project:
+                unique_pages_by_project[project_id] = page
+
+        return list(unique_pages_by_project.values())
+
+    @staticmethod
+    def _extract_domain(url: str) -> str:
+        return (urlparse(url).netloc or "").lower()
+
+    @staticmethod
+    def _normalize_anchor(text: str) -> str:
+        return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+    @classmethod
+    def _build_default_anchor_for_page(cls, page) -> str:
+        return cls._normalize_anchor(page.title or page.description or page.url)
+
+    def _evaluate_link_opportunity(self, *, page, link_source: str, now):
+        """Apply hard safety controls to a candidate link page and return (allowed, details)."""
+        relevance_threshold = 0.78 if link_source == "internal" else 0.74
+        domain_window_days = 7
+        max_domain_placements_per_window = 3
+        max_source_target_domain_placements_per_window = 1
+        max_identical_anchor_per_window = 1
+
+        candidate_domain = self._extract_domain(page.url)
+        source_domain = self._extract_domain(self.project.url)
+        proposed_anchor = self._build_default_anchor_for_page(page)
+
+        reasons = []
+        flags = []
+        relation = ""
+
+        if link_source == "external":
+            source_is_paid = bool(
+                self.project.profile and self.project.profile.has_product_or_subscription
+            )
+            target_is_paid = bool(
+                page.project
+                and page.project.profile
+                and page.project.profile.has_product_or_subscription
+            )
+
+            if not self.project.particiate_in_link_exchange:
+                reasons.append("source_project_not_opted_in")
+            if not page.project or not page.project.particiate_in_link_exchange:
+                reasons.append("target_project_not_opted_in")
+
+            # Eligibility policy:
+            # - only paid projects are eligible to be promoted cross-project
+            # - free projects must never be promoted into paid-project posts
+            if not target_is_paid:
+                if source_is_paid:
+                    reasons.append("free_project_cannot_be_promoted_into_paid_post")
+                else:
+                    reasons.append("target_project_not_paid_for_promotion")
+
+            relation = "nofollow"
+            flags.extend(
+                [
+                    "external",
+                    "nofollow_supported",
+                    "source_project_paid" if source_is_paid else "source_project_free",
+                    "target_project_paid" if target_is_paid else "target_project_free",
+                ]
+            )
+        else:
+            flags.append("internal")
+
+        relevance_score = None
+        if self.title_suggestion and page.embedding and self.title_suggestion.suggested_meta_description:
+            query_embedding = get_jina_embedding(self.title_suggestion.suggested_meta_description)
+            if query_embedding:
+                dot_product = sum(a * b for a, b in zip(page.embedding, query_embedding))
+                magnitude_page = sum(a * a for a in page.embedding) ** 0.5
+                magnitude_query = sum(b * b for b in query_embedding) ** 0.5
+                if magnitude_page > 0 and magnitude_query > 0:
+                    relevance_score = dot_product / (magnitude_page * magnitude_query)
+                    if relevance_score < relevance_threshold:
+                        reasons.append("below_relevance_threshold")
+                else:
+                    reasons.append("missing_relevance_signal")
+            else:
+                reasons.append("missing_relevance_signal")
+        else:
+            reasons.append("missing_relevance_signal")
+
+        window_start = now - timedelta(days=domain_window_days)
+        recent_placements = LinkOpportunityAuditLog.objects.filter(
+            phase=LinkOpportunityAuditLog.Phase.PLACEMENT,
+            decision=LinkOpportunityAuditLog.Decision.PLACED,
+            created_at__gte=window_start,
+        )
+
+        domain_placement_count = recent_placements.filter(candidate_domain=candidate_domain).count()
+        if domain_placement_count >= max_domain_placements_per_window:
+            reasons.append("domain_velocity_cap_exceeded")
+
+        source_target_placement_count = recent_placements.filter(
+            source_domain=source_domain,
+            candidate_domain=candidate_domain,
+        ).count()
+        if source_target_placement_count >= max_source_target_domain_placements_per_window:
+            reasons.append("source_target_velocity_cap_exceeded")
+
+        identical_anchor_count = recent_placements.filter(
+            candidate_domain=candidate_domain,
+            final_anchor=proposed_anchor,
+        ).count()
+        if proposed_anchor and identical_anchor_count >= max_identical_anchor_per_window:
+            reasons.append("anchor_diversity_cap_exceeded")
+
+        eligibility_reasons = {
+            "source_project_not_opted_in",
+            "target_project_not_opted_in",
+            "target_project_not_paid_for_promotion",
+            "free_project_cannot_be_promoted_into_paid_post",
+        }
+        relevance_reasons = {
+            "below_relevance_threshold",
+            "missing_relevance_signal",
+        }
+
+        has_eligibility_rejection = any(reason in eligibility_reasons for reason in reasons)
+        has_relevance_rejection = any(reason in relevance_reasons for reason in reasons)
+        has_other_policy_rejection = any(
+            reason not in eligibility_reasons and reason not in relevance_reasons for reason in reasons
+        )
+
+        if link_source == "external":
+            flags.append("eligibility_failed" if has_eligibility_rejection else "eligibility_passed")
+        else:
+            flags.append("eligibility_not_applicable")
+
+        flags.append("relevance_failed" if has_relevance_rejection else "relevance_passed")
+        if has_other_policy_rejection:
+            flags.append("policy_guardrail_failed")
+
+        allowed = len(reasons) == 0
+
+        details = {
+            "phase": LinkOpportunityAuditLog.Phase.SUGGESTION,
+            "decision": (
+                LinkOpportunityAuditLog.Decision.ALLOWED
+                if allowed
+                else LinkOpportunityAuditLog.Decision.BLOCKED
+            ),
+            "source_project": self.project,
+            "target_project": page.project if link_source == "external" else self.project,
+            "generated_blog_post": self,
+            "candidate_page": page,
+            "candidate_url": page.url,
+            "candidate_domain": candidate_domain,
+            "source_domain": source_domain,
+            "link_source": link_source,
+            "relevance_score": relevance_score,
+            "relevance_threshold": relevance_threshold,
+            "proposed_anchor": proposed_anchor,
+            "final_anchor": "",
+            "relation": relation,
+            "policy_flags": flags,
+            "reasons": reasons,
+        }
+        return allowed, details
+
+    def _evaluate_safe_link_opportunities(self, *, internal_pages, external_pages):
+        now = timezone.now()
+        safe_internal_pages = []
+        safe_external_pages = []
+        audit_logs = []
+
+        for page in internal_pages:
+            allowed, details = self._evaluate_link_opportunity(
+                page=page,
+                link_source="internal",
+                now=now,
+            )
+            audit_logs.append(LinkOpportunityAuditLog(**details))
+            if allowed:
+                safe_internal_pages.append(page)
+
+        for page in external_pages:
+            allowed, details = self._evaluate_link_opportunity(
+                page=page,
+                link_source="external",
+                now=now,
+            )
+            audit_logs.append(LinkOpportunityAuditLog(**details))
+            if allowed:
+                safe_external_pages.append(page)
+
+        if audit_logs:
+            LinkOpportunityAuditLog.objects.bulk_create(audit_logs)
+
+        return safe_internal_pages, safe_external_pages
+
+    def _record_link_placement_audit_logs(self, *, candidate_pages, content_with_links):
+        links = re.findall(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", content_with_links)
+        final_anchor_by_url = {url: self._normalize_anchor(anchor) for anchor, url in links}
+
+        placement_logs = []
+        for page in candidate_pages:
+            final_anchor = final_anchor_by_url.get(page.url, "")
+            placement_logs.append(
+                LinkOpportunityAuditLog(
+                    phase=LinkOpportunityAuditLog.Phase.PLACEMENT,
+                    decision=(
+                        LinkOpportunityAuditLog.Decision.PLACED
+                        if final_anchor
+                        else LinkOpportunityAuditLog.Decision.NOT_PLACED
+                    ),
+                    source_project=self.project,
+                    target_project=page.project if page.project_id != self.project_id else self.project,
+                    generated_blog_post=self,
+                    candidate_page=page,
+                    candidate_url=page.url,
+                    candidate_domain=self._extract_domain(page.url),
+                    source_domain=self._extract_domain(self.project.url),
+                    link_source="external" if page.project_id != self.project_id else "internal",
+                    relevance_score=None,
+                    relevance_threshold=None,
+                    proposed_anchor=self._build_default_anchor_for_page(page),
+                    final_anchor=final_anchor,
+                    relation="nofollow" if page.project_id != self.project_id else "",
+                    policy_flags=["placed"] if final_anchor else ["not_placed"],
+                    reasons=[] if final_anchor else ["agent_did_not_place_link"],
+                )
+            )
+
+        if placement_logs:
+            LinkOpportunityAuditLog.objects.bulk_create(placement_logs)
+
+        now = timezone.now()
+        for page in candidate_pages:
+            if page.project_id == self.project_id:
+                continue
+
+            final_anchor = final_anchor_by_url.get(page.url, "")
+            if not final_anchor:
+                continue
+
+            source_page_url = f"{self.project.url.rstrip('/')}/{self.slug.lstrip('/')}"
+            ProjectEarnedLink.objects.update_or_create(
+                source_project=self.project,
+                target_project=page.project,
+                source_page_url=source_page_url,
+                target_page_url=page.url,
+                defaults={
+                    "source_generated_blog_post": self,
+                    "source_page_title": self.title,
+                    "target_page": page,
+                    "last_anchor": final_anchor,
+                    "last_seen_at": now,
+                },
+            )
+
+    def _get_link_candidate_pages(self, max_pages=4, max_external_pages=3):
+        manually_selected_project_pages = list(self.project.project_pages.filter(always_use=True))
+        relevant_project_pages = list(
+            get_relevant_pages_for_blog_post(
+                self.project,
+                self.title_suggestion.suggested_meta_description,
+                max_pages=max_pages,
+            )
+        )
+
+        internal_project_pages = self._dedupe_pages_by_url(
+            manually_selected_project_pages + relevant_project_pages
+        )
+
+        external_project_pages = []
+        if self.project.particiate_in_link_exchange:
+            external_candidate_pool_size = max(max_external_pages * 4, max_external_pages)
+            external_candidates = list(
+                get_relevant_external_pages_for_blog_post(
+                    meta_description=self.title_suggestion.suggested_meta_description,
+                    exclude_project=self.project,
+                    max_pages=external_candidate_pool_size,
+                )
+            )
+
+            filtered_external_pages = [
+                page
+                for page in external_candidates
+                if page.project and page.project.particiate_in_link_exchange
+            ]
+            external_project_pages = self._dedupe_external_pages_by_project(
+                self._dedupe_pages_by_url(filtered_external_pages)
+            )
+
+        return internal_project_pages, external_project_pages, manually_selected_project_pages
+
+    @staticmethod
+    def _build_page_contexts(internal_pages, external_pages):
+        contexts = [
+            ProjectPageContext(
+                url=page.url,
+                title=page.title,
+                description=page.description,
+                summary=page.summary,
+                link_source="internal",
+            )
+            for page in internal_pages
+        ]
+        contexts.extend(
+            [
+                ProjectPageContext(
+                    url=page.url,
+                    title=page.title,
+                    description=page.description,
+                    summary=page.summary,
+                    link_source="external",
+                )
+                for page in external_pages
+            ]
+        )
+        return contexts
+
     def insert_links_into_post(self, max_pages=4, max_external_pages=3):
         """
         Insert links from project pages into the blog post content organically.
@@ -1140,11 +1987,6 @@ class GeneratedBlogPost(BaseModel):
         Returns:
             str: The blog post content with links inserted
         """  # noqa: E501
-        from core.utils import (
-            get_relevant_pages_for_blog_post,
-            run_agent_synchronously,
-        )
-
         if not self.title_suggestion:
             logger.warning(
                 "[InsertLinksIntoPost] No title suggestion found for blog post",
@@ -1153,57 +1995,73 @@ class GeneratedBlogPost(BaseModel):
             )
             return self.content
 
-        # Get internal project pages
-        manually_selected_project_pages = list(self.project.project_pages.filter(always_use=True))
-        relevant_project_pages = list(
-            get_relevant_pages_for_blog_post(
-                self.project,
-                self.title_suggestion.suggested_meta_description,
-                max_pages=max_pages,
-            )
+        (
+            internal_project_pages,
+            external_project_pages,
+            manually_selected_project_pages,
+        ) = self._get_link_candidate_pages(
+            max_pages=max_pages,
+            max_external_pages=max_external_pages,
         )
 
-        all_project_pages = manually_selected_project_pages + relevant_project_pages
-
-        # Get external project pages if link exchange is enabled
-        external_project_pages = []
-        if self.project.particiate_in_link_exchange:
-            external_project_pages = list(
-                get_relevant_external_pages_for_blog_post(
-                    meta_description=self.title_suggestion.suggested_meta_description,
-                    exclude_project=self.project,
-                    max_pages=max_external_pages,
+        if (
+            external_project_pages
+            and self.external_links_approval_status != self.ApprovalStatus.APPROVED
+        ):
+            blocked_logs = [
+                LinkOpportunityAuditLog(
+                    phase=LinkOpportunityAuditLog.Phase.SUGGESTION,
+                    decision=LinkOpportunityAuditLog.Decision.BLOCKED,
+                    source_project=self.project,
+                    target_project=page.project,
+                    generated_blog_post=self,
+                    candidate_page=page,
+                    candidate_url=page.url,
+                    candidate_domain=self._extract_domain(page.url),
+                    source_domain=self._extract_domain(self.project.url),
+                    link_source="external",
+                    proposed_anchor=self._build_default_anchor_for_page(page),
+                    policy_flags=["requires_human_approval"],
+                    reasons=["awaiting_external_links_approval"],
                 )
-            )
-            # Filter to only include pages from projects that also participate in link exchange
-            external_project_pages = [
-                page for page in external_project_pages if page.project.particiate_in_link_exchange
+                for page in external_project_pages
             ]
+            LinkOpportunityAuditLog.objects.bulk_create(blocked_logs)
+            self.create_workflow_audit_event(
+                checkpoint="EXTERNAL_LINKS",
+                event_type="ACTION_BLOCKED",
+                actor_profile=self.project.profile,
+                decision=self.external_links_approval_status,
+                reason="awaiting_external_links_approval",
+                metadata={"blocked_candidates": len(external_project_pages)},
+            )
+            external_project_pages = []
 
-        all_pages_to_link = all_project_pages + external_project_pages
+        safe_internal_pages, safe_external_pages = self._evaluate_safe_link_opportunities(
+            internal_pages=internal_project_pages,
+            external_pages=external_project_pages,
+        )
+        safe_external_pages = safe_external_pages[:max_external_pages]
+
+        all_pages_to_link = safe_internal_pages + safe_external_pages
 
         if not all_pages_to_link:
             logger.info(
-                "[InsertLinksIntoPost] No pages found for link insertion",
+                "[InsertLinksIntoPost] No pages passed safety checks for link insertion",
                 blog_post_id=self.id,
                 project_id=self.project_id,
             )
             return self.content
 
-        project_page_contexts = [
-            ProjectPageContext(
-                url=page.url,
-                title=page.title,
-                description=page.description,
-                summary=page.summary,
-            )
-            for page in all_pages_to_link
-        ]
+        project_page_contexts = self._build_page_contexts(
+            internal_pages=safe_internal_pages,
+            external_pages=safe_external_pages,
+        )
 
         # Extract URLs for logging
         urls_to_insert = [page.url for page in all_pages_to_link]
-        internal_urls = [page.url for page in all_project_pages]
-        external_urls = [page.url for page in external_project_pages]
+        internal_urls = [page.url for page in safe_internal_pages]
+        external_urls = [page.url for page in safe_external_pages]
 
         link_insertion_context = LinkInsertionContext(
             blog_post_content=self.content,
@@ -1219,8 +2077,8 @@ class GeneratedBlogPost(BaseModel):
             blog_post_id=self.id,
             project_id=self.project_id,
             num_total_pages=len(project_page_contexts),
-            num_internal_pages=len(all_project_pages),
-            num_external_pages=len(external_project_pages),
+            num_internal_pages=len(safe_internal_pages),
+            num_external_pages=len(safe_external_pages),
             num_always_use_pages=len(manually_selected_project_pages),
             participate_in_link_exchange=self.project.particiate_in_link_exchange,
             urls_to_insert=urls_to_insert,
@@ -1240,6 +2098,10 @@ class GeneratedBlogPost(BaseModel):
 
         self.content = content_with_links
         self.save(update_fields=["content"])
+        self._record_link_placement_audit_logs(
+            candidate_pages=all_pages_to_link,
+            content_with_links=content_with_links,
+        )
 
         logger.info(
             "[InsertLinksIntoPost] Links inserted successfully",
@@ -1248,6 +2110,190 @@ class GeneratedBlogPost(BaseModel):
         )
 
         return content_with_links
+
+
+class ProjectIntegration(BaseModel):
+    class Provider(models.TextChoices):
+        GOOGLE_ANALYTICS = "google_analytics", "Google Analytics (GA4)"
+        GOOGLE_SEARCH_CONSOLE = "google_search_console", "Google Search Console"
+        PLAUSIBLE = "plausible", "Plausible"
+
+    class Status(models.TextChoices):
+        DISCONNECTED = "disconnected", "Disconnected"
+        CONNECTED = "connected", "Connected"
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="integrations")
+    provider = models.CharField(max_length=64, choices=Provider.choices)
+    status = models.CharField(
+        max_length=32,
+        choices=Status.choices,
+        default=Status.DISCONNECTED,
+    )
+
+    external_account_email = models.EmailField(blank=True, default="")
+    scope = models.TextField(blank=True, default="")
+
+    access_token = models.TextField(blank=True, default="")
+    refresh_token = models.TextField(blank=True, default="")
+    token_expires_at = models.DateTimeField(null=True, blank=True)
+
+    plausible_api_key = models.CharField(max_length=255, blank=True, default="")
+    plausible_site_id = models.CharField(max_length=255, blank=True, default="")
+    plausible_base_url = models.URLField(max_length=255, blank=True, default="https://plausible.io")
+
+    connected_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        unique_together = ("project", "provider")
+
+    @property
+    def is_connected(self):
+        return self.status == self.Status.CONNECTED
+
+
+class AnalyticsSourceSnapshot(BaseModel):
+    class Provider(models.TextChoices):
+        GA4 = "ga4", "GA4"
+        GSC = "gsc", "Google Search Console"
+        PLAUSIBLE = "plausible", "Plausible"
+
+    class FetchStatus(models.TextChoices):
+        SUCCESS = "success", "Success"
+        PARTIAL = "partial", "Partial"
+        FAILED = "failed", "Failed"
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="analytics_source_snapshots")
+    integration = models.ForeignKey(
+        ProjectIntegration,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="analytics_source_snapshots",
+    )
+
+    provider = models.CharField(max_length=32, choices=Provider.choices)
+    source_account_ref = models.CharField(max_length=255)
+    request_fingerprint = models.CharField(max_length=64)
+
+    window_start_date = models.DateField()
+    window_end_date = models.DateField()
+
+    payload_json = models.JSONField(default=dict, blank=True)
+    rows_count = models.IntegerField(default=0)
+    fetched_at = models.DateTimeField(default=timezone.now)
+
+    status = models.CharField(max_length=32, choices=FetchStatus.choices, default=FetchStatus.SUCCESS)
+    error_code = models.CharField(max_length=64, blank=True, default="")
+    error_message = models.TextField(blank=True, default="")
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["project", "provider", "window_start_date", "window_end_date", "-fetched_at"]
+            ),
+            models.Index(fields=["request_fingerprint"]),
+        ]
+
+
+class AnalyticsFactDaily(BaseModel):
+    class Provider(models.TextChoices):
+        GA4 = "ga4", "GA4"
+        GSC = "gsc", "Google Search Console"
+        PLAUSIBLE = "plausible", "Plausible"
+
+    class DimensionScope(models.TextChoices):
+        SITE = "site", "Site"
+        PAGE = "page", "Page"
+        QUERY = "query", "Query"
+        PAGE_QUERY = "page_query", "Page + Query"
+        COUNTRY = "country", "Country"
+        DEVICE = "device", "Device"
+        CHANNEL = "channel", "Channel"
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="analytics_facts_daily")
+    provider = models.CharField(max_length=32, choices=Provider.choices)
+    metric_date = models.DateField()
+    dimension_scope = models.CharField(max_length=32, choices=DimensionScope.choices)
+
+    page_url = models.CharField(max_length=1024, blank=True, default="")
+    page_url_key = models.CharField(max_length=64, blank=True, default="")
+    search_query = models.CharField(max_length=512, blank=True, default="")
+    search_query_key = models.CharField(max_length=64, blank=True, default="")
+    country_code = models.CharField(max_length=2, blank=True, default="")
+    device_type = models.CharField(max_length=32, blank=True, default="")
+    channel_group = models.CharField(max_length=64, blank=True, default="")
+    dimension_fingerprint = models.CharField(max_length=64, default="")
+
+    clicks = models.BigIntegerField(null=True, blank=True)
+    impressions = models.BigIntegerField(null=True, blank=True)
+    ctr = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
+    avg_position = models.DecimalField(max_digits=8, decimal_places=3, null=True, blank=True)
+    sessions = models.BigIntegerField(null=True, blank=True)
+    users = models.BigIntegerField(null=True, blank=True)
+    engaged_sessions = models.BigIntegerField(null=True, blank=True)
+    bounce_rate = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
+    conversions = models.DecimalField(max_digits=18, decimal_places=6, null=True, blank=True)
+    conversion_rate = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
+
+    provider_payload_meta = models.JSONField(default=dict, blank=True)
+    source_snapshot = models.ForeignKey(
+        AnalyticsSourceSnapshot,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="normalized_rows",
+    )
+    ingested_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "provider", "metric_date", "dimension_scope", "dimension_fingerprint"],
+                name="analytics_fact_daily_unique_dimension",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["project", "-metric_date"]),
+            models.Index(fields=["project", "provider", "-metric_date"]),
+            models.Index(fields=["project", "dimension_scope", "-metric_date"]),
+            models.Index(fields=["page_url_key"]),
+            models.Index(fields=["search_query_key"]),
+        ]
+
+
+class AnalyticsSyncCursor(BaseModel):
+    class Provider(models.TextChoices):
+        GOOGLE_ANALYTICS = ProjectIntegration.Provider.GOOGLE_ANALYTICS
+        GOOGLE_SEARCH_CONSOLE = ProjectIntegration.Provider.GOOGLE_SEARCH_CONSOLE
+        PLAUSIBLE = ProjectIntegration.Provider.PLAUSIBLE
+
+    class SyncStatus(models.TextChoices):
+        PENDING = "pending", "Pending"
+        RUNNING = "running", "Running"
+        SUCCESS = "success", "Success"
+        PARTIAL = "partial", "Partial"
+        FAILED = "failed", "Failed"
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="analytics_sync_cursors")
+    provider = models.CharField(max_length=64, choices=Provider.choices)
+    source_account_ref = models.CharField(max_length=255)
+
+    last_successful_date = models.DateField(null=True, blank=True)
+    backfill_start_date = models.DateField(null=True, blank=True)
+    backfill_end_date = models.DateField(null=True, blank=True)
+
+    last_run_started_at = models.DateTimeField(null=True, blank=True)
+    last_run_finished_at = models.DateTimeField(null=True, blank=True)
+    last_status = models.CharField(max_length=32, choices=SyncStatus.choices, default=SyncStatus.PENDING)
+    last_error = models.TextField(blank=True, default="")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "provider", "source_account_ref"],
+                name="analytics_sync_cursor_unique_source",
+            )
+        ]
 
 
 class ProjectPage(BaseModel):
@@ -1282,6 +2328,17 @@ class ProjectPage(BaseModel):
     always_use = models.BooleanField(
         default=False,
         help_text="When enabled, this page link will always be included in generated blog posts",
+    )
+
+    # Sitemap sync state
+    sitemap_is_stale = models.BooleanField(
+        default=False,
+        help_text="True when this URL was previously discovered via sitemap but is missing in the latest sync run.",
+    )
+    sitemap_last_seen_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When this URL was last seen in a successful sitemap sync.",
     )
 
     def __str__(self):
@@ -1332,6 +2389,16 @@ class ProjectPage(BaseModel):
             title=self.title,
             description=self.description,
             markdown_content=self.markdown_content,
+        )
+
+    def get_latest_analysis_run(self):
+        return self.analysis_runs.order_by("-created_at").first()
+
+    def get_latest_successful_analysis_run(self):
+        return (
+            self.analysis_runs.filter(status=ProjectPageAnalysisRun.Status.SUCCEEDED)
+            .order_by("-finished_at", "-created_at")
+            .first()
         )
 
     def get_page_content(self):
@@ -1425,7 +2492,78 @@ class ProjectPage(BaseModel):
 
         self.save(update_fields=update_fields)
 
+        async_task(
+            "core.tasks.track_event",
+            profile_id=self.project.profile_id,
+            event_name=ANALYTICS_EVENTS.PAGE_ANALYSIS_COMPLETED,
+            properties={
+                "project_id": self.project_id,
+                "project_page_id": self.id,
+                "source": self.source,
+                "result_status": "succeeded",
+            },
+            source_function="ProjectPage.analyze_content",
+            group="Track Event",
+        )
+
         return True
+
+
+class ProjectPageAnalysisRun(BaseModel):
+    class Status(models.TextChoices):
+        QUEUED = "queued", "Queued"
+        RUNNING = "running", "Running"
+        SUCCEEDED = "succeeded", "Succeeded"
+        FAILED = "failed", "Failed"
+
+    class Trigger(models.TextChoices):
+        MANUAL = "manual", "Manual"
+        AUTOMATIC = "automatic", "Automatic"
+
+    project_page = models.ForeignKey(
+        ProjectPage,
+        on_delete=models.CASCADE,
+        related_name="analysis_runs",
+    )
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="project_page_analysis_runs",
+    )
+    requested_by = models.ForeignKey(
+        Profile,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="project_page_analysis_runs",
+    )
+    trigger = models.CharField(max_length=32, choices=Trigger.choices, default=Trigger.MANUAL)
+    status = models.CharField(max_length=32, choices=Status.choices, default=Status.QUEUED)
+
+    queued_at = models.DateTimeField(default=timezone.now)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    analysis_payload = models.JSONField(default=dict, blank=True)
+    payload_checksum = models.CharField(max_length=64, blank=True, default="")
+    payload_bytes = models.PositiveIntegerField(default=0)
+
+    failure_message = models.TextField(blank=True, default="")
+    failure_details = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["project_page", "status", "created_at"]),
+            models.Index(fields=["project_page", "finished_at"]),
+            models.Index(fields=["project", "created_at"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project_page"],
+                condition=models.Q(status__in=["queued", "running"]),
+                name="project_page_single_active_analysis_run",
+            ),
+        ]
 
 
 class Competitor(BaseModel):
@@ -1460,6 +2598,14 @@ class Competitor(BaseModel):
 
     # VS comparison blog post content
     blog_post = models.TextField(blank=True, default="")
+    blog_post_generation_status = models.CharField(
+        max_length=20,
+        choices=CompetitorPostGenerationStatus.choices,
+        default=CompetitorPostGenerationStatus.IDLE,
+    )
+    blog_post_generation_started_at = models.DateTimeField(null=True, blank=True)
+    blog_post_generation_completed_at = models.DateTimeField(null=True, blank=True)
+    blog_post_generation_error = models.TextField(blank=True, default="")
 
     class Meta:
         indexes = [
@@ -1474,6 +2620,10 @@ class Competitor(BaseModel):
 
     def __str__(self):
         return f"{self.name}"
+
+    @property
+    def is_blog_post_generation_in_progress(self) -> bool:
+        return self.blog_post_generation_status == CompetitorPostGenerationStatus.PROCESSING
 
     @property
     def competitor_details(self):
@@ -1668,6 +2818,278 @@ class Competitor(BaseModel):
         self.save(update_fields=["blog_post"])
 
         return self.blog_post
+
+
+class AgentExecutionJob(BaseModel):
+    profile = models.ForeignKey(
+        Profile,
+        on_delete=models.CASCADE,
+        related_name="agent_execution_jobs",
+    )
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="agent_execution_jobs",
+    )
+    operation = models.CharField(
+        max_length=64,
+        choices=ExecutionJobOperation.choices,
+    )
+    status = models.CharField(
+        max_length=32,
+        choices=ExecutionJobStatus.choices,
+        default=ExecutionJobStatus.QUEUED,
+    )
+    idempotency_key = models.CharField(max_length=255)
+    payload = models.JSONField(default=dict, blank=True)
+    result = models.JSONField(default=dict, blank=True)
+    error_code = models.CharField(max_length=128, blank=True, default="")
+    error_message = models.TextField(blank=True, default="")
+    queued_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    canceled_at = models.DateTimeField(null=True, blank=True)
+    canceled_reason = models.TextField(blank=True, default="")
+    retry_of = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="retry_jobs",
+    )
+    queue_task_id = models.CharField(max_length=255, blank=True, default="")
+
+    class Meta:
+        unique_together = ("profile", "operation", "idempotency_key")
+        indexes = [
+            models.Index(fields=["profile", "status", "created_at"]),
+            models.Index(fields=["project", "status", "created_at"]),
+            models.Index(fields=["operation", "status", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"Job {self.id} {self.operation} ({self.status})"
+
+
+class ProjectEarnedLink(BaseModel):
+    source_project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="outbound_earned_links",
+    )
+    target_project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="inbound_earned_links",
+    )
+    source_generated_blog_post = models.ForeignKey(
+        GeneratedBlogPost,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="earned_links_created",
+    )
+    source_page_title = models.CharField(max_length=255, blank=True, default="")
+    source_page_url = models.URLField(max_length=500, blank=True, default="")
+    target_page = models.ForeignKey(
+        ProjectPage,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="earned_links_received",
+    )
+    target_page_url = models.URLField(max_length=500)
+    first_seen_at = models.DateTimeField(default=timezone.now)
+    last_seen_at = models.DateTimeField(default=timezone.now)
+    last_anchor = models.CharField(max_length=255, blank=True, default="")
+
+    class Meta:
+        unique_together = (
+            "source_project",
+            "target_project",
+            "source_page_url",
+            "target_page_url",
+        )
+        indexes = [
+            models.Index(fields=["target_project", "last_seen_at"]),
+            models.Index(fields=["source_project", "last_seen_at"]),
+            models.Index(fields=["target_page_url"]),
+        ]
+
+
+class LinkOpportunityAuditLog(BaseModel):
+    class Phase(models.TextChoices):
+        SUGGESTION = "SUGGESTION", "Suggestion"
+        PLACEMENT = "PLACEMENT", "Placement"
+
+    class Decision(models.TextChoices):
+        ALLOWED = "ALLOWED", "Allowed"
+        BLOCKED = "BLOCKED", "Blocked"
+        PLACED = "PLACED", "Placed"
+        NOT_PLACED = "NOT_PLACED", "Not Placed"
+
+    phase = models.CharField(max_length=20, choices=Phase.choices)
+    decision = models.CharField(max_length=20, choices=Decision.choices)
+    source_project = models.ForeignKey(
+        Project,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="link_opportunity_logs_as_source",
+    )
+    target_project = models.ForeignKey(
+        Project,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="link_opportunity_logs_as_target",
+    )
+    generated_blog_post = models.ForeignKey(
+        GeneratedBlogPost,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="link_opportunity_audit_logs",
+    )
+    candidate_page = models.ForeignKey(
+        ProjectPage,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="link_opportunity_audit_logs",
+    )
+    candidate_url = models.URLField(max_length=500)
+    candidate_domain = models.CharField(max_length=255, blank=True, default="")
+    source_domain = models.CharField(max_length=255, blank=True, default="")
+    link_source = models.CharField(max_length=20, blank=True, default="")
+    relevance_score = models.FloatField(null=True, blank=True)
+    relevance_threshold = models.FloatField(null=True, blank=True)
+    proposed_anchor = models.CharField(max_length=255, blank=True, default="")
+    final_anchor = models.CharField(max_length=255, blank=True, default="")
+    relation = models.CharField(max_length=32, blank=True, default="")
+    policy_flags = models.JSONField(default=list, blank=True)
+    reasons = models.JSONField(default=list, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["source_project", "phase", "created_at"]),
+            models.Index(fields=["candidate_domain", "phase", "created_at"]),
+            models.Index(fields=["decision", "phase", "created_at"]),
+        ]
+
+
+class BlogPostWorkflowAuditLog(BaseModel):
+    project = models.ForeignKey(
+        Project,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="blog_post_workflow_audit_logs",
+    )
+    generated_blog_post = models.ForeignKey(
+        GeneratedBlogPost,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="workflow_audit_logs",
+    )
+    checkpoint = models.CharField(max_length=32)
+    event_type = models.CharField(max_length=64)
+    actor_profile = models.ForeignKey(
+        "Profile",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="blog_post_workflow_events",
+    )
+    decision = models.CharField(max_length=32, blank=True, default="")
+    reason = models.TextField(blank=True, default="")
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["generated_blog_post", "created_at"]),
+            models.Index(fields=["project", "checkpoint", "created_at"]),
+            models.Index(fields=["event_type", "created_at"]),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise ValueError("BlogPostWorkflowAuditLog is immutable and cannot be updated")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("BlogPostWorkflowAuditLog is immutable and cannot be deleted")
+
+
+class OutcomeAttributionEvent(BaseModel):
+    class Dimension(models.TextChoices):
+        CONTENT = "content", "Content"
+        DISTRIBUTION = "distribution", "Links / Distribution"
+        TECHNICAL = "technical", "Technical Operations"
+
+    profile = models.ForeignKey(
+        Profile,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="outcome_attribution_events",
+    )
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="outcome_attribution_events",
+    )
+    event_name = models.CharField(max_length=128)
+    dimension = models.CharField(max_length=32, choices=Dimension.choices)
+    outcome_metric = models.CharField(max_length=64)
+    outcome_value = models.FloatField(default=1.0)
+    occurred_at = models.DateTimeField(default=timezone.now)
+    source_model = models.CharField(max_length=128)
+    source_object_id = models.BigIntegerField(null=True, blank=True)
+    event_fingerprint = models.CharField(max_length=64, unique=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    schema_version = models.PositiveSmallIntegerField(default=1)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["project", "occurred_at"]),
+            models.Index(fields=["project", "dimension", "occurred_at"]),
+            models.Index(fields=["project", "outcome_metric", "occurred_at"]),
+            models.Index(fields=["event_name", "occurred_at"]),
+        ]
+
+
+class OutcomeAttributionRollup(BaseModel):
+    class Granularity(models.TextChoices):
+        DAY = "DAY", "Day"
+
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="outcome_attribution_rollups",
+    )
+    window_start = models.DateField()
+    granularity = models.CharField(max_length=8, choices=Granularity.choices, default=Granularity.DAY)
+    dimension = models.CharField(max_length=32, choices=OutcomeAttributionEvent.Dimension.choices)
+    outcome_metric = models.CharField(max_length=64)
+    total_value = models.FloatField(default=0.0)
+    event_count = models.PositiveIntegerField(default=0)
+    last_aggregated_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        unique_together = (
+            "project",
+            "window_start",
+            "granularity",
+            "dimension",
+            "outcome_metric",
+        )
+        indexes = [
+            models.Index(fields=["project", "window_start"]),
+            models.Index(fields=["project", "window_start", "dimension"]),
+            models.Index(fields=["project", "window_start", "outcome_metric"]),
+        ]
 
 
 class Keyword(BaseModel):

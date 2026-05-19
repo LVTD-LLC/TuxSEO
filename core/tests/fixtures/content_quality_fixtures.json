@@ -1,0 +1,35 @@
+[
+  {
+    "fixture_id": "good_urban_gardening",
+    "quality_label": "good",
+    "title": "Complete Guide to Sustainable Urban Gardening",
+    "target_keywords": [
+      "sustainable urban gardening",
+      "container gardening tips",
+      "eco-friendly gardening"
+    ],
+    "generated_content": "Sustainable urban gardening starts with a plan for sunlight, water access, and space. Use deep containers with drainage holes, then build healthy soil with compost and aeration materials. Container gardening tips include grouping plants by water needs, mulching to reduce evaporation, and rotating crops to avoid soil fatigue.\n\nFor eco-friendly gardening, choose native varieties that can handle local weather and attract pollinators. Harvest rainwater when possible, compost kitchen scraps, and use manual pest control before chemical options. With steady routines, urban growers can produce herbs and vegetables while lowering waste and protecting neighborhood biodiversity."
+  },
+  {
+    "fixture_id": "medium_balcony_garden",
+    "quality_label": "medium",
+    "title": "How to Start a Small Balcony Garden",
+    "target_keywords": [
+      "balcony garden",
+      "small space plants",
+      "beginner gardening"
+    ],
+    "generated_content": "A balcony garden is a practical way to start growing food or flowers in an apartment. Check how much direct light your balcony gets before buying plants. Pick small space plants that match that light level, then choose containers with drainage.\n\nBeginner gardening works best when routines stay simple: water on a schedule, inspect leaves weekly, and replace weak soil with fresh mix when growth slows. This setup is easy to maintain and gives steady results."
+  },
+  {
+    "fixture_id": "bad_generic_gardening",
+    "quality_label": "bad",
+    "title": "Garden Stuff and Things",
+    "target_keywords": [
+      "garden",
+      "plants",
+      "tips"
+    ],
+    "generated_content": "Gardens are nice and garden tips are everywhere. Plants are plants and tips are tips. Garden plants tips, garden plants tips, garden plants tips. People like gardens and plants and tips because gardens are good."
+  }
+]

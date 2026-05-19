@@ -21,6 +21,12 @@ class UserSettingsOut(Schema):
     project: ProjectSettingsOut
 
 
+class APIKeyOut(Schema):
+    status: str
+    key: str
+    message: str = ""
+
+
 class ProjectScanIn(Schema):
     url: str
     source: str = "default"
@@ -44,6 +50,13 @@ class ProjectScanOut(Schema):
     type: str = ""
     url: str = ""
     summary: str = ""
+    description: str = ""
+
+
+class ConfirmProjectOnboardingIn(Schema):
+    name: str
+    summary: str = ""
+    description: str = ""
 
 
 class GenerateTitleSuggestionsIn(Schema):
@@ -51,6 +64,7 @@ class GenerateTitleSuggestionsIn(Schema):
     content_type: str = ContentType.SHARING
     user_prompt: str = ""
     num_titles: int = 3
+    post_type_id: int | None = None
 
 
 class TitleSuggestionOut(Schema):
@@ -148,6 +162,13 @@ class GenerateCompetitorVsTitleOut(Schema):
     competitor_id: int | None = None
 
 
+class CompetitorPostGenerationStatusOut(Schema):
+    status: str
+    message: str = ""
+    competitor_id: int
+    view_post_url: str | None = None
+
+
 class SubmitFeedbackIn(Schema):
     feedback: str
     page: str
@@ -217,6 +238,42 @@ class BlogPostOut(Schema):
     message: str
 
 
+class BlogPostUpdateIn(Schema):
+    title: str | None = None
+    description: str | None = None
+    slug: str | None = None
+    tags: str | None = None
+    content: str | None = None
+    icon: str | None = None
+    image: str | None = None
+    status: BlogPostStatus | None = None
+
+
+class InternalBlogPostItemOut(Schema):
+    id: int
+    title: str
+    description: str
+    slug: str
+    tags: str
+    content: str
+    status: str
+    icon_url: str = ""
+    image_url: str = ""
+    created_at: str
+    updated_at: str
+
+
+class InternalBlogPostListOut(Schema):
+    status: str
+    blog_posts: list[InternalBlogPostItemOut] = []
+
+
+class InternalBlogPostDetailOut(Schema):
+    status: str
+    blog_post: InternalBlogPostItemOut | None = None
+    message: str = ""
+
+
 class PostGeneratedBlogPostIn(Schema):
     id: int
 
@@ -273,6 +330,12 @@ class UpdateSitemapUrlOut(Schema):
     message: str
 
 
+class SyncSitemapNowOut(Schema):
+    status: str
+    message: str
+    task_id: str = ""
+
+
 class ToggleProjectPageAlwaysUseIn(Schema):
     page_id: int
 
@@ -291,3 +354,71 @@ class GenerateOGImageOut(Schema):
     status: str
     message: str = ""
     image_url: str = ""
+
+
+class AnalyticsDateRangeIn(Schema):
+    start_date: str | None = None
+    end_date: str | None = None
+
+
+class AnalyticsDateRangeOut(Schema):
+    start_date: str
+    end_date: str
+    days: int
+
+
+class AnalyticsSourceBreakdownOut(Schema):
+    source: str
+    clicks: int = 0
+    impressions: int = 0
+    sessions: int = 0
+    users: int = 0
+    conversions: float = 0.0
+
+
+class AnalyticsSourceHealthOut(Schema):
+    source: str
+    integration_connected: bool
+    has_data: bool
+    status: str
+    last_synced_at: str | None = None
+    stale_days: int | None = None
+    last_error: str = ""
+
+
+class AnalyticsDailyTrendPointOut(Schema):
+    date: str
+    clicks: int = 0
+    sessions: int = 0
+    conversions: float = 0.0
+
+
+class AnalyticsPageBreakdownOut(Schema):
+    page_url: str
+    clicks: int = 0
+    impressions: int = 0
+    ctr_pct: float = 0.0
+
+
+class AnalyticsOverviewOut(Schema):
+    clicks: int = 0
+    impressions: int = 0
+    sessions: int = 0
+    users: int = 0
+    conversions: float = 0.0
+    ctr_pct: float = 0.0
+    conversion_rate_pct: float = 0.0
+
+
+class AnalyticsAggregationOut(Schema):
+    status: str
+    project_id: int
+    date_range: AnalyticsDateRangeOut
+    overview: AnalyticsOverviewOut
+    source_breakdown: list[AnalyticsSourceBreakdownOut] = []
+    source_health: list[AnalyticsSourceHealthOut] = []
+    daily_trend: list[AnalyticsDailyTrendPointOut] = []
+    page_breakdown: list[AnalyticsPageBreakdownOut] = []
+    cached: bool = False
+    cache_key: str = ""
+    message: str = ""

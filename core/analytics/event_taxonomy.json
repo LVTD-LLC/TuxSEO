@@ -1,0 +1,369 @@
+{
+  "version": 2,
+  "events": {
+    "site_visited": {
+      "stage": "awareness",
+      "description": "Visitor landed on a tracked marketing or app page."
+    },
+    "signup_started": {
+      "stage": "activation",
+      "description": "Visitor started the sign-up flow."
+    },
+    "signup_completed": {
+      "stage": "activation",
+      "description": "Account sign-up finished successfully."
+    },
+    "login_succeeded": {
+      "stage": "activation",
+      "description": "User logged in successfully.",
+      "required_properties": [
+        "auth_provider",
+        "result_status"
+      ]
+    },
+    "email_verified": {
+      "stage": "activation",
+      "description": "User verified their email address."
+    },
+    "project_create_succeeded": {
+      "stage": "activation",
+      "description": "User created their first (or another) project.",
+      "required_properties": [
+        "project_id",
+        "project_url",
+        "result_status"
+      ]
+    },
+    "project_deleted": {
+      "stage": "lifecycle",
+      "description": "User deleted a project."
+    },
+    "integration_connected": {
+      "stage": "activation",
+      "description": "An analytics integration was connected.",
+      "required_properties": [
+        "project_id",
+        "provider",
+        "result_status"
+      ]
+    },
+    "integration_disconnected": {
+      "stage": "activation",
+      "description": "An analytics integration was disconnected.",
+      "required_properties": [
+        "project_id",
+        "provider",
+        "result_status"
+      ]
+    },
+    "keyword_updated": {
+      "stage": "engagement",
+      "description": "Keyword list or keyword usage changed for a project.",
+      "required_properties": [
+        "project_id",
+        "keyword_id",
+        "update_action",
+        "result_status"
+      ]
+    },
+    "page_analysis_completed": {
+      "stage": "engagement",
+      "description": "A project page analysis completed successfully.",
+      "required_properties": [
+        "project_id",
+        "project_page_id",
+        "result_status"
+      ]
+    },
+    "title_generation_completed": {
+      "stage": "engagement",
+      "description": "Title suggestion generation completed.",
+      "required_properties": [
+        "project_id",
+        "content_type",
+        "title_count",
+        "result_status"
+      ]
+    },
+    "content_generation_succeeded": {
+      "stage": "engagement",
+      "description": "Blog content generation finished successfully.",
+      "required_properties": [
+        "project_id",
+        "title_suggestion_id",
+        "blog_post_id",
+        "result_status"
+      ]
+    },
+    "content_generation_failed": {
+      "stage": "engagement",
+      "description": "Blog content generation failed.",
+      "required_properties": [
+        "project_id",
+        "title_suggestion_id",
+        "result_status"
+      ]
+    },
+    "first_title_generated": {
+      "stage": "activation",
+      "description": "First AI-generated title suggestion was created."
+    },
+    "first_blog_generated": {
+      "stage": "activation",
+      "description": "First AI-generated post was created."
+    },
+    "publish_attempted": {
+      "stage": "engagement",
+      "description": "Publish to external endpoint was attempted.",
+      "required_properties": [
+        "project_id",
+        "blog_post_id",
+        "result_status"
+      ]
+    },
+    "publish_succeeded": {
+      "stage": "engagement",
+      "description": "Publish to external endpoint succeeded.",
+      "required_properties": [
+        "project_id",
+        "blog_post_id",
+        "result_status"
+      ]
+    },
+    "publish_failed": {
+      "stage": "engagement",
+      "description": "Publish to external endpoint failed.",
+      "required_properties": [
+        "project_id",
+        "blog_post_id",
+        "result_status"
+      ]
+    },
+    "first_publish_attempt": {
+      "stage": "activation",
+      "description": "First publish-to-endpoint attempt was made."
+    },
+    "link_exchange_toggled": {
+      "stage": "engagement",
+      "description": "Link exchange toggle changed for a project.",
+      "required_properties": [
+        "project_id",
+        "enabled",
+        "result_status"
+      ]
+    },
+    "pricing_cta_clicked": {
+      "stage": "conversion",
+      "description": "User clicked a pricing call-to-action button."
+    },
+    "checkout_started": {
+      "stage": "conversion",
+      "description": "Checkout session was initiated."
+    },
+    "checkout_succeeded": {
+      "stage": "conversion",
+      "description": "Checkout session completed and payment was confirmed."
+    },
+    "checkout_failed": {
+      "stage": "conversion",
+      "description": "Checkout failed due to payment or session error."
+    },
+    "subscription_created": {
+      "stage": "revenue",
+      "description": "Subscription created in Stripe."
+    },
+    "onboarding_completed": {
+      "stage": "activation",
+      "description": "User completed onboarding baseline by creating the first project."
+    },
+    "first_content_generated": {
+      "stage": "activation",
+      "description": "First content generation event completed for the account."
+    },
+    "subscription_started": {
+      "stage": "revenue",
+      "description": "Billing subscription officially started."
+    },
+    "paid_conversion": {
+      "stage": "revenue",
+      "description": "Paid conversion recorded from Stripe subscription creation."
+    },
+    "plan_upgraded": {
+      "stage": "revenue",
+      "description": "A plan upgrade was completed.",
+      "required_properties": [
+        "plan",
+        "result_status"
+      ]
+    },
+    "plan_cancelled": {
+      "stage": "revenue",
+      "description": "A plan cancellation was requested or applied.",
+      "required_properties": [
+        "plan",
+        "result_status"
+      ]
+    },
+    "subscription_upgraded": {
+      "stage": "revenue",
+      "description": "Existing subscription moved to a higher-tier plan."
+    },
+    "subscription_cancelled": {
+      "stage": "revenue",
+      "description": "Subscription was set to cancel."
+    },
+    "subscription_deleted": {
+      "stage": "revenue",
+      "description": "Subscription ended or was removed."
+    },
+    "detail_view_opened": {
+      "stage": "engagement",
+      "description": "A user opened a project page detail workspace.",
+      "required_properties": [
+        "project_id",
+        "project_page_id",
+        "result_status"
+      ]
+    },
+    "seo_analysis_run_started": {
+      "stage": "engagement",
+      "description": "A project page SEO analysis run was requested.",
+      "required_properties": [
+        "project_id",
+        "project_page_id",
+        "trigger",
+        "result_status"
+      ]
+    },
+    "seo_analysis_run_completed": {
+      "stage": "engagement",
+      "description": "A project page SEO analysis run completed successfully.",
+      "required_properties": [
+        "project_id",
+        "project_page_id",
+        "run_id",
+        "result_status"
+      ]
+    },
+    "seo_analysis_run_failed": {
+      "stage": "risk",
+      "description": "A project page SEO analysis run failed.",
+      "required_properties": [
+        "project_id",
+        "project_page_id",
+        "run_id",
+        "result_status"
+      ]
+    },
+    "backlink_discovery_started": {
+      "stage": "engagement",
+      "description": "A backlink discovery refresh was requested.",
+      "required_properties": [
+        "project_id",
+        "project_page_id",
+        "trigger",
+        "result_status"
+      ]
+    },
+    "backlink_discovery_completed": {
+      "stage": "engagement",
+      "description": "A backlink discovery refresh completed.",
+      "required_properties": [
+        "project_id",
+        "project_page_id",
+        "result_status"
+      ]
+    },
+    "backlink_discovery_failed": {
+      "stage": "risk",
+      "description": "A backlink discovery refresh failed.",
+      "required_properties": [
+        "project_id",
+        "project_page_id",
+        "result_status"
+      ]
+    },
+    "opportunities_viewed": {
+      "stage": "engagement",
+      "description": "A user viewed backlink opportunities on page detail.",
+      "required_properties": [
+        "project_id",
+        "project_page_id",
+        "opportunities_count",
+        "result_status"
+      ]
+    },
+    "contact_method_copied": {
+      "stage": "engagement",
+      "description": "A user copied a discovered contact method from an opportunity.",
+      "required_properties": [
+        "project_id",
+        "project_page_id",
+        "contact_method",
+        "result_status"
+      ]
+    },
+    "abuse_guardrail_triggered": {
+      "stage": "risk",
+      "description": "A signup or expensive-action abuse guardrail blocked a request."
+    },
+    "outcome_attribution_recorded": {
+      "stage": "lifecycle",
+      "description": "A workflow contribution was linked to a measurable project outcome metric."
+    },
+    "analytics_page_viewed": {
+      "stage": "engagement",
+      "description": "User opened the project Analytics page shell.",
+      "required_properties": [
+        "project_id",
+        "date_range_start",
+        "date_range_end",
+        "range_days"
+      ]
+    },
+    "analytics_date_range_changed": {
+      "stage": "engagement",
+      "description": "Analytics page date range was changed before a new query load.",
+      "required_properties": [
+        "project_id",
+        "date_range_start",
+        "date_range_end",
+        "range_days",
+        "change_source"
+      ]
+    },
+    "analytics_refresh_clicked": {
+      "stage": "engagement",
+      "description": "User clicked refresh on the Analytics page.",
+      "required_properties": [
+        "project_id",
+        "date_range_start",
+        "date_range_end",
+        "range_days"
+      ]
+    },
+    "analytics_source_error_shown": {
+      "stage": "risk",
+      "description": "Analytics page surfaced a provider or API error to the user.",
+      "required_properties": [
+        "project_id",
+        "source",
+        "source_status",
+        "error_message",
+        "result_status"
+      ]
+    }
+  },
+  "deprecated_aliases": {
+    "user_signed_up": "signup_completed",
+    "project_created": "project_create_succeeded",
+    "first_post_generated": "first_blog_generated",
+    "checkout_completed": "checkout_succeeded",
+    "integration_connect_succeeded": "integration_connected",
+    "integration_disconnect_succeeded": "integration_disconnected",
+    "publish_success": "publish_succeeded",
+    "publish_failure": "publish_failed",
+    "subscription_plan_upgraded": "plan_upgraded",
+    "subscription_plan_cancelled": "plan_cancelled"
+  }
+}

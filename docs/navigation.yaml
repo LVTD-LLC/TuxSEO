@@ -39,4 +39,15 @@ navigation:
     - render-deployment
     - docker-compose-deployment
 
+  api:
+    - authorization
+    - account
+    - projects
+    - execution-jobs
+    - title-suggestions
+    - keywords
+    - competitors
+    - project-pages
+    - blog-posts
+
   # Any categories not listed here will appear after these, in alphabetical order

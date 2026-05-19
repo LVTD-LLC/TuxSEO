@@ -1,0 +1,38 @@
+{
+  "fixtures": [
+    {
+      "fixture_id": "good_urban_gardening",
+      "quality_label": "good",
+      "aggregate_score": 0.8784,
+      "category_scores": {
+        "factuality_relevance": 0.8256,
+        "structure_readability": 0.8912,
+        "seo_coverage": 0.903,
+        "duplication_spam": 0.9392
+      }
+    },
+    {
+      "fixture_id": "medium_balcony_garden",
+      "quality_label": "medium",
+      "aggregate_score": 0.8549,
+      "category_scores": {
+        "factuality_relevance": 0.8844,
+        "structure_readability": 0.8206,
+        "seo_coverage": 0.8003,
+        "duplication_spam": 0.9344
+      }
+    },
+    {
+      "fixture_id": "bad_generic_gardening",
+      "quality_label": "bad",
+      "aggregate_score": 0.5895,
+      "category_scores": {
+        "factuality_relevance": 0.5865,
+        "structure_readability": 0.5701,
+        "seo_coverage": 0.6438,
+        "duplication_spam": 0.5386
+      }
+    }
+  ],
+  "aggregate_score": 0.7743
+}

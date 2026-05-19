@@ -24,236 +24,78 @@
 {% endblock meta %}
 
 {% block content %}
-<div class="py-24 bg-white sm:py-32" data-controller="pricing-toggle">
+<div class="py-24 bg-white sm:py-32">
   <div class="px-6 mx-auto max-w-7xl lg:px-8">
     <div class="mx-auto max-w-4xl sm:text-center">
       <h2 class="text-base font-semibold leading-7 text-gray-600">Pricing</h2>
-      <p class="mt-2 text-4xl font-bold tracking-tight text-gray-900 sm:text-5xl">Simple, transparent pricing.</p>
-    </div>
-    <p class="mx-auto mt-6 max-w-2xl text-lg leading-8 text-gray-600 sm:text-center">Choose the plan that fits your content needs. Start free or unlock unlimited AI-powered blog content generation with our paid plans. Our app is also <a href="https://github.com/rasulkireev/tuxseo" class="underline">open-source and self-hostable</a>.</p>
-
-    <div class="flex justify-center mt-16">
-      <fieldset aria-label="Payment frequency" data-action="change->pricing-toggle#switch">
-        <div class="grid relative grid-cols-2 gap-x-1 p-1 font-semibold text-center bg-gray-100 rounded-full ring-1 ring-inset ring-gray-300 text-xs/5">
-          <label data-pricing-toggle-target="monthlyLabel" class="relative z-10 px-2.5 py-1 text-gray-900 bg-white rounded-full shadow-md transition-colors duration-200 cursor-pointer">
-            <input type="radio" name="frequency" value="monthly" class="sr-only" checked>
-            <span>Monthly</span>
-          </label>
-          <label data-pricing-toggle-target="yearlyLabel" class="relative z-10 px-2.5 py-1 text-gray-500 rounded-full transition-colors duration-200 cursor-pointer">
-            <input type="radio" name="frequency" value="annually" class="sr-only">
-            <span>Annually</span>
-          </label>
-        </div>
-      </fieldset>
+      <p class="mt-2 text-4xl font-bold tracking-tight text-gray-900 sm:text-5xl">Simple pricing: Free or Pro.</p>
+      <p class="mx-auto mt-6 max-w-2xl text-lg leading-8 text-gray-600">Start free, then upgrade to Pro when you need unlimited content workflows and advanced automation.</p>
     </div>
 
-    <div class="grid grid-cols-1 gap-8 mx-auto mt-10 max-w-5xl lg:grid-cols-3">
-        <!-- Free Plan -->
-        <div class="p-8 bg-white rounded-lg border border-gray-200 shadow-sm xl:p-10">
-            <div class="flex gap-x-4 justify-between items-center">
-              <h3 id="tier-free" class="font-semibold text-gray-900 text-lg/8">Free</h3>
-            </div>
-            <p class="mt-4 text-gray-600 text-sm/6">Perfect for trying out TuxSEO and small projects.</p>
-            <p class="flex gap-x-1 items-baseline mt-6">
-              <span class="text-4xl font-semibold tracking-tight text-gray-900">$0</span>
-              <span class="font-semibold text-gray-600 text-sm/6">/forever</span>
-            </p>
+    <div class="grid grid-cols-1 gap-8 mx-auto mt-12 max-w-5xl lg:grid-cols-2">
+      <div class="p-8 bg-white rounded-lg border border-gray-200 shadow-sm xl:p-10">
+        <div class="flex gap-x-4 justify-between items-center">
+          <h3 id="tier-free" class="font-semibold text-gray-900 text-lg/8">Free</h3>
+        </div>
+        <p class="mt-4 text-gray-600 text-sm/6">Perfect for trying out TuxSEO.</p>
+        <p class="flex gap-x-1 items-baseline mt-6">
+          <span class="text-4xl font-semibold tracking-tight text-gray-900">$0</span>
+          <span class="font-semibold text-gray-600 text-sm/6">/forever</span>
+        </p>
 
-            {% if user.is_authenticated %}
-              <a href="{% url 'home' %}" aria-describedby="tier-free" class="block px-3 py-2 mt-6 font-semibold text-center text-gray-900 bg-white rounded-md ring-1 ring-inset ring-gray-300 shadow-sm text-sm/6 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-600">Get started</a>
-            {% else %}
-              <a href="{% url 'account_signup' %}" aria-describedby="tier-free" class="block px-3 py-2 mt-6 font-semibold text-center text-gray-900 bg-white rounded-md ring-1 ring-inset ring-gray-300 shadow-sm text-sm/6 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-600">Sign up</a>
-            {% endif %}
+        {% if user.is_authenticated %}
+          {% if not has_pro_subscription %}
+            <a href="#" aria-describedby="tier-free" class="block px-3 py-2 mt-6 font-semibold text-center text-gray-900 bg-white rounded-md ring-1 ring-inset ring-gray-300 shadow-sm text-sm/6 cursor-default">Current plan</a>
+          {% else %}
+            <a href="{% url 'settings' %}" aria-describedby="tier-free" class="block px-3 py-2 mt-6 font-semibold text-center text-gray-900 bg-white rounded-md ring-1 ring-inset ring-gray-300 shadow-sm text-sm/6 hover:bg-gray-50">Manage in settings</a>
+          {% endif %}
+        {% else %}
+          <a href="{% url 'account_signup' %}" aria-describedby="tier-free" class="block px-3 py-2 mt-6 font-semibold text-center text-white bg-gray-800 rounded-md shadow-sm text-sm/6 hover:bg-gray-700">Start for Free</a>
+        {% endif %}
+        <ul role="list" class="mt-6 space-y-3 text-sm text-gray-600">
+          <li>1 project</li>
+          <li>10 blog post suggestions</li>
+          <li>3 generated blog posts</li>
+        </ul>
+      </div>
 
-            <ul role="list" class="mt-8 space-y-3 text-gray-600 text-sm/6 xl:mt-10">
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" /></svg>
-                  <span>1 project</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" /></svg>
-                  <span>10 blog post suggestions</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" /></svg>
-                  <span>3 generated blog posts</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" /></svg>
-                  <span>5 competitors</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" /></svg>
-                  <span>3 competitor comparison posts</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-400" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M4 10a.75.75 0 0 1 .75-.75h10.5a.75.75 0 0 1 0 1.5H4.75A.75.75 0 0 1 4 10Z" clip-rule="evenodd" /></svg>
-                  <span class="text-gray-400">No custom keyword additions</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-400" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M4 10a.75.75 0 0 1 .75-.75h10.5a.75.75 0 0 1 0 1.5H4.75A.75.75 0 0 1 4 10Z" clip-rule="evenodd" /></svg>
-                  <span class="text-gray-400">No automatic posting</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-400" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M4 10a.75.75 0 0 1 .75-.75h10.5a.75.75 0 0 1 0 1.5H4.75A.75.75 0 0 1 4 10Z" clip-rule="evenodd" /></svg>
-                  <span class="text-gray-400">No backlinks exchange</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-400" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M4 10a.75.75 0 0 1 .75-.75h10.5a.75.75 0 0 1 0 1.5H4.75A.75.75 0 0 1 4 10Z" clip-rule="evenodd" /></svg>
-                  <span class="text-gray-400">No automatic OG images</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-400" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M4 10a.75.75 0 0 1 .75-.75h10.5a.75.75 0 0 1 0 1.5H4.75A.75.75 0 0 1 4 10Z" clip-rule="evenodd" /></svg>
-                  <span class="text-gray-400">No priority support</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-400" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M4 10a.75.75 0 0 1 .75-.75h10.5a.75.75 0 0 1 0 1.5H4.75A.75.75 0 0 1 4 10Z" clip-rule="evenodd" /></svg>
-                  <span class="text-gray-400">No prioritized feature requests</span>
-              </li>
-            </ul>
+      <div class="p-8 bg-white rounded-lg border-2 border-gray-900 shadow-sm xl:p-10">
+        <div class="flex gap-x-4 justify-between items-center">
+          <h3 id="tier-pro" class="font-semibold text-gray-900 text-lg/8">Pro</h3>
+          <span class="px-3 py-1 text-xs font-semibold text-gray-900 bg-gray-100 rounded-full">Most popular</span>
+        </div>
+        <p class="mt-4 text-gray-600 text-sm/6">Unlimited projects and advanced automation for growing teams.</p>
+        <div class="mt-6 space-y-3">
+          <p class="flex gap-x-1 items-baseline">
+            <span class="text-4xl font-semibold tracking-tight text-gray-900">$99</span>
+            <span class="font-semibold text-gray-600 text-sm/6">/month</span>
+          </p>
+          <p class="flex gap-x-1 items-baseline">
+            <span class="text-2xl font-semibold tracking-tight text-gray-900">$990</span>
+            <span class="font-semibold text-gray-600 text-sm/6">/year</span>
+          </p>
         </div>
 
-        <!-- Pro Plan -->
-        <div class="p-8 bg-white rounded-lg border-2 border-gray-900 shadow-sm xl:p-10">
-            <div class="flex gap-x-4 justify-between items-center">
-              <h3 id="tier-pro" class="font-semibold text-gray-900 text-lg/8">Pro</h3>
-              <span class="px-3 py-1 text-xs font-semibold text-gray-900 bg-gray-100 rounded-full">Popular</span>
-            </div>
-            <p class="mt-4 text-gray-600 text-sm/6">For agencies and businesses managing multiple projects.</p>
-            <div data-pricing-toggle-target="monthlyPriceDisplay">
-              <p class="flex gap-x-1 items-baseline mt-6">
-                <span class="text-4xl font-semibold tracking-tight text-gray-900">$100</span>
-                <span class="font-semibold text-gray-600 text-sm/6">/month</span>
-              </p>
-            </div>
-            <div data-pricing-toggle-target="yearlyPriceDisplay" class="hidden">
-              <p class="flex gap-x-1 items-baseline mt-6">
-                <span class="text-4xl font-semibold tracking-tight text-gray-900">$1000</span>
-                <span class="font-semibold text-gray-600 text-sm/6">/year</span>
-              </p>
-              <p class="mt-2 text-xs text-gray-500">Save $200 with annual billing</p>
-            </div>
+        {% if user.is_authenticated %}
+          {% if has_pro_subscription %}
+            <a href="{% url 'settings' %}" aria-describedby="tier-pro" class="block px-3 py-2 mt-6 font-semibold text-center text-white bg-gray-800 rounded-md shadow-sm text-sm/6 hover:bg-gray-700">Manage in settings</a>
+          {% else %}
+            <a href="{% url 'user_upgrade_checkout_session' product_name='Pro - Monthly' %}" aria-describedby="tier-pro" class="block px-3 py-2 mt-6 font-semibold text-center text-white bg-gray-800 rounded-md shadow-sm text-sm/6 hover:bg-gray-700">Choose Monthly</a>
+            <a href="{% url 'user_upgrade_checkout_session' product_name='Pro - Yearly' %}" aria-describedby="tier-pro" class="block px-3 py-2 mt-3 font-semibold text-center text-gray-900 bg-white rounded-md ring-1 ring-inset ring-gray-300 shadow-sm text-sm/6 hover:bg-gray-50">Choose Annual</a>
+          {% endif %}
+        {% else %}
+          <a href="{% url 'account_signup' %}" aria-describedby="tier-pro" class="block px-3 py-2 mt-6 font-semibold text-center text-white bg-gray-800 rounded-md shadow-sm text-sm/6 hover:bg-gray-700">Create Free Account</a>
+        {% endif %}
+        <ul role="list" class="mt-6 space-y-3 text-sm text-gray-600">
+          <li><strong>Unlimited</strong> projects and blog posts</li>
+          <li>Automatic posting and OG image generation</li>
+          <li>Link exchange and priority support</li>
+        </ul>
+      </div>
+    </div>
 
-            {% if user.is_authenticated %}
-              {% if has_pro_subscription %}
-                <a href="#" aria-describedby="tier-pro" class="block px-3 py-2 mt-6 font-semibold text-center text-white bg-gray-800 rounded-md shadow-sm text-sm/6 hover:bg-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-600">Current plan</a>
-              {% else %}
-                <div data-pricing-toggle-target="monthlyCheckout">
-                    <a href="{% url 'user_upgrade_checkout_session' product_name='Pro - Monthly' %}" aria-describedby="tier-pro" class="block px-3 py-2 mt-6 font-semibold text-center text-white bg-gray-800 rounded-md shadow-sm text-sm/6 hover:bg-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-600">Buy plan</a>
-                </div>
-                <div data-pricing-toggle-target="yearlyCheckout" class="hidden">
-                    <a href="{% url 'user_upgrade_checkout_session' product_name='Pro - Yearly' %}" aria-describedby="tier-pro" class="block px-3 py-2 mt-6 font-semibold text-center text-white bg-gray-800 rounded-md shadow-sm text-sm/6 hover:bg-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-600">Buy plan</a>
-                </div>
-              {% endif %}
-            {% else %}
-              <a href="{% url 'account_signup' %}" aria-describedby="tier-pro" class="block px-3 py-2 mt-6 font-semibold text-center text-white bg-gray-800 rounded-md shadow-sm text-sm/6 hover:bg-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-600">Sign up to get Pro</a>
-            {% endif %}
-
-            <ul role="list" class="mt-8 space-y-3 text-gray-600 text-sm/6 xl:mt-10">
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" /></svg>
-                  <span><strong>Unlimited</strong> projects</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" /></svg>
-                  <span><strong>Unlimited</strong> blog post suggestions</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" /></svg>
-                  <span><strong>Unlimited</strong> blog post generations</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" /></svg>
-                  <span><strong>Unlimited</strong> competitors</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" /></svg>
-                  <span><strong>Unlimited</strong> competitor comparison posts</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" /></svg>
-                  <span><strong>Unlimited</strong> custom keywords</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" /></svg>
-                  <span><strong>Automatic</strong> posting to your endpoint</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" /></svg>
-                  <span><strong>Backlinks</strong> Exchange</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" /></svg>
-                  <span><strong>Automatic</strong> OG Images</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" /></svg>
-                  <span><strong>Priority support</strong></span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" /></svg>
-                  <span><strong>Prioritized feature requests</strong></span>
-              </li>
-            </ul>
-        </div>
-
-        <!-- Done for You Plan -->
-        <div class="p-8 bg-white rounded-lg border-2 border-blue-600 shadow-sm xl:p-10">
-            <div class="flex gap-x-4 justify-between items-center">
-              <h3 id="tier-done-for-you" class="font-semibold text-gray-900 text-lg/8">Done for You</h3>
-              <span class="px-3 py-1 text-xs font-semibold text-blue-900 bg-blue-100 rounded-full">Premium</span>
-            </div>
-            <p class="mt-4 text-gray-600 text-sm/6">Let us handle the complete setup and configuration for you.</p>
-            <p class="flex gap-x-1 items-baseline mt-6">
-              <span class="text-4xl font-semibold tracking-tight text-gray-900">Custom</span>
-            </p>
-            <p class="mt-2 text-xs text-gray-500">Contact us for a personalized quote</p>
-
-            <a href="mailto:rasul@tuxseo.com" aria-describedby="tier-done-for-you" class="block px-3 py-2 mt-6 font-semibold text-center text-white bg-blue-600 rounded-md shadow-sm text-sm/6 hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600">Contact Us</a>
-
-            <ul role="list" class="mt-8 space-y-3 text-gray-600 text-sm/6 xl:mt-10">
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" /></svg>
-                  <span><strong>Everything in Pro</strong></span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" /></svg>
-                  <span><strong>Complete setup</strong> and configuration</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" /></svg>
-                  <span><strong>Project analysis</strong> and optimization</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" /></svg>
-                  <span><strong>Competitor research</strong> and setup</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" /></svg>
-                  <span><strong>Keyword strategy</strong> planning</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" /></svg>
-                  <span><strong>Automated posting</strong> integration</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" /></svg>
-                  <span><strong>Personalized training</strong> session</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" /></svg>
-                  <span><strong>Ongoing consultation</strong> and support</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" /></svg>
-                  <span><strong>Custom integrations</strong> and workflows</span>
-              </li>
-              <li class="flex gap-x-3">
-                  <svg class="flex-none w-5 h-6 text-gray-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" /></svg>
-                  <span><strong>Dedicated account manager</strong></span>
-              </li>
-            </ul>
-        </div>
+    <div class="p-6 mx-auto mt-10 max-w-4xl text-center bg-gray-50 rounded-lg border border-gray-200">
+      <p class="text-sm font-semibold text-gray-900">Guarantee: if TuxSEO is not a fit in your first 30 days, we will refund your subscription in full.</p>
     </div>
   </div>
 </div>

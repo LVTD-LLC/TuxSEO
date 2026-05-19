@@ -1,6 +1,8 @@
+from django_q.tasks import async_task
 from djstripe.event_handlers import djstripe_receiver
 from djstripe.models import Customer, Product, Subscription
 
+from core.analytics import ANALYTICS_EVENTS
 from core.models import Profile, ProfileStates
 from tuxseo.utils import get_tuxseo_logger
 
@@ -48,6 +50,39 @@ def handle_created_subscription(**kwargs):
                 "product_id": product_id,
                 "stripe_event_id": event.id,
             },
+        )
+
+        revenue_properties = {
+            "subscription_id": subscription_id,
+            "product_id": product_id,
+            "plan": product.name,
+            "result_status": "succeeded",
+            "stripe_event_id": event.id,
+        }
+
+        async_task(
+            "core.tasks.track_event",
+            profile_id=profile.id,
+            event_name=ANALYTICS_EVENTS.SUBSCRIPTION_CREATED,
+            properties=revenue_properties,
+            source_function="webhooks.handle_created_subscription",
+            group="Track Event",
+        )
+        async_task(
+            "core.tasks.track_event",
+            profile_id=profile.id,
+            event_name=ANALYTICS_EVENTS.SUBSCRIPTION_STARTED,
+            properties=revenue_properties,
+            source_function="webhooks.handle_created_subscription",
+            group="Track Event",
+        )
+        async_task(
+            "core.tasks.track_event",
+            profile_id=profile.id,
+            event_name=ANALYTICS_EVENTS.PAID_CONVERSION,
+            properties=revenue_properties,
+            source_function="webhooks.handle_created_subscription",
+            group="Track Event",
         )
 
         logger.info(
@@ -127,6 +162,19 @@ def handle_updated_subscription(**kwargs):
                 product_id=product_id,
             )
 
+            async_task(
+                "core.tasks.track_event",
+                profile_id=profile.id,
+                event_name=ANALYTICS_EVENTS.PLAN_UPGRADED,
+                properties={
+                    "plan": product.name,
+                    "subscription_id": subscription_id,
+                    "result_status": "succeeded",
+                },
+                source_function="webhooks.handle_updated_subscription",
+                group="Track Event",
+            )
+
         elif is_cancellation:
             profile.save(update_fields=["subscription", "updated_at"])
 
@@ -146,6 +194,20 @@ def handle_updated_subscription(**kwargs):
                 "[SubscriptionUpdated] Cancellation processed",
                 profile_id=profile.id,
                 cancel_at=event_data.get("cancel_at"),
+            )
+
+            plan_name = profile.product.name if profile.product else "free"
+            async_task(
+                "core.tasks.track_event",
+                profile_id=profile.id,
+                event_name=ANALYTICS_EVENTS.PLAN_CANCELLED,
+                properties={
+                    "plan": plan_name,
+                    "subscription_id": subscription_id,
+                    "result_status": "succeeded",
+                },
+                source_function="webhooks.handle_updated_subscription",
+                group="Track Event",
             )
 
         else:
@@ -240,11 +302,28 @@ def handle_checkout_completed(**kwargs):
 
     try:
         event_data = event.data.get("object", {})
+        customer_id = event_data.get("customer")
+        profile = Profile.objects.filter(customer__id=customer_id).first()
+
+        if profile:
+            async_task(
+                "core.tasks.track_event",
+                profile_id=profile.id,
+                event_name=ANALYTICS_EVENTS.CHECKOUT_SUCCEEDED,
+                properties={
+                    "checkout_id": event_data.get("id"),
+                    "mode": event_data.get("mode"),
+                    "payment_status": event_data.get("payment_status"),
+                    "subscription_id": event_data.get("subscription"),
+                },
+                source_function="webhooks.handle_checkout_completed",
+                group="Track Event",
+            )
 
         logger.info(
             "[CheckoutCompleted] Checkout completed",
             checkout_id=event_data.get("id"),
-            customer_id=event_data.get("customer"),
+            customer_id=customer_id,
             mode=event_data.get("mode"),
             payment_status=event_data.get("payment_status"),
             subscription_id=event_data.get("subscription"),

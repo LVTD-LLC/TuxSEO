@@ -92,12 +92,24 @@ def add_project_pages(ctx: RunContext) -> str:
                 """
 
         if optional_pages:
+            external_pages = [page for page in optional_pages if page.link_source == "external"]
+            max_external_links = max(1, len(external_pages)) if external_pages else 0
+
             instruction += """
 
               OPTIONAL PAGES (Use Intelligently):
               The following pages are available for linking if they are contextually relevant to the content. Use your judgment to determine which pages would provide value to readers and enhance the blog post. Only include links where they naturally fit and add value:
 
             """  # noqa: E501
+
+            if external_pages:
+                instruction += f"""
+              EXTERNAL AUTHORITY LINKING RULES:
+              - Prefer external links only when they directly support a specific claim or statistic.
+              - Keep external links readable and sparse (up to {max_external_links} external links total).
+              - Never force an external link just to hit a quota; skip if relevance is weak.
+                """
+
             for page in optional_pages:
                 instruction += f"""
                   --------
@@ -105,6 +117,7 @@ def add_project_pages(ctx: RunContext) -> str:
                   - URL: {page.url}
                   - Description: {page.description}
                   - Summary: {page.summary}
+                  - Source: {page.link_source}
                   --------
                 """
 
@@ -146,8 +159,10 @@ def add_target_keywords(ctx: RunContext[BlogPostGenerationContext]) -> str:
             {keywords_list}
 
             Please incorporate these keywords naturally throughout the content where appropriate.
-            Don't force them in, but use them when they fit contextually and help improve the readability and SEO value of the post.
-            Don't make them bold, just a regular part of the text.
+            Use them as part of normal prose (sentences and headings) where they genuinely fit contextually.
+            Do not force awkward repetition or keyword stuffing.
+            Never wrap target keywords in visual formatting such as backticks, bold, italics, or quotes just to highlight them.
+            Keep target keywords as a regular part of the text so readability stays natural.
         """  # noqa: E501
     else:
         return ""
@@ -160,3 +175,18 @@ def add_webpage_content(ctx: RunContext[WebPageContent]) -> str:
         f"Description: {ctx.deps.description}"
         f"Content: {ctx.deps.markdown_content}"
     )
+
+
+def add_custom_post_type_guidance(ctx: RunContext[BlogPostGenerationContext]) -> str:
+    custom_prompt = (ctx.deps.custom_post_type_prompt or "").strip()
+    if not custom_prompt:
+        return ""
+
+    return f"""
+        CUSTOM POST TYPE REQUIREMENT (HIGH PRIORITY)
+        Apply this guidance throughout the article's voice and structure:
+        "{custom_prompt}"
+
+        Keep the guidance visible in the final draft while preserving clear structure,
+        natural readability, and SEO hygiene.
+    """

@@ -1,15 +1,45 @@
 import json
 import random
-from urllib.parse import unquote, urlencode
+import re
+import time
+import xml.etree.ElementTree as ET
+from urllib.parse import unquote, urlencode, urljoin, urlparse
 
 import posthog
 import requests
 from django.conf import settings
+from django.core.cache import cache
+from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from django_q.tasks import async_task
 
-from core.choices import ContentType, EmailType, ProjectPageSource
+from core.acquisition import AttributionValidationError, build_attribution_event_properties
+from core.analytics import (
+    ANALYTICS_EVENTS,
+    EVENT_TAXONOMY_VERSION,
+    get_event_definition,
+    is_known_event_name,
+    normalize_event_name,
+)
+from core.choices import (
+    CompetitorPostGenerationStatus,
+    ContentType,
+    EmailType,
+    ExecutionJobOperation,
+    ExecutionJobStatus,
+    ProfileStates,
+    ProjectPageSource,
+)
+from core.detail_view_controls import (
+    MODULE_BACKLINK_DISCOVERY,
+    MODULE_SEO_ANALYSIS,
+    is_module_enabled,
+)
+from core.execution_reliability import append_job_history, build_failure_payload
+from core.integration_analytics import sync_project_provider_analytics
 from core.models import (
+    AgentExecutionJob,
     BlogPostTitleSuggestion,
     Competitor,
     EmailSent,
@@ -18,10 +48,176 @@ from core.models import (
     Project,
     ProjectKeyword,
     ProjectPage,
+    ProjectPageAnalysisRun,
 )
+from core.twenty_signup_sync import sync_signup_project_to_twenty as sync_signup_project_to_twenty_service
+from tuxseo.logging_context import bind_log_context
 from tuxseo.utils import get_tuxseo_logger
 
 logger = get_tuxseo_logger(__name__)
+
+SITEMAP_PATH_CANDIDATES = (
+    "/sitemap.xml",
+    "/sitemap_index.xml",
+    "/sitemap-index.xml",
+    "/sitemaps.xml",
+    "/wp-sitemap.xml",
+)
+
+
+def _extract_sitemap_urls_from_robots(robots_txt: str, base_url: str) -> list[str]:
+    sitemap_urls: list[str] = []
+
+    for line in robots_txt.splitlines():
+        match = re.match(r"^\s*Sitemap\s*:\s*(\S+)\s*$", line, flags=re.IGNORECASE)
+        if not match:
+            continue
+
+        sitemap_url = match.group(1).strip()
+        if not sitemap_url:
+            continue
+
+        if sitemap_url.startswith(("http://", "https://")):
+            sitemap_urls.append(sitemap_url)
+        else:
+            sitemap_urls.append(urljoin(base_url, sitemap_url))
+
+    return sitemap_urls
+
+
+def _looks_like_sitemap_xml(content: bytes) -> bool:
+    if not content:
+        return False
+
+    content_start = content[:5000].lstrip().lower()
+    return b"<urlset" in content_start or b"<sitemapindex" in content_start
+
+
+def discover_sitemap_url(project_url: str) -> tuple[str | None, str]:
+    parsed_url = urlparse(project_url)
+    if not parsed_url.scheme or not parsed_url.netloc:
+        return None, "invalid_project_url"
+
+    base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+
+    candidate_urls: list[str] = []
+
+    robots_url = urljoin(base_url, "/robots.txt")
+    try:
+        robots_response = requests.get(robots_url, timeout=15)
+        if robots_response.ok and robots_response.text:
+            candidate_urls.extend(
+                _extract_sitemap_urls_from_robots(robots_response.text, base_url)
+            )
+    except Exception as error:
+        logger.warning(
+            "[Sitemap Discovery] Failed to fetch robots.txt",
+            robots_url=robots_url,
+            error=str(error),
+        )
+
+    candidate_urls.extend(urljoin(base_url, path) for path in SITEMAP_PATH_CANDIDATES)
+
+    seen_candidates = set()
+    unique_candidates = []
+    for candidate in candidate_urls:
+        if candidate in seen_candidates:
+            continue
+        seen_candidates.add(candidate)
+        unique_candidates.append(candidate)
+
+    parse_failures = 0
+
+    for candidate_url in unique_candidates:
+        try:
+            response = requests.get(candidate_url, timeout=20)
+            if not response.ok:
+                logger.info(
+                    "[Sitemap Discovery] Candidate not accessible",
+                    candidate_url=candidate_url,
+                    status_code=response.status_code,
+                )
+                continue
+
+            if _looks_like_sitemap_xml(response.content):
+                logger.info(
+                    "[Sitemap Discovery] Candidate accepted",
+                    candidate_url=candidate_url,
+                )
+                return candidate_url, "found"
+
+            parse_failures += 1
+            logger.warning(
+                "[Sitemap Discovery] Candidate fetched but does not look like sitemap XML",
+                candidate_url=candidate_url,
+                status_code=response.status_code,
+            )
+        except Exception as error:
+            logger.warning(
+                "[Sitemap Discovery] Candidate fetch failed",
+                candidate_url=candidate_url,
+                error=str(error),
+            )
+
+    if parse_failures > 0:
+        return None, "parse_fail"
+
+    return None, "not_found"
+
+
+def auto_discover_and_ingest_sitemap(project_id: int):
+    try:
+        project = Project.objects.get(id=project_id)
+    except Project.DoesNotExist:
+        logger.error("[Sitemap Discovery] Project not found", project_id=project_id)
+        return f"Project {project_id} not found."
+
+    if not project.url:
+        logger.warning(
+            "[Sitemap Discovery] Project URL missing",
+            project_id=project_id,
+            project_name=project.name,
+        )
+        return f"Project URL missing for {project.name}."
+
+    if project.sitemap_url:
+        logger.info(
+            "[Sitemap Discovery] Project already has sitemap URL, skipping auto-discovery",
+            project_id=project_id,
+            project_name=project.name,
+            sitemap_url=project.sitemap_url,
+        )
+        return f"Project {project.name} already has sitemap URL."
+
+    logger.info(
+        "[Sitemap Discovery] Starting discovery",
+        project_id=project_id,
+        project_name=project.name,
+        project_url=project.url,
+    )
+
+    discovered_sitemap_url, discovery_status = discover_sitemap_url(project.url)
+
+    if not discovered_sitemap_url:
+        logger.info(
+            "[Sitemap Discovery] Discovery finished without sitemap",
+            project_id=project_id,
+            project_name=project.name,
+            discovery_status=discovery_status,
+        )
+        return f"No sitemap discovered for {project.name}. Status: {discovery_status}."
+
+    project.sitemap_url = discovered_sitemap_url
+    project.save(update_fields=["sitemap_url"])
+
+    logger.info(
+        "[Sitemap Discovery] Sitemap discovered and saved; sitemap parsing will be scheduled by signal",
+        project_id=project_id,
+        project_name=project.name,
+        sitemap_url=discovered_sitemap_url,
+    )
+
+    return f"Discovered sitemap for {project.name}: {discovered_sitemap_url}"
 
 
 def add_email_to_buttondown(email, tag):
@@ -134,6 +330,160 @@ def analyze_project_page(project_id: int, link: str):
             exc_info=True,
         )
         return f"Error analyzing {link}: {str(e)}"
+
+
+def execute_project_page_analysis_run(run_id: int):
+    from core.project_page_analysis_runs import execute_run
+
+    try:
+        run = ProjectPageAnalysisRun.objects.select_related(
+            "project_page", "project", "requested_by", "project__profile"
+        ).get(id=run_id)
+    except ProjectPageAnalysisRun.DoesNotExist:
+        logger.warning(
+            "[Project Page Analysis Run] Run not found",
+            run_id=run_id,
+        )
+        return f"Run {run_id} not found"
+
+    if not is_module_enabled(MODULE_SEO_ANALYSIS):
+        run.status = ProjectPageAnalysisRun.Status.FAILED
+        run.finished_at = timezone.now()
+        run.failure_message = "SEO analysis module disabled by feature flag"
+        run.failure_details = {
+            "reason": "feature_flag_disabled",
+            "module": MODULE_SEO_ANALYSIS,
+        }
+        run.save(update_fields=["status", "finished_at", "failure_message", "failure_details", "updated_at"])
+    else:
+        execute_run(run=run)
+
+    run.refresh_from_db()
+
+    analytics_profile = run.requested_by or run.project.profile
+    if analytics_profile:
+        event_name = (
+            ANALYTICS_EVENTS.SEO_ANALYSIS_RUN_COMPLETED
+            if run.status == ProjectPageAnalysisRun.Status.SUCCEEDED
+            else ANALYTICS_EVENTS.SEO_ANALYSIS_RUN_FAILED
+        )
+        track_event(
+            profile_id=analytics_profile.id,
+            event_name=event_name,
+            properties={
+                "project_id": run.project_id,
+                "project_page_id": run.project_page_id,
+                "run_id": run.id,
+                "trigger": run.trigger,
+                "result_status": "succeeded"
+                if run.status == ProjectPageAnalysisRun.Status.SUCCEEDED
+                else "failed",
+                "failure_reason": run.failure_message[:300] if run.failure_message else "",
+            },
+            source_function="execute_project_page_analysis_run",
+        )
+
+    logger.info(
+        "[Project Page Analysis Run] Completed run execution",
+        run_id=run.id,
+        project_id=run.project_id,
+        project_page_id=run.project_page_id,
+        status=run.status,
+    )
+    return f"Run {run.id} finished with status {run.status}"
+
+
+def refresh_backlink_prospects_cache(project_page_id: int):
+    from core.backlink_prospects import (
+        get_backlink_discovery_debug_state,
+        refresh_backlink_prospects_cache as refresh_cache,
+        set_backlink_discovery_debug_state,
+    )
+
+    try:
+        project_page = ProjectPage.objects.select_related("project", "project__profile").get(
+            id=project_page_id
+        )
+    except ProjectPage.DoesNotExist:
+        logger.warning(
+            "[BacklinkProspects] ProjectPage not found for cache refresh",
+            project_page_id=project_page_id,
+        )
+        return f"ProjectPage {project_page_id} not found"
+
+    analytics_profile = project_page.project.profile
+
+    if not is_module_enabled(MODULE_BACKLINK_DISCOVERY):
+        set_backlink_discovery_debug_state(
+            project_page_id,
+            {
+                "status": "skipped",
+                "reason": "feature_flag_disabled",
+                "module": MODULE_BACKLINK_DISCOVERY,
+                "recorded_at": timezone.now().isoformat(),
+            },
+        )
+        track_event(
+            profile_id=analytics_profile.id,
+            event_name=ANALYTICS_EVENTS.BACKLINK_DISCOVERY_FAILED,
+            properties={
+                "project_id": project_page.project_id,
+                "project_page_id": project_page.id,
+                "result_status": "failed",
+                "failure_reason": "feature_flag_disabled",
+            },
+            source_function="refresh_backlink_prospects_cache",
+        )
+        return "Backlink discovery module disabled"
+
+    try:
+        candidates = refresh_cache(project_page)
+        debug_state = get_backlink_discovery_debug_state(project_page.id)
+        track_event(
+            profile_id=analytics_profile.id,
+            event_name=ANALYTICS_EVENTS.BACKLINK_DISCOVERY_COMPLETED,
+            properties={
+                "project_id": project_page.project_id,
+                "project_page_id": project_page.id,
+                "result_status": "succeeded",
+                "candidates_count": len(candidates),
+                "contact_enrichment_enabled": bool(
+                    debug_state.get("contact_enrichment_enabled", True)
+                ),
+            },
+            source_function="refresh_backlink_prospects_cache",
+        )
+        logger.info(
+            "[BacklinkProspects] Cache refresh completed",
+            project_page_id=project_page_id,
+            project_id=project_page.project_id,
+            candidates_count=len(candidates),
+        )
+        return f"Cached {len(candidates)} backlink prospects for page {project_page_id}"
+    except Exception as error:
+        debug_state = get_backlink_discovery_debug_state(project_page.id)
+        track_event(
+            profile_id=analytics_profile.id,
+            event_name=ANALYTICS_EVENTS.BACKLINK_DISCOVERY_FAILED,
+            properties={
+                "project_id": project_page.project_id,
+                "project_page_id": project_page.id,
+                "result_status": "failed",
+                "failure_reason": str(error)[:300],
+                "debug_reason": debug_state.get("reason", ""),
+            },
+            source_function="refresh_backlink_prospects_cache",
+        )
+        logger.warning(
+            "[BacklinkProspects] Cache refresh failed",
+            project_page_id=project_page.id,
+            project_id=project_page.project_id,
+            error=str(error),
+            error_type=error.__class__.__name__,
+            debug_state=debug_state,
+            exc_info=True,
+        )
+        return f"Backlink discovery failed for page {project_page_id}: {str(error)}"
 
 
 def schedule_project_page_analysis(project_id):
@@ -615,9 +965,13 @@ def try_create_posthog_alias(profile_id: int, cookies: dict, source_function: st
 def track_event(
     profile_id: int, event_name: str, properties: dict, source_function: str = None
 ) -> str:
+    canonical_event_name = normalize_event_name(event_name)
+    properties = properties or {}
+
     base_log_data = {
         "profile_id": profile_id,
-        "event_name": event_name,
+        "event_name": canonical_event_name,
+        "input_event_name": event_name,
         "properties": properties,
         "source_function": source_function,
     }
@@ -628,21 +982,75 @@ def track_event(
         logger.error("[TrackEvent] Profile not found.", **base_log_data)
         return f"Profile with id {profile_id} not found."
 
+    if canonical_event_name != event_name:
+        logger.info("[TrackEvent] Normalized deprecated event name", **base_log_data)
+
+    if not is_known_event_name(canonical_event_name):
+        logger.warning("[TrackEvent] Unknown event name", **base_log_data)
+        return f"Unknown event name: {canonical_event_name}"
+
+    event_definition = get_event_definition(canonical_event_name)
+    if not event_definition:
+        logger.warning("[TrackEvent] Missing event definition", **base_log_data)
+        return f"Missing event definition for event: {canonical_event_name}"
+
+    required_properties = event_definition.get("required_properties", [])
+    missing_properties = [
+        property_name
+        for property_name in required_properties
+        if property_name not in properties or properties[property_name] in (None, "")
+    ]
+    if missing_properties:
+        logger.warning(
+            "[TrackEvent] Missing required event properties",
+            missing_properties=missing_properties,
+            **base_log_data,
+        )
+        return (
+            f"Missing required properties for {canonical_event_name}: "
+            + ", ".join(missing_properties)
+        )
+
+    profile_product = getattr(profile, "product", None)
+    profile_plan = profile_product.name if profile_product else "free"
+
+    project = None
+    project_id = properties.get("project_id")
+    if project_id is not None:
+        project = Project.objects.filter(id=project_id, profile=profile).first()
+
+    try:
+        attribution_properties = build_attribution_event_properties(profile=profile, project=project)
+    except AttributionValidationError as error:
+        logger.warning(
+            "[TrackEvent] Dropping malformed attribution properties",
+            profile_id=profile_id,
+            event_name=canonical_event_name,
+            error=str(error),
+        )
+        attribution_properties = {}
+
     if settings.POSTHOG_API_KEY:
         posthog.capture(
             profile.user.email,
-            event=event_name,
+            event=canonical_event_name,
             properties={
                 "profile_id": profile.id,
                 "email": profile.user.email,
                 "current_state": profile.state,
+                "plan": profile_plan,
+                "actor_id_type": "profile_id",
+                "actor_id": str(profile.id),
+                "event_schema_version": EVENT_TAXONOMY_VERSION,
+                "event_stage": event_definition["stage"],
                 **properties,
+                **attribution_properties,
             },
         )
 
     logger.info("[TrackEvent] Tracked event", **base_log_data)
 
-    return f"Tracked event {event_name} for profile {profile_id}"
+    return f"Tracked event {canonical_event_name} for profile {profile_id}"
 
 
 def track_state_change(
@@ -1048,122 +1456,349 @@ def get_and_save_pasf_keywords(
     PASF keywords saved: {stats["pasf_saved"]}"""
 
 
-def parse_sitemap_and_save_urls(project_id: int):
-    """
-    Parse the project's sitemap and save all URLs as ProjectPage records with SITEMAP source.
-    This task is called immediately when a user adds a sitemap URL.
-    """
+def _is_valid_sitemap_url(sitemap_url: str) -> bool:
+    if not sitemap_url or not isinstance(sitemap_url, str):
+        return False
+
+    parsed = urlparse(sitemap_url.strip())
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _fetch_sitemap_response(url: str) -> requests.Response:
+    timeout = settings.SITEMAP_SYNC_TIMEOUT_SECONDS
+    max_retries = settings.SITEMAP_SYNC_MAX_RETRIES
+    backoff_seconds = settings.SITEMAP_SYNC_RETRY_BACKOFF_SECONDS
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = requests.get(url, timeout=timeout)
+            if response.status_code >= 500:
+                raise requests.HTTPError(f"HTTP {response.status_code}", response=response)
+            return response
+        except (requests.Timeout, requests.ConnectionError, requests.HTTPError) as error:
+            if attempt >= max_retries:
+                raise
+
+            sleep_for = backoff_seconds * (2 ** (attempt - 1))
+            logger.warning(
+                "[Sitemap Sync] Retrying sitemap fetch",
+                url=url,
+                attempt=attempt,
+                max_retries=max_retries,
+                sleep_for_seconds=sleep_for,
+                error=str(error),
+            )
+            time.sleep(sleep_for)
+
+    raise RuntimeError("Unreachable sitemap retry loop")
+
+
+def _extract_sitemap_urls(xml_content: bytes, source_url: str) -> tuple[list[str], list[str]]:
+    namespace = {"ns": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+    root = ET.fromstring(xml_content)
+
+    url_locs = [
+        loc.text.strip() for loc in root.findall(".//ns:url/ns:loc", namespace) if loc.text and loc.text.strip()
+    ]
+
+    sitemap_locs = [
+        loc.text.strip()
+        for loc in root.findall(".//ns:sitemap/ns:loc", namespace)
+        if loc.text and loc.text.strip()
+    ]
+
+    if not url_locs and not sitemap_locs:
+        url_locs = [
+            loc.text.strip()
+            for loc in root.findall(".//{*}url/{*}loc")
+            if loc.text and loc.text.strip()
+        ]
+        sitemap_locs = [
+            loc.text.strip()
+            for loc in root.findall(".//{*}sitemap/{*}loc")
+            if loc.text and loc.text.strip()
+        ]
+
+    def _normalize_candidate_url(candidate_url: str) -> str:
+        parsed = urlparse(candidate_url)
+        if parsed.scheme or parsed.netloc:
+            return candidate_url
+        return urljoin(source_url, candidate_url)
+
+    normalized_url_locs = [_normalize_candidate_url(candidate_url) for candidate_url in url_locs]
+    normalized_sitemap_locs = [
+        _normalize_candidate_url(candidate_url) for candidate_url in sitemap_locs
+    ]
+
+    return normalized_url_locs, normalized_sitemap_locs
+
+
+def _collect_urls_from_sitemap(sitemap_url: str) -> tuple[set[str], int]:
+    discovered_urls: set[str] = set()
+    failed_children = 0
+
+    queue: list[tuple[str, int]] = [(sitemap_url, 0)]
+    visited: set[str] = set()
+
+    while queue:
+        current_url, depth = queue.pop(0)
+
+        if current_url in visited:
+            continue
+        visited.add(current_url)
+
+        if depth > settings.SITEMAP_SYNC_MAX_INDEX_DEPTH:
+            logger.warning(
+                "[Sitemap Sync] Maximum sitemap index depth reached",
+                sitemap_url=current_url,
+                max_depth=settings.SITEMAP_SYNC_MAX_INDEX_DEPTH,
+            )
+            continue
+
+        try:
+            response = _fetch_sitemap_response(current_url)
+            if not response.ok:
+                failed_children += 1
+                logger.warning(
+                    "[Sitemap Sync] Non-200 sitemap response",
+                    sitemap_url=current_url,
+                    status_code=response.status_code,
+                )
+                continue
+
+            urls, child_sitemaps = _extract_sitemap_urls(response.content, current_url)
+        except (requests.RequestException, ET.ParseError) as error:
+            failed_children += 1
+            logger.warning(
+                "[Sitemap Sync] Failed to process child sitemap",
+                sitemap_url=current_url,
+                error=str(error),
+            )
+            continue
+
+        discovered_urls.update(urls)
+
+        for child_sitemap_url in child_sitemaps[: settings.SITEMAP_SYNC_MAX_CHILD_SITEMAPS]:
+            if child_sitemap_url not in visited:
+                queue.append((child_sitemap_url, depth + 1))
+
+        if len(child_sitemaps) > settings.SITEMAP_SYNC_MAX_CHILD_SITEMAPS:
+            logger.warning(
+                "[Sitemap Sync] Child sitemap limit reached; truncating",
+                sitemap_url=current_url,
+                child_sitemap_count=len(child_sitemaps),
+                limit=settings.SITEMAP_SYNC_MAX_CHILD_SITEMAPS,
+            )
+
+    return discovered_urls, failed_children
+
+
+def _sync_project_sitemap(project: Project) -> dict:
+    if not _is_valid_sitemap_url(project.sitemap_url):
+        return {
+            "project_id": project.id,
+            "project_name": project.name,
+            "status": "skipped",
+            "reason": "invalid_sitemap_url",
+        }
+
+    run_started_at = timezone.now()
+    discovered_urls, failed_children = _collect_urls_from_sitemap(project.sitemap_url)
+
+    with transaction.atomic():
+        existing_urls = set(
+            ProjectPage.objects.filter(project=project, url__in=discovered_urls).values_list("url", flat=True)
+        )
+
+        new_urls = discovered_urls - existing_urls
+        created_count = len(new_urls)
+
+        if new_urls:
+            ProjectPage.objects.bulk_create(
+                [
+                    ProjectPage(
+                        project=project,
+                        url=url,
+                        source=ProjectPageSource.SITEMAP,
+                        sitemap_is_stale=False,
+                        sitemap_last_seen_at=run_started_at,
+                    )
+                    for url in new_urls
+                ],
+                ignore_conflicts=True,
+            )
+
+        updated_count = ProjectPage.objects.filter(
+            project=project,
+            source=ProjectPageSource.SITEMAP,
+            url__in=discovered_urls,
+        ).update(sitemap_is_stale=False, sitemap_last_seen_at=run_started_at)
+
+        stale_count = ProjectPage.objects.filter(
+            project=project,
+            source=ProjectPageSource.SITEMAP,
+            sitemap_is_stale=False,
+        ).filter(
+            Q(sitemap_last_seen_at__lt=run_started_at) | Q(sitemap_last_seen_at__isnull=True)
+        ).update(sitemap_is_stale=True)
+
+    async_task(
+        "core.tasks.analyze_sitemap_pages",
+        project.id,
+        group="Analyze Sitemap Pages",
+    )
+
+    return {
+        "project_id": project.id,
+        "project_name": project.name,
+        "status": "success",
+        "discovered": len(discovered_urls),
+        "added": created_count,
+        "updated": updated_count,
+        "stale": stale_count,
+        "failed": failed_children,
+    }
+
+
+def parse_sitemap_and_save_urls(project_id: int, return_summary: bool = False):
+    """Parse and sync one project's sitemap URLs into ProjectPage records."""
+    result = {
+        "status": "failed",
+        "message": "",
+        "project_id": project_id,
+    }
+
     try:
         project = Project.objects.get(id=project_id)
     except Project.DoesNotExist:
-        logger.error(f"[Parse Sitemap] Project {project_id} not found.")
-        return f"Project {project_id} not found."
+        logger.error("[Parse Sitemap] Project not found", project_id=project_id)
+        result["status"] = "skipped"
+        result["message"] = f"Project {project_id} not found."
+        return result if return_summary else result["message"]
 
-    if not project.sitemap_url:
+    if project.deleted_at is not None:
+        logger.info("[Parse Sitemap] Skipping deleted project", project_id=project_id)
+        result["status"] = "skipped"
+        result["message"] = f"Project {project_id} is deleted, skipping."
+        return result if return_summary else result["message"]
+
+    if not _is_valid_sitemap_url(project.sitemap_url):
         logger.warning(
-            "[Parse Sitemap] No sitemap URL found for project",
-            project_id=project_id,
-            project_name=project.name,
-        )
-        return f"No sitemap URL found for project {project.name}."
-
-    logger.info(
-        "[Parse Sitemap] Starting sitemap parsing",
-        project_id=project_id,
-        project_name=project.name,
-        sitemap_url=project.sitemap_url,
-    )
-
-    try:
-        response = requests.get(project.sitemap_url, timeout=30)
-        response.raise_for_status()
-
-        # Parse XML content
-        import xml.etree.ElementTree as ET
-
-        root = ET.fromstring(response.content)
-
-        # Handle both sitemap formats: standard sitemap and sitemap index
-        namespace = {"ns": "http://www.sitemaps.org/schemas/sitemap/0.9"}
-
-        urls_found = []
-
-        # Check if this is a sitemap index
-        sitemap_locs = root.findall(".//ns:sitemap/ns:loc", namespace)
-        if sitemap_locs:
-            # This is a sitemap index, fetch each sitemap
-            for sitemap_loc in sitemap_locs:
-                sitemap_url = sitemap_loc.text
-                try:
-                    sitemap_response = requests.get(sitemap_url, timeout=30)
-                    sitemap_response.raise_for_status()
-                    sitemap_root = ET.fromstring(sitemap_response.content)
-                    url_locs = sitemap_root.findall(".//ns:url/ns:loc", namespace)
-                    urls_found.extend([loc.text for loc in url_locs if loc.text])
-                except Exception as e:
-                    logger.warning(
-                        "[Parse Sitemap] Failed to fetch nested sitemap",
-                        sitemap_url=sitemap_url,
-                        error=str(e),
-                    )
-        else:
-            # This is a regular sitemap
-            url_locs = root.findall(".//ns:url/ns:loc", namespace)
-            urls_found.extend([loc.text for loc in url_locs if loc.text])
-
-        # Save URLs to database
-        created_count = 0
-        existing_count = 0
-
-        for url in urls_found:
-            project_page, created = ProjectPage.objects.get_or_create(
-                project=project, url=url, defaults={"source": ProjectPageSource.SITEMAP}
-            )
-            if created:
-                created_count += 1
-            else:
-                existing_count += 1
-
-        logger.info(
-            "[Parse Sitemap] Completed sitemap parsing",
-            project_id=project_id,
-            project_name=project.name,
-            total_urls=len(urls_found),
-            created_count=created_count,
-            existing_count=existing_count,
-        )
-
-        # Schedule analysis of first 10 unanalyzed pages
-        async_task(
-            "core.tasks.analyze_sitemap_pages",
-            project_id,
-            group="Analyze Sitemap Pages",
-        )
-
-        return f"""Sitemap parsing completed for {project.name}:
-        Total URLs found: {len(urls_found)}
-        New pages: {created_count}
-        Existing pages: {existing_count}"""
-
-    except requests.RequestException as e:
-        logger.error(
-            "[Parse Sitemap] Request error",
+            "[Parse Sitemap] No valid sitemap URL found for project",
             project_id=project_id,
             project_name=project.name,
             sitemap_url=project.sitemap_url,
-            error=str(e),
+        )
+        result["status"] = "skipped"
+        result["message"] = f"No valid sitemap URL found for project {project.name}."
+        return result if return_summary else result["message"]
+
+    lock_key = f"sitemap-sync:project:{project.id}"
+    lock_acquired = cache.add(lock_key, "1", timeout=settings.SITEMAP_SYNC_LOCK_TTL_SECONDS)
+    if not lock_acquired:
+        logger.info(
+            "[Parse Sitemap] Project sync already in progress, skipping overlap",
+            project_id=project.id,
+            project_name=project.name,
+        )
+        result["status"] = "skipped"
+        result["message"] = f"Sitemap sync already running for project {project.name}."
+        return result if return_summary else result["message"]
+
+    try:
+        logger.info(
+            "[Parse Sitemap] Starting sitemap sync",
+            project_id=project.id,
+            project_name=project.name,
+            sitemap_url=project.sitemap_url,
+        )
+
+        summary = _sync_project_sitemap(project)
+
+        logger.info("[Parse Sitemap] Project sync completed", **summary)
+
+        result["status"] = summary["status"]
+        result["message"] = (
+            f"Sitemap sync completed for {project.name}: "
+            f"discovered={summary['discovered']}, added={summary['added']}, "
+            f"updated={summary['updated']}, stale={summary['stale']}, failed={summary['failed']}"
+        )
+        result["summary"] = summary
+    except requests.RequestException as error:
+        logger.error(
+            "[Parse Sitemap] Request error",
+            project_id=project.id,
+            project_name=project.name,
+            sitemap_url=project.sitemap_url,
+            error=str(error),
             exc_info=True,
         )
-        return f"Failed to fetch sitemap for {project.name}: {str(e)}"
-    except Exception as e:
+        result["status"] = "failed"
+        result["message"] = f"Failed to fetch sitemap for {project.name}: {str(error)}"
+    except Exception as error:
         logger.error(
             "[Parse Sitemap] Unexpected error",
-            project_id=project_id,
+            project_id=project.id,
             project_name=project.name,
-            error=str(e),
+            sitemap_url=project.sitemap_url,
+            error=str(error),
             exc_info=True,
         )
-        return f"Error parsing sitemap for {project.name}: {str(e)}"
+        result["status"] = "failed"
+        result["message"] = f"Error parsing sitemap for {project.name}: {str(error)}"
+    finally:
+        cache.delete(lock_key)
+
+    return result if return_summary else result["message"]
+
+
+def sync_all_projects_with_sitemaps():
+    """Periodic job that syncs sitemap URLs for all eligible projects."""
+    eligible_projects = list(
+        Project.objects.filter(
+            deleted_at__isnull=True,
+            profile__deleted_at__isnull=True,
+        )
+        .exclude(sitemap_url="")
+        .select_related("profile")
+    )
+
+    summary = {
+        "total": len(eligible_projects),
+        "processed": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "skipped": 0,
+    }
+
+    for project in eligible_projects:
+        if project.profile and project.profile.state == ProfileStates.ACCOUNT_DELETED:
+            summary["skipped"] += 1
+            logger.info(
+                "[Sitemap Sync Batch] Skipping disabled profile project",
+                project_id=project.id,
+                project_name=project.name,
+            )
+            continue
+
+        result = parse_sitemap_and_save_urls(project.id, return_summary=True)
+        summary["processed"] += 1
+
+        status = result.get("status")
+        if status == "success":
+            summary["succeeded"] += 1
+        elif status == "skipped":
+            summary["skipped"] += 1
+        else:
+            summary["failed"] += 1
+
+    logger.info("[Sitemap Sync Batch] Completed", **summary)
+
+    return (
+        "Sitemap sync batch completed: "
+        f"total={summary['total']}, processed={summary['processed']}, "
+        f"succeeded={summary['succeeded']}, skipped={summary['skipped']}, failed={summary['failed']}"
+    )
 
 
 def analyze_sitemap_pages(project_id: int, limit: int = 10):
@@ -1573,6 +2208,98 @@ Just reply to this email to share your feedback.
         return f"Failed to send email to {user.email if user else 'unknown'}"
 
 
+def send_project_feedback_checkin_email(profile_id: int):
+    """
+    Send a plain-text feedback check-in email to recently registered users
+    who have created at least one project.
+    """
+    from django.core.mail import EmailMessage
+
+    try:
+        profile = Profile.objects.select_related("user").get(id=profile_id)
+    except Profile.DoesNotExist:
+        logger.error(
+            "[Send Project Feedback Check-in Email] Profile not found",
+            profile_id=profile_id,
+        )
+        return f"Profile {profile_id} not found"
+
+    user = profile.user
+
+    if EmailSent.objects.filter(
+        profile=profile, email_type=EmailType.PROJECT_FEEDBACK_CHECKIN
+    ).exists():
+        logger.info(
+            "[Send Project Feedback Check-in Email] Email already sent to this profile, skipping",
+            profile_id=profile_id,
+            user_email=user.email,
+        )
+        return f"Email already sent to {user.email}, skipping"
+
+    if not profile.projects.exists():
+        logger.info(
+            "[Send Project Feedback Check-in Email] Profile has no projects, skipping",
+            profile_id=profile_id,
+            user_email=user.email,
+        )
+        return f"Profile {profile_id} has no projects, skipping"
+
+    recipient_name = user.first_name or user.username
+
+    subject = "Quick check-in from Rasul at TuxSEO"
+    plain_text = f"""Hi {recipient_name}!
+
+I wanted to quickly check in and see how TuxSEO is going for you.
+
+- Are you finding the product useful so far?
+- Do you have any suggestions for improvement?
+- Do you need help with setup or content strategy?
+
+If it would be useful, I'm happy to jump on a quick call and help.
+
+Just reply to this email and I'll personally get back to you.
+
+Best,
+Rasul
+rasul@tuxseo.com
+"""
+
+    try:
+        email = EmailMessage(
+            subject=subject,
+            body=plain_text,
+            from_email="rasul@tuxseo.com",
+            to=[user.email],
+        )
+        email.send(fail_silently=False)
+
+        async_task(
+            "core.tasks.track_email_sent",
+            email_address=user.email,
+            email_type=EmailType.PROJECT_FEEDBACK_CHECKIN,
+            profile=profile,
+            group="Track Email Sent",
+        )
+
+        logger.info(
+            "[Send Project Feedback Check-in Email] Email sent successfully",
+            profile_id=profile_id,
+            user_email=user.email,
+        )
+
+        return f"Email sent to {user.email}"
+
+    except Exception as error:
+        logger.error(
+            "[Send Project Feedback Check-in Email] Failed to send email",
+            error=str(error),
+            exc_info=True,
+            profile_id=profile_id,
+            user_email=user.email if user else "unknown",
+        )
+        return f"Failed to send email to {user.email if user else 'unknown'}"
+
+
 def send_create_project_reminder_email(profile_id: int):
     """
     Send a reminder email to a profile who has verified their email
@@ -1697,6 +2424,72 @@ Ready to get started? {home_url}
         return f"Failed to send email to {user.email if user else 'unknown'}"
 
 
+def generate_competitor_vs_blog_post(competitor_id: int):
+    """Generate competitor comparison post asynchronously and persist generation state."""
+    try:
+        competitor = Competitor.objects.select_related("project", "project__profile").get(id=competitor_id)
+    except Competitor.DoesNotExist:
+        logger.error(
+            "[Generate Competitor VS Blog Post] Competitor not found",
+            competitor_id=competitor_id,
+        )
+        return f"Competitor {competitor_id} not found"
+
+    with bind_log_context(
+        task_id=f"generate_competitor_vs_blog_post:{competitor_id}",
+        project_id=competitor.project_id,
+        user_id=competitor.project.profile_id if competitor.project else None,
+    ):
+        logger.info(
+            "[Generate Competitor VS Blog Post] Starting generation",
+            competitor_id=competitor.id,
+            project_id=competitor.project_id,
+            profile_id=competitor.project.profile_id if competitor.project else None,
+        )
+
+        try:
+            competitor.generate_vs_blog_post()
+            competitor.blog_post_generation_status = CompetitorPostGenerationStatus.COMPLETED
+            competitor.blog_post_generation_completed_at = timezone.now()
+            competitor.blog_post_generation_error = ""
+            competitor.save(
+                update_fields=[
+                    "blog_post_generation_status",
+                    "blog_post_generation_completed_at",
+                    "blog_post_generation_error",
+                ]
+            )
+
+            logger.info(
+                "[Generate Competitor VS Blog Post] Generation completed",
+                competitor_id=competitor.id,
+                project_id=competitor.project_id,
+            )
+            return f"Successfully generated competitor blog post for competitor {competitor.id}"
+
+        except Exception as error:
+            error_message = str(error)
+            competitor.blog_post_generation_status = CompetitorPostGenerationStatus.FAILED
+            competitor.blog_post_generation_completed_at = timezone.now()
+            competitor.blog_post_generation_error = error_message[:1000]
+            competitor.save(
+                update_fields=[
+                    "blog_post_generation_status",
+                    "blog_post_generation_completed_at",
+                    "blog_post_generation_error",
+                ]
+            )
+
+            logger.error(
+                "[Generate Competitor VS Blog Post] Generation failed",
+                competitor_id=competitor.id,
+                project_id=competitor.project_id,
+                error=error_message,
+                exc_info=True,
+            )
+            return f"Failed to generate competitor blog post for competitor {competitor.id}: {error_message}"
+
+
 def generate_blog_post_content(suggestion_id: int, send_email: bool = True):
     """
     Generate blog post content from a title suggestion.
@@ -1719,64 +2512,362 @@ def generate_blog_post_content(suggestion_id: int, send_email: bool = True):
         )
         return f"Title suggestion {suggestion_id} not found"
 
-    logger.info(
-        "[Generate Blog Post Content] Starting content generation",
-        suggestion_id=suggestion_id,
+    with bind_log_context(
+        task_id=f"generate_blog_post_content:{suggestion_id}",
         project_id=suggestion.project.id,
-        project_name=suggestion.project.name,
-        suggestion_title=suggestion.title,
-        send_email=send_email,
-    )
+        user_id=suggestion.project.profile_id if suggestion.project else None,
+    ):
+        logger.info(
+            "[Generate Blog Post Content] Starting content generation",
+            suggestion_id=suggestion_id,
+            project_id=suggestion.project.id,
+            project_name=suggestion.project.name,
+            suggestion_title=suggestion.title,
+            send_email=send_email,
+        )
 
-    try:
-        blog_post = suggestion.generate_content(content_type=suggestion.content_type)
+        try:
+            blog_post = suggestion.generate_content(content_type=suggestion.content_type)
 
-        if not blog_post or not blog_post.content:
+            if not blog_post or not blog_post.content:
+                logger.error(
+                    "[Generate Blog Post Content] Failed to generate content",
+                    suggestion_id=suggestion_id,
+                    project_id=suggestion.project.id,
+                )
+                async_task(
+                    "core.tasks.track_event",
+                    profile_id=suggestion.project.profile_id,
+                    event_name=ANALYTICS_EVENTS.CONTENT_GENERATION_FAILED,
+                    properties={
+                        "project_id": suggestion.project.id,
+                        "title_suggestion_id": suggestion.id,
+                        "content_type": suggestion.content_type,
+                        "result_status": "failed",
+                        "failure_reason": "empty_generation_result",
+                    },
+                    source_function="tasks.generate_blog_post_content",
+                    group="Track Event",
+                )
+                return f"Failed to generate content for suggestion {suggestion_id}"
+
+            logger.info(
+                "[Generate Blog Post Content] Content generated successfully",
+                suggestion_id=suggestion_id,
+                project_id=suggestion.project.id,
+                blog_post_id=blog_post.id,
+                content_length=len(blog_post.content),
+            )
+
+            async_task(
+                "core.tasks.track_event",
+                profile_id=suggestion.project.profile_id,
+                event_name=ANALYTICS_EVENTS.CONTENT_GENERATION_SUCCEEDED,
+                properties={
+                    "project_id": suggestion.project.id,
+                    "title_suggestion_id": suggestion.id,
+                    "blog_post_id": blog_post.id,
+                    "content_type": suggestion.content_type,
+                    "result_status": "succeeded",
+                },
+                source_function="tasks.generate_blog_post_content",
+                group="Track Event",
+            )
+
+            # Send email notification if requested (i.e., manually triggered, not auto-posting)
+            if send_email:
+                async_task(
+                    "core.tasks.send_blog_post_ready_email",
+                    blog_post.id,
+                    group="Send Blog Post Ready Email",
+                )
+                logger.info(
+                    "[Generate Blog Post Content] Email notification queued",
+                    blog_post_id=blog_post.id,
+                    suggestion_id=suggestion_id,
+                )
+
+            return f"Successfully generated blog post {blog_post.id} for {suggestion.project.name}"
+
+        except ValueError as error:
             logger.error(
-                "[Generate Blog Post Content] Failed to generate content",
+                "[Generate Blog Post Content] Validation error",
+                error=str(error),
+                exc_info=True,
                 suggestion_id=suggestion_id,
                 project_id=suggestion.project.id,
             )
-            return f"Failed to generate content for suggestion {suggestion_id}"
+            async_task(
+                "core.tasks.track_event",
+                profile_id=suggestion.project.profile_id,
+                event_name=ANALYTICS_EVENTS.CONTENT_GENERATION_FAILED,
+                properties={
+                    "project_id": suggestion.project.id,
+                    "title_suggestion_id": suggestion.id,
+                    "content_type": suggestion.content_type,
+                    "result_status": "failed",
+                    "failure_reason": "validation_error",
+                },
+                source_function="tasks.generate_blog_post_content",
+                group="Track Event",
+            )
+            return f"Validation error: {str(error)}"
+        except Exception as error:
+            logger.error(
+                "[Generate Blog Post Content] Unexpected error",
+                error=str(error),
+                exc_info=True,
+                suggestion_id=suggestion_id,
+                project_id=suggestion.project.id if suggestion.project else None,
+            )
+            async_task(
+                "core.tasks.track_event",
+                profile_id=suggestion.project.profile_id,
+                event_name=ANALYTICS_EVENTS.CONTENT_GENERATION_FAILED,
+                properties={
+                    "project_id": suggestion.project.id,
+                    "title_suggestion_id": suggestion.id,
+                    "content_type": suggestion.content_type,
+                    "result_status": "failed",
+                    "failure_reason": "unexpected_exception",
+                },
+                source_function="tasks.generate_blog_post_content",
+                group="Track Event",
+            )
+            return f"Unexpected error: {str(error)}"
+
+
+def run_agent_execution_job(job_id: int):
+    with bind_log_context(task_id=f"run_agent_execution_job:{job_id}", job_id=job_id):
+        try:
+            with transaction.atomic():
+                job = AgentExecutionJob.objects.select_for_update().select_related("project", "profile").get(
+                    id=job_id
+                )
+
+                if job.status == ExecutionJobStatus.CANCELED:
+                    logger.info("[Execution Job] Skipping canceled job", job_id=job.id)
+                    return f"Job {job.id} canceled before start"
+
+                if job.status in {ExecutionJobStatus.SUCCEEDED, ExecutionJobStatus.FAILED}:
+                    logger.info(
+                        "[Execution Job] Job already terminal",
+                        job_id=job.id,
+                        status=job.status,
+                    )
+                    return f"Job {job.id} already {job.status}"
+
+                job.status = ExecutionJobStatus.RUNNING
+                job.started_at = job.started_at or timezone.now()
+                job.error_code = ""
+                job.error_message = ""
+                running_result = append_job_history(
+                    job.result,
+                    event="JOB_STARTED",
+                    status=ExecutionJobStatus.RUNNING,
+                    details={"operation": job.operation},
+                    at=job.started_at,
+                )
+                running_result.pop("failure", None)
+                job.result = running_result
+                job.save(
+                    update_fields=[
+                        "status",
+                        "started_at",
+                        "error_code",
+                        "error_message",
+                        "result",
+                        "updated_at",
+                    ]
+                )
+
+            with bind_log_context(project_id=job.project_id, user_id=job.profile_id):
+                if job.operation == ExecutionJobOperation.GENERATE_BLOG_POST:
+                    title_suggestion_id = int(job.payload.get("title_suggestion_id"))
+                    suggestion = BlogPostTitleSuggestion.objects.select_related("project", "project__profile").get(
+                        id=title_suggestion_id,
+                        project=job.project,
+                    )
+
+                    blog_post = suggestion.generate_content(content_type=suggestion.content_type)
+
+                    with transaction.atomic():
+                        latest_job = AgentExecutionJob.objects.select_for_update().get(id=job.id)
+                        if latest_job.status == ExecutionJobStatus.CANCELED:
+                            logger.warning(
+                                "[Execution Job] Job canceled while running",
+                                job_id=latest_job.id,
+                            )
+                            return f"Job {latest_job.id} canceled while running"
+
+                        latest_job.status = ExecutionJobStatus.SUCCEEDED
+                        latest_job.completed_at = timezone.now()
+                        success_result = {
+                            "blog_post_id": blog_post.id,
+                            "title_suggestion_id": suggestion.id,
+                        }
+                        success_result = append_job_history(
+                            success_result,
+                            event="JOB_SUCCEEDED",
+                            status=ExecutionJobStatus.SUCCEEDED,
+                            details={"blog_post_id": blog_post.id, "title_suggestion_id": suggestion.id},
+                            at=latest_job.completed_at,
+                        )
+                        success_result["rollback"] = {
+                            "supported": True,
+                            "state": "available",
+                            "hook": f"/public-api/executions/{latest_job.id}/rollback",
+                            "summary": "Reverts generated draft blog post for this execution when possible.",
+                        }
+                        latest_job.result = success_result
+                        latest_job.save(update_fields=["status", "completed_at", "result", "updated_at"])
+
+                    return f"Job {job.id} succeeded"
+
+                with transaction.atomic():
+                    latest_job = AgentExecutionJob.objects.select_for_update().get(id=job.id)
+                    latest_job.status = ExecutionJobStatus.FAILED
+                    latest_job.completed_at = timezone.now()
+                    latest_job.error_code = "UNSUPPORTED_OPERATION"
+                    latest_job.error_message = f"Unsupported operation: {job.operation}"
+                    failed_result = append_job_history(
+                        latest_job.result,
+                        event="JOB_FAILED",
+                        status=ExecutionJobStatus.FAILED,
+                        details={"operation": job.operation},
+                        at=latest_job.completed_at,
+                    )
+                    failed_result["failure"] = build_failure_payload(
+                        latest_job.error_code,
+                        latest_job.error_message,
+                    )
+                    latest_job.result = failed_result
+                    latest_job.save(
+                        update_fields=[
+                            "status",
+                            "completed_at",
+                            "error_code",
+                            "error_message",
+                            "result",
+                            "updated_at",
+                        ]
+                    )
+
+                return f"Job {job.id} failed: unsupported operation"
+
+        except BlogPostTitleSuggestion.DoesNotExist:
+            job = AgentExecutionJob.objects.filter(id=job_id).first()
+            result = append_job_history(
+                job.result if job else {},
+                event="JOB_FAILED",
+                status=ExecutionJobStatus.FAILED,
+                details={"reason": "title_suggestion_not_found"},
+                at=timezone.now(),
+            )
+            result["failure"] = build_failure_payload(
+                "TITLE_SUGGESTION_NOT_FOUND",
+                "Title suggestion not found for this project",
+            )
+            AgentExecutionJob.objects.filter(id=job_id).update(
+                status=ExecutionJobStatus.FAILED,
+                completed_at=timezone.now(),
+                error_code="TITLE_SUGGESTION_NOT_FOUND",
+                error_message="Title suggestion not found for this project",
+                result=result,
+            )
+            return f"Job {job_id} failed: title suggestion missing"
+        except Exception as error:
+            error_message = str(error)[:2000]
+            job = AgentExecutionJob.objects.filter(id=job_id).first()
+            result = append_job_history(
+                job.result if job else {},
+                event="JOB_FAILED",
+                status=ExecutionJobStatus.FAILED,
+                details={"reason": "unexpected_error"},
+                at=timezone.now(),
+            )
+            result["failure"] = build_failure_payload("EXECUTION_FAILED", error_message)
+
+            AgentExecutionJob.objects.filter(id=job_id).update(
+                status=ExecutionJobStatus.FAILED,
+                completed_at=timezone.now(),
+                error_code="EXECUTION_FAILED",
+                error_message=error_message,
+                result=result,
+            )
+            logger.error(
+                "[Execution Job] Failed",
+                job_id=job_id,
+                error=str(error),
+                exc_info=True,
+            )
+            return f"Job {job_id} failed: {str(error)}"
+
+
+def sync_signup_project_to_twenty(project_id: int):
+    if not settings.TWENTY_SIGNUP_SYNC_ENABLED:
+        return {
+            "status": "skipped",
+            "error_code": "signup_sync_disabled",
+        }
+
+    project = (
+        Project.objects.select_related("profile", "profile__user")
+        .filter(id=project_id)
+        .first()
+    )
+    if not project:
+        return {
+            "status": "failed",
+            "error_code": "project_not_found",
+            "project_id": project_id,
+        }
+
+    profile = getattr(project, "profile", None)
+    user = getattr(profile, "user", None)
+    if not user:
+        return {
+            "status": "skipped",
+            "error_code": "project_user_missing",
+            "project_id": project_id,
+        }
+
+    result = sync_signup_project_to_twenty_service(user=user, project=project)
+    payload = result.to_dict()
+
+    logger.info(
+        "[Twenty Signup Sync Task] Completed",
+        sync_event="twenty_signup_sync",
+        event_name="twenty_signup_sync",
+        status=payload.get("status"),
+        personId=payload.get("person_id"),
+        companyId=payload.get("company_id"),
+        sourcePersonId=payload.get("source_person_id"),
+        sourceOrganizationId=payload.get("source_organization_id"),
+        person_id=payload.get("person_id"),
+        company_id=payload.get("company_id"),
+        source_person_id=payload.get("source_person_id"),
+        source_organization_id=payload.get("source_organization_id"),
+        error_code=payload.get("error_code"),
+    )
+    return payload
+
+
+def sync_project_integration_analytics(project_id: int, provider: str):
+    """Sync one project's connected analytics provider with incremental cursor semantics."""
+    with bind_log_context(
+        task_id=f"sync_project_integration_analytics:{provider}:{project_id}",
+        project_id=project_id,
+    ):
+        result = sync_project_provider_analytics(project_id=project_id, provider=provider)
 
         logger.info(
-            "[Generate Blog Post Content] Content generated successfully",
-            suggestion_id=suggestion_id,
-            project_id=suggestion.project.id,
-            blog_post_id=blog_post.id,
-            content_length=len(blog_post.content),
+            "[AnalyticsSyncTask] Provider sync finished",
+            project_id=project_id,
+            provider=provider,
+            result_status=result.get("status"),
+            rows_fetched=result.get("rows_fetched"),
+            rows_upserted=result.get("rows_upserted"),
         )
 
-        # Send email notification if requested (i.e., manually triggered, not auto-posting)
-        if send_email:
-            async_task(
-                "core.tasks.send_blog_post_ready_email",
-                blog_post.id,
-                group="Send Blog Post Ready Email",
-            )
-            logger.info(
-                "[Generate Blog Post Content] Email notification queued",
-                blog_post_id=blog_post.id,
-                suggestion_id=suggestion_id,
-            )
-
-        return f"Successfully generated blog post {blog_post.id} for {suggestion.project.name}"
-
-    except ValueError as error:
-        logger.error(
-            "[Generate Blog Post Content] Validation error",
-            error=str(error),
-            exc_info=True,
-            suggestion_id=suggestion_id,
-            project_id=suggestion.project.id,
-        )
-        return f"Validation error: {str(error)}"
-    except Exception as error:
-        logger.error(
-            "[Generate Blog Post Content] Unexpected error",
-            error=str(error),
-            exc_info=True,
-            suggestion_id=suggestion_id,
-            project_id=suggestion.project.id if suggestion.project else None,
-        )
-        return f"Unexpected error: {str(error)}"
+        return result

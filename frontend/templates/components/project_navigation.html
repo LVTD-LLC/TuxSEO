@@ -6,11 +6,38 @@
     </h2>
     <ul class="space-y-1">
       <li>
-        <div class="flex items-center px-3 py-2 text-sm font-medium text-gray-900">
-          <svg class="mr-3 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z" />
+        <a
+          href="{% url 'project_home' project.id %}"
+          class="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors {% if request.resolver_match.url_name == 'project_home' %}bg-gray-100 text-gray-900{% else %}text-gray-700 hover:bg-gray-50 hover:text-gray-900{% endif %}"
+        >
+          <svg class="mr-3 w-5 h-5 {% if request.resolver_match.url_name == 'project_home' %}text-gray-900{% else %}text-gray-400{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10.5L12 3l9 7.5M5.25 9.75V21h13.5V9.75" />
           </svg>
-          Posts
+          Home
+        </a>
+      </li>
+      <li>
+        <a
+          href="{% url 'project_analytics' project.id %}"
+          class="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors {% if request.resolver_match.url_name == 'project_analytics' %}bg-gray-100 text-gray-900{% else %}text-gray-700 hover:bg-gray-50 hover:text-gray-900{% endif %}"
+        >
+          <svg class="mr-3 w-5 h-5 {% if request.resolver_match.url_name == 'project_analytics' %}text-gray-900{% else %}text-gray-400{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3v18h18M7 14l3-3 3 2 4-5" />
+          </svg>
+          Analytics
+        </a>
+      </li>
+      <li>
+        <div class="flex justify-between items-center px-3 py-2 text-sm font-medium text-gray-900">
+          <div class="flex items-center">
+            <svg class="mr-3 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z" />
+            </svg>
+            Posts
+          </div>
+          <a href="{% url 'project_custom_post_types' project.id %}" class="inline-flex justify-center items-center w-6 h-6 text-gray-600 rounded border border-gray-300 hover:bg-gray-50" title="Manage custom post types">
+            +
+          </a>
         </div>
         <ul class="pl-8 mt-1 space-y-1">
           <li>
@@ -34,6 +61,34 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
               </svg>
               Eye Catching
+            </a>
+          </li>
+          {% for post_type in project.custom_post_types.all %}
+            <li>
+              <a
+                href="{% url 'project_custom_post_type_posts' project.id post_type.id %}"
+                class="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors {% if request.resolver_match.url_name == 'project_custom_post_type_posts' and request.resolver_match.kwargs.post_type_pk == post_type.id %}bg-gray-100 text-gray-900{% else %}text-gray-700 hover:bg-gray-50 hover:text-gray-900{% endif %}"
+              >
+                {% if post_type.logo %}
+                  <img src="{{ post_type.logo.url }}" alt="{{ post_type.name }} logo" class="object-cover mr-2 w-4 h-4 rounded" />
+                {% else %}
+                  <svg class="mr-2 w-4 h-4 {% if request.resolver_match.url_name == 'project_custom_post_type_posts' and request.resolver_match.kwargs.post_type_pk == post_type.id %}text-gray-900{% else %}text-gray-400{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v12m6-6H6" />
+                  </svg>
+                {% endif %}
+                {{ post_type.name }}
+              </a>
+            </li>
+          {% endfor %}
+          <li>
+            <a
+              href="{% url 'project_custom_post_types' project.id %}"
+              class="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors {% if request.resolver_match.url_name == 'project_custom_post_types' %}bg-gray-100 text-gray-900{% else %}text-gray-700 hover:bg-gray-50 hover:text-gray-900{% endif %}"
+            >
+              <svg class="mr-2 w-4 h-4 {% if request.resolver_match.url_name == 'project_custom_post_types' %}text-gray-900{% else %}text-gray-400{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.25 4.5v15m7.5-7.5h-15" />
+              </svg>
+              Manage Types
             </a>
           </li>
         </ul>
@@ -62,6 +117,17 @@
       </li>
       <li>
         <a
+          href="{% url 'project_earned_links' project.id %}"
+          class="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors {% if request.resolver_match.url_name == 'project_earned_links' %}bg-gray-100 text-gray-900{% else %}text-gray-700 hover:bg-gray-50 hover:text-gray-900{% endif %}"
+        >
+          <svg class="mr-3 w-5 h-5 {% if request.resolver_match.url_name == 'project_earned_links' %}text-gray-900{% else %}text-gray-400{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 015.657 5.656l-3 3a4 4 0 01-5.657-5.656m-1.414 1.414a4 4 0 01-5.657-5.656l3-3a4 4 0 015.657 5.656" />
+          </svg>
+          Earned Links
+        </a>
+      </li>
+      <li>
+        <a
           href="{% url 'project_competitors' project.id %}"
           class="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors {% if request.resolver_match.url_name == 'project_competitors' %}bg-gray-100 text-gray-900{% else %}text-gray-700 hover:bg-gray-50 hover:text-gray-900{% endif %}"
         >
@@ -84,6 +150,18 @@
       </li>
 
       <li class="pt-4 mt-4 border-t border-gray-200">
+        <a
+          href="{% url 'project_integrations' project.id %}"
+          class="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors {% if request.resolver_match.url_name == 'project_integrations' %}bg-gray-100 text-gray-900{% else %}text-gray-700 hover:bg-gray-50 hover:text-gray-900{% endif %}"
+        >
+          <svg class="mr-3 w-5 h-5 {% if request.resolver_match.url_name == 'project_integrations' %}text-gray-900{% else %}text-gray-400{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7.5 8.25h9m-9 3.75h9M4.5 18h15a2.25 2.25 0 002.25-2.25V8.25A2.25 2.25 0 0019.5 6h-15A2.25 2.25 0 002.25 8.25v7.5A2.25 2.25 0 004.5 18z" />
+          </svg>
+          Integrations
+        </a>
+      </li>
+
+      <li>
         <a
           href="{% url 'project_settings' project.id %}"
           class="flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors {% if request.resolver_match.url_name == 'project_settings' %}bg-gray-100 text-gray-900{% else %}text-gray-700 hover:bg-gray-50 hover:text-gray-900{% endif %}"

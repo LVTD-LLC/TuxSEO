@@ -7,18 +7,26 @@ from tuxseo.utils import get_tuxseo_logger
 logger = get_tuxseo_logger(__name__)
 
 
+def _redact_key(key: str) -> str:
+    if not key:
+        return ""
+    if len(key) <= 4:
+        return "****"
+    return f"{key[:2]}***{key[-2:]}"
+
+
 class APIKeyAuth(APIKeyQuery):
     param_name = "api_key"
 
     def authenticate(self, request: HttpRequest, key: str) -> Profile | None:
         logger.info(
             "[Django Ninja Auth] API Request with key",
-            key=key,
+            key=_redact_key(key),
         )
         try:
             return Profile.objects.get(key=key)
         except Profile.DoesNotExist:
-            logger.warning("[Django Ninja Auth] Invalid API key", key=key)
+            logger.warning("[Django Ninja Auth] Invalid API key", key=_redact_key(key))
             return None
 
 
@@ -56,7 +64,7 @@ class SuperuserAPIKeyAuth(APIKeyQuery):
             )
             return None
         except Profile.DoesNotExist:
-            logger.warning("[Django Ninja Auth] Profile does not exist", key=key)
+            logger.warning("[Django Ninja Auth] Profile does not exist", key=_redact_key(key))
             return None
 
 

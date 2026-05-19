@@ -6,9 +6,11 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db.models import Count, Q
 from django.utils import timezone
+from django_q.models import Schedule
 from django_q.tasks import async_task
 
 from core.choices import EmailType, ProjectPageSource
+from core.integration_analytics import schedule_all_connected_project_analytics_syncs
 from core.models import Competitor, EmailSent, Profile, Project, ProjectPage
 from core.utils import get_jina_embedding
 from tuxseo.utils import get_tuxseo_logger
@@ -16,6 +18,60 @@ from tuxseo.utils import get_tuxseo_logger
 logger = get_tuxseo_logger(__name__)
 
 User = get_user_model()
+
+
+def ensure_periodic_sitemap_sync_schedule() -> str:
+    """Create/update the django-q schedule row for periodic sitemap sync."""
+    schedule_name = "Periodic sitemap sync"
+
+    if not settings.SITEMAP_SYNC_SCHEDULER_ENABLED:
+        removed_count, _ = Schedule.objects.filter(name=schedule_name).delete()
+        if removed_count:
+            logger.info(
+                "[Sitemap Sync Schedule] Removed disabled schedule",
+                schedule_name=schedule_name,
+            )
+        return "Sitemap sync scheduler disabled"
+
+
+    interval_minutes = settings.SITEMAP_SYNC_INTERVAL_HOURS * 60
+
+    schedule_defaults = {
+        "func": "core.tasks.sync_all_projects_with_sitemaps",
+        "schedule_type": Schedule.MINUTES,
+        "minutes": interval_minutes,
+        "repeats": -1,
+        "cluster": settings.Q_CLUSTER.get("name", ""),
+    }
+
+    schedule = Schedule.objects.filter(name=schedule_name).order_by("id").first()
+
+    if schedule is None:
+        Schedule.objects.create(name=schedule_name, **schedule_defaults)
+        logger.info(
+            "[Sitemap Sync Schedule] Created",
+            schedule_name=schedule_name,
+            interval_minutes=interval_minutes,
+        )
+        return "Sitemap sync schedule created"
+
+    updates = []
+    for field_name, expected_value in schedule_defaults.items():
+        if getattr(schedule, field_name) != expected_value:
+            setattr(schedule, field_name, expected_value)
+            updates.append(field_name)
+
+    if updates:
+        schedule.save(update_fields=updates)
+        logger.info(
+            "[Sitemap Sync Schedule] Updated",
+            schedule_name=schedule_name,
+            updated_fields=updates,
+            interval_minutes=interval_minutes,
+        )
+        return "Sitemap sync schedule updated"
+
+    return "Sitemap sync schedule unchanged"
 
 
 def analyze_project_sitemap_pages():
@@ -329,4 +385,93 @@ def schedule_create_project_reminder_emails():
     )
 
     return f"""Create project reminder email scheduling completed:
+    Profiles scheduled: {scheduled_count}"""
+
+
+def schedule_project_analytics_syncs():
+    """Schedule background analytics sync tasks for all connected GA4/GSC/Plausible integrations."""
+    result = schedule_all_connected_project_analytics_syncs()
+    return (
+        "Analytics sync scheduling completed: "
+        f"scheduled={result.get('scheduled', 0)}"
+    )
+
+
+def sync_connected_project_analytics():
+    """Backward-compatible alias for legacy scheduler path naming.
+
+    Django Q schedules may still reference `core.scheduled_tasks.sync_connected_project_analytics`
+    from earlier rollout notes. Keep this alias so existing schedules continue to work
+    after the dispatcher naming was standardized to `schedule_project_analytics_syncs`.
+    """
+    return schedule_project_analytics_syncs()
+
+
+def schedule_project_feedback_checkin_emails():
+    """
+    Daily scheduled task that finds profiles who have:
+    - Registered in the last 2 days
+    - Verified their email
+    - Created at least 1 project
+    - Not received this email type yet
+
+    Schedules a plain-text check-in email from Rasul.
+    """
+    now = timezone.now()
+    registration_window_start_date = now - timedelta(days=2)
+
+    eligible_profiles = (
+        Profile.objects.filter(
+            user__emailaddress__verified=True,
+            user__date_joined__gte=registration_window_start_date,
+            user__date_joined__lte=now,
+        )
+        .annotate(project_count=Count("projects"))
+        .filter(project_count__gte=1)
+        .distinct()
+    )
+
+    sent_profile_ids = EmailSent.objects.filter(
+        email_type=EmailType.PROJECT_FEEDBACK_CHECKIN
+    ).values_list("profile_id", flat=True)
+
+    eligible_profiles = eligible_profiles.exclude(id__in=sent_profile_ids)
+
+    scheduled_count = 0
+
+    for profile in eligible_profiles.select_related("user"):
+        verified_email_address = EmailAddress.objects.filter(
+            user=profile.user,
+            email=profile.user.email,
+            verified=True,
+        ).first()
+
+        if not verified_email_address:
+            continue
+
+        if not profile.projects.exists():
+            continue
+
+        logger.info(
+            "[Schedule Project Feedback Check-in] Scheduling email",
+            profile_id=profile.id,
+            user_email=profile.user.email,
+            days_since_registration=(now - profile.user.date_joined).days,
+            project_count=profile.projects.count(),
+        )
+
+        async_task(
+            "core.tasks.send_project_feedback_checkin_email",
+            profile.id,
+            group="Project Feedback Check-in",
+        )
+        scheduled_count += 1
+
+    logger.info(
+        "[Schedule Project Feedback Check-in] Completed scheduling",
+        scheduled_profiles=scheduled_count,
+        registration_window_start_date=registration_window_start_date.isoformat(),
+    )
+
+    return f"""Project feedback check-in email scheduling completed:
     Profiles scheduled: {scheduled_count}"""

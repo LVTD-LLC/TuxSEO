@@ -3,6 +3,7 @@ from django.views.generic import RedirectView
 
 from core import views
 from core.api.views import api
+from core.public_api.views import public_api
 
 urlpatterns = [
     # pages
@@ -18,10 +19,17 @@ urlpatterns = [
     path("blog/<slug:slug>", views.BlogPostView.as_view(), name="blog_post"),
     # app
     path("api/", api.urls),
+    path("public-api/", public_api.urls),
     path(
         "project/<int:pk>/",
-        RedirectView.as_view(pattern_name="project_seo_posts", permanent=False),
+        RedirectView.as_view(pattern_name="project_home", permanent=False),
         name="project_redirect",
+    ),
+    path("project/<int:pk>/home/", views.ProjectHomeView.as_view(), name="project_home"),
+    path(
+        "project/<int:pk>/analytics/",
+        views.ProjectAnalyticsView.as_view(),
+        name="project_analytics",
     ),
     path(
         "project/<int:pk>/posts/eye-catching/",
@@ -34,12 +42,57 @@ urlpatterns = [
         name="project_seo_posts",
     ),
     path(
+        "project/<int:pk>/posts/custom/",
+        views.ProjectCustomPostTypesView.as_view(),
+        name="project_custom_post_types",
+    ),
+    path(
+        "project/<int:pk>/posts/custom/<int:post_type_pk>/",
+        views.ProjectCustomPostTypePostsView.as_view(),
+        name="project_custom_post_type_posts",
+    ),
+    path(
+        "project/<int:pk>/posts/custom/<int:post_type_pk>/edit/",
+        views.ProjectCustomPostTypeEditView.as_view(),
+        name="project_custom_post_type_edit",
+    ),
+    path(
+        "project/<int:pk>/posts/custom/<int:post_type_pk>/update/",
+        views.ProjectCustomPostTypeUpdateView.as_view(),
+        name="project_custom_post_type_update",
+    ),
+    path(
+        "project/<int:pk>/posts/custom/<int:post_type_pk>/delete/",
+        views.ProjectCustomPostTypeDeleteView.as_view(),
+        name="project_custom_post_type_delete",
+    ),
+    path(
+        "project/<int:pk>/integrations/",
+        views.ProjectIntegrationsView.as_view(),
+        name="project_integrations",
+    ),
+    path(
+        "project/integrations/google/callback/",
+        views.ProjectIntegrationsGoogleCallbackView.as_view(),
+        name="project_integrations_google_callback",
+    ),
+    path(
         "project/<int:pk>/settings/", views.ProjectSettingsView.as_view(), name="project_settings"
     ),
     path(
         "project/<int:pk>/keywords/", views.ProjectKeywordsView.as_view(), name="project_keywords"
     ),
     path("project/<int:pk>/pages/", views.ProjectPagesView.as_view(), name="project_pages"),
+    path(
+        "project/<int:project_pk>/pages/<int:page_pk>/",
+        views.ProjectPageDetailView.as_view(),
+        name="project_page_detail",
+    ),
+    path(
+        "project/<int:pk>/earned-links/",
+        views.ProjectEarnedLinksView.as_view(),
+        name="project_earned_links",
+    ),
     path(
         "project/<int:pk>/competitors/",
         views.ProjectCompetitorsView.as_view(),

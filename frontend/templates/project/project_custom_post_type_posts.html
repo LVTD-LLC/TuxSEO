@@ -1,0 +1,46 @@
+{% extends "base_project.html" %}
+{% load static %}
+
+{% block meta %}
+<title>TuxSEO - {{ project.name }} - {{ custom_post_type.name }} Posts</title>
+<meta name="description" content="{{ project.summary }}" />
+{% endblock meta %}
+
+{% block project_content %}
+<div data-controller="title-suggestions content-idea"
+     data-title-suggestions-project-id-value="{{ project.id }}"
+     data-title-suggestions-post-type-id-value="{{ custom_post_type.id }}"
+     data-content-idea-project-id-value="{{ project.id }}"
+     data-content-idea-content-type-value="SHARING"
+     data-content-idea-post-type-id-value="{{ custom_post_type.id }}">
+
+  <div class="mb-6">
+    <div class="flex gap-3 items-center">
+      {% if custom_post_type.logo %}
+        <img src="{{ custom_post_type.logo.url }}" alt="{{ custom_post_type.name }} logo" class="object-cover w-10 h-10 rounded" />
+      {% else %}
+        <div class="flex justify-center items-center w-10 h-10 text-gray-500 bg-gray-100 rounded">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v12m6-6H6" />
+          </svg>
+        </div>
+      {% endif %}
+      <h2 class="text-2xl font-bold text-gray-900">{{ custom_post_type.name }} Posts</h2>
+    </div>
+    <p class="mt-2 text-gray-600">{{ custom_post_type.prompt_guidance }}</p>
+  </div>
+
+  {% include "components/content_generator.html" with description="Create post ideas using this custom post type guidance" content_type="SHARING" %}
+
+  <div data-title-suggestions-target="suggestionsContainer">
+    <div class="mb-6">
+      <h3 class="mb-4 text-lg font-semibold text-gray-900">Your {{ custom_post_type.name }} Post Ideas</h3>
+    </div>
+
+    <div class="space-y-6" data-title-suggestions-target="suggestionsList">
+      {% include "components/suggestions_section.html" with section_title="Active Ideas" list_name="active" suggestions=active_suggestions collapsed=False %}
+      {% include "components/suggestions_section.html" with section_title="Archived Ideas" list_name="archived" suggestions=archived_suggestions collapsed=True %}
+    </div>
+  </div>
+</div>
+{% endblock project_content %}
