@@ -1,8 +1,0 @@
----
-description:
-globs: *.js
-alwaysApply: false
----
-- Add semicolons at the end of statements
-- Use double quotes instead of single quotes
-- no need to register new controllers in index.js. New controller are auto attached.

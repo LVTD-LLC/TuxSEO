@@ -1,6 +1,0 @@
----
-alwaysApply: true
----
-
-- Do not create tests or run test commands unless specified.
-- Do not run git commands.

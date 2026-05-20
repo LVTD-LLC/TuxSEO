@@ -1,37 +1,36 @@
-# Documentation Writing Guidelines for AI Agents
+# Documentation Guidelines For AI Agents
 
-## Purpose
+These instructions apply to files under `docs/`. Root-level engineering guidance still comes from
+`../AGENTS.md`.
 
-These guidelines ensure documentation is user-friendly, clear, and actionable for TuxSEO users.
+## Audience
 
-## Core Principles
+- Write for TuxSEO users first. Explain what they can accomplish before describing how the system is
+  implemented.
+- Use plain language and short paragraphs. Avoid framework jargon unless the document is explicitly
+  for contributors.
+- Prefer concrete examples, expected outcomes, and screenshots or references when they help a user
+  confirm success.
 
-### Write for Users, Not Developers
-- Focus on **what users can do** with the feature, not how it's implemented
-- Use plain language and avoid technical jargon
-- Explain business value before technical details
-- Assume users have no prior knowledge of the system
+## Structure
 
-### Structure Content for Scanning
-- Start with the most important information
-- Use clear headings that describe what users will learn
-- Break content into short paragraphs (2-3 sentences max)
-- Use bullet points for lists of features or steps
-- Include visual breaks between sections
+- Put the most useful answer near the top.
+- Use descriptive headings that match the user's goal.
+- Use numbered steps for procedures and bullets for options, requirements, or caveats.
+- Call out prerequisites before the steps that depend on them.
+- Keep troubleshooting sections symptom-driven: describe what the user sees, the likely cause, and
+  the action to take.
 
-### Be Action-Oriented
-- Start with verbs: "Create", "Configure", "Analyze"
-- Provide step-by-step instructions with numbered lists
-- Include expected outcomes for each action
-- Show what success looks like
+## Style
 
-## Summary
+- Use active voice and direct verbs such as "Create", "Configure", "Review", and "Publish".
+- Avoid saying "simply", "obviously", or "just" for work that may be unfamiliar to users.
+- Keep product names, command names, environment variables, and file paths exact.
+- Do not expose secrets or private operational details in user-facing docs.
 
-Write documentation that:
-- Helps users accomplish their goals
-- Is easy to scan and navigate
-- Uses clear, friendly language
-- Includes practical examples
-- Keeps users informed about next steps
+## Maintenance
 
-Good documentation turns confused users into confident power users.
+- Update docs in the same change as user-facing behavior changes.
+- Remove stale instructions instead of appending corrections below them.
+- If a document duplicates README or in-app copy, keep the most durable version here and link to it
+  from other places when practical.
