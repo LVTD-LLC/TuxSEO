@@ -245,7 +245,8 @@ def create_title_suggestions_agent(content_type=ContentType.SHARING, model=None)
     @agent.system_prompt
     def add_user_prompt(ctx: RunContext[TitleSuggestionContext]) -> str:
         if not ctx.deps.user_prompt:
-            return ""
+            # Some providers reject empty system messages.
+            return "No additional user prompt was provided."
 
         return f"""
             IMPORTANT USER REQUEST: The user has specifically requested the following:
