@@ -9,6 +9,14 @@
 
 ***
 
+## Archive Status
+
+TuxSEO is being archived on May 26, 2026. The product is no longer considered useful enough to actively maintain because AI agents can now handle this work better directly.
+
+The hosted site will stay live for now, but new signups are disabled. After the `tuxseo.com` domain expires, the site will move to [tuxseo.lvtd.dev](http://tuxseo.lvtd.dev).
+
+***
+
 ## Overview
 
 - TuxSEO learns about your business, analyzes the market which lets you...
@@ -21,6 +29,7 @@
 
 ## TOC
 
+- [Archive Status](#archive-status)
 - [Overview](#overview)
 - [TOC](#toc)
 - [Deployment](#deployment)
