@@ -403,6 +403,89 @@ class UserSettingsView(LoginRequiredMixin, SuccessMessageMixin, UpdateView):
 
 
 @login_required
+def delete_account(request):
+    """Delete user account and all associated data."""
+    if request.method != "POST":
+        messages.error(request, "Invalid request method.")
+        return redirect(reverse("settings"))
+
+    user = request.user
+    profile = user.profile
+
+    logger.info(
+        "[DeleteAccount] User initiated account deletion",
+        user_id=user.id,
+        profile_id=profile.id,
+        email=user.email,
+    )
+
+    # Cancel Stripe subscription if it exists
+    if profile.subscription and profile.subscription.status in ["active", "trialing"]:
+        try:
+            subscription_id = profile.subscription.id
+            stripe.Subscription.delete(subscription_id)
+            logger.info(
+                "[DeleteAccount] Cancelled Stripe subscription",
+                user_id=user.id,
+                subscription_id=subscription_id,
+            )
+        except stripe.error.StripeError as e:
+            logger.error(
+                "[DeleteAccount] Failed to cancel Stripe subscription",
+                user_id=user.id,
+                error=str(e),
+                exc_info=True,
+            )
+
+    # Track deletion event before deleting
+    if settings.POSTHOG_API_KEY:
+        async_task(
+            track_event,
+            profile_id=profile.id,
+            event_name="account_deleted",
+            properties={
+                "$set": {
+                    "email": user.email,
+                    "username": user.username,
+                },
+            },
+            source_function="delete_account",
+            group="Track Event",
+        )
+
+    # Django will cascade delete all related data:
+    # - Profile (CASCADE)
+    # - Projects (CASCADE via Profile)
+    # - BlogPostTitleSuggestion (CASCADE via Project)
+    # - GeneratedBlogPost (CASCADE via Project)
+    # - ProjectPage (CASCADE via Project)
+    # - Competitor (CASCADE via Project)
+    # - ProjectKeyword (CASCADE via Project)
+    # - AutoSubmissionSetting (CASCADE via Project)
+    # - Feedback (CASCADE via Profile)
+    # - ProfileStateTransition (SET_NULL via Profile)
+    # - EmailAddress objects (CASCADE via allauth)
+
+    username = user.username
+    email = user.email
+
+    user.delete()
+
+    logger.info(
+        "[DeleteAccount] Successfully deleted user account",
+        username=username,
+        email=email,
+    )
+
+    messages.success(
+        request,
+        "Your account and all associated data have been permanently deleted. We're sorry to see you go!",
+    )
+
+    return redirect(reverse("landing"))
+
+
+@login_required
 def resend_confirmation_email(request):
     user = request.user
 
